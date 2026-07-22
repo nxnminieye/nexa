@@ -1,0 +1,7 @@
+.worktrees/
+.tmp/
+.release-cache/
+coverage.out
+*.coverprofile
+/nexa
+/nexactl

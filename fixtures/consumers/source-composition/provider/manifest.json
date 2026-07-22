@@ -1,0 +1,24 @@
+{
+  "apiVersion": "nexa.dev/source-bundle/v1",
+  "kind": "SourceBundle",
+  "identity": {
+    "providerId": "private.neutral",
+    "modulePath": "example.test/nexa-source-consumer",
+    "packagePath": "example.test/nexa-source-consumer/provider",
+    "version": "v0.1.0"
+  },
+  "files": [
+    {"path": "go.mod", "size": 52, "digest": "sha256:ca9129863dc6380e96155aaadc8c86d86b7d1fbfdce2b004cbd4039c27014279", "mode": "0644"},
+    {"path": "sample.go", "size": 74, "digest": "sha256:ec0edc01e49ffaf2ddf96e4b2cbd71082b846a9c54cce2c7dc096ad61d75ff0c", "mode": "0644"},
+    {"path": "sample_test.go", "size": 161, "digest": "sha256:0aebcd072276be4ae5cf73df3393f2a9c86ff0abbe00b4b32cd58f9be88e41bb", "mode": "0644"}
+  ],
+  "profiles": [
+    {
+      "id": "default",
+      "files": ["go.mod", "sample.go", "sample_test.go"],
+      "requiresProfiles": [],
+      "requiresBundles": [],
+      "validations": []
+    }
+  ]
+}

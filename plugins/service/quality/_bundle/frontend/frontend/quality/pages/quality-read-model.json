@@ -1,0 +1,8 @@
+{
+  "apiVersion": "nexa.dev/frontend-page/v1",
+  "kind": "FrontendPage",
+  "id": "quality-read-model",
+  "mode": "read-only",
+  "objectId": "quality-read-model",
+  "snapshotOperationId": "quality.snapshot.get"
+}

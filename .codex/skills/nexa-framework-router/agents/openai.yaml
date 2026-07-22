@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexa Framework Router"
+  short_description: "Route Nexa framework work"
+  default_prompt: "Use $nexa-framework-router to route this Nexa task to the narrowest implemented capability and specialist."

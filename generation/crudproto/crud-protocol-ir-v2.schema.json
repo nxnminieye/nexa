@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/crudproto/crud-protocol-ir-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "serviceId", "protoPackage", "goPackage", "imports", "enums", "messages", "services", "tenantEntities", "sources"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/crud-protocol-ir/v2"},
+    "kind": {"const": "CRUDProtocolIR"},
+    "serviceId": {"type": "string", "minLength": 1},
+    "protoPackage": {"type": "string", "minLength": 1},
+    "goPackage": {"type": "string", "minLength": 1},
+    "imports": {"type": "array", "items": {"type": "string"}},
+    "enums": {"type": "array", "items": {"$ref": "#/$defs/enum"}},
+    "messages": {"type": "array", "items": {"$ref": "#/$defs/message"}},
+    "services": {"type": "array", "items": {"$ref": "#/$defs/service"}},
+    "tenantEntities": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}
+  },
+  "$defs": {
+    "source": {"type": "object", "additionalProperties": false, "required": ["ref", "digest"], "properties": {"ref": {"type": "string"}, "digest": {"type": "string"}}},
+    "field": {"type": "object", "additionalProperties": false, "required": ["id", "name", "number", "type", "repeated", "optional", "internal", "tenantContext", "source"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "number": {"type": "integer", "minimum": 1}, "type": {"type": "string"}, "repeated": {"type": "boolean"}, "optional": {"type": "boolean"}, "internal": {"type": "boolean"}, "tenantContext": {"type": "boolean"}, "source": {"$ref": "#/$defs/source"}}},
+    "message": {"type": "object", "additionalProperties": false, "required": ["id", "name", "fields", "reservedNames", "reservedNumbers"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}}, "reservedNames": {"type": "array", "items": {"type": "string"}}, "reservedNumbers": {"type": "array", "items": {"type": "integer"}}}},
+    "enumValue": {"type": "object", "additionalProperties": false, "required": ["id", "name", "number"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "number": {"type": "integer"}}},
+    "enum": {"type": "object", "additionalProperties": false, "required": ["id", "name", "values", "reservedNames", "reservedNumbers"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "values": {"type": "array", "items": {"$ref": "#/$defs/enumValue"}}, "reservedNames": {"type": "array", "items": {"type": "string"}}, "reservedNumbers": {"type": "array", "items": {"type": "integer"}}}},
+    "contextBinding": {"type": "object", "additionalProperties": false, "required": ["source", "rpcField"], "properties": {"source": {"const": "tenant-id"}, "rpcField": {"const": "tenant_id"}}},
+    "rpcContext": {"type": "object", "additionalProperties": false, "required": ["contextFields"], "properties": {"contextFields": {"type": "array", "maxItems": 1, "items": {"$ref": "#/$defs/contextBinding"}}}},
+    "method": {"type": "object", "additionalProperties": false, "required": ["id", "name", "input", "output", "rpcContext"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "input": {"type": "string"}, "output": {"type": "string"}, "rpcContext": {"$ref": "#/$defs/rpcContext"}}},
+    "service": {"type": "object", "additionalProperties": false, "required": ["id", "name", "methods"], "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "methods": {"type": "array", "items": {"$ref": "#/$defs/method"}}}}
+  }
+}

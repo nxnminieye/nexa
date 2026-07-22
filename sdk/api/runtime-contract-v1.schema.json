@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/runtime-contract-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "trace", "schemas", "operations"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/runtime-contract/v1"},
+    "trace": {"$ref": "#/$defs/trace"},
+    "schemas": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/schema"}
+    },
+    "operations": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/stableId"},
+      "additionalProperties": {"$ref": "#/$defs/operation"}
+    }
+  },
+  "$defs": {
+    "stableId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"},
+    "errorId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"},
+    "fieldName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "headerName": {"type": "string", "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"},
+    "wireName": {"type": "string", "minLength": 1},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiManifestVersion", "apiManifestCanonicalDigest", "sourceDigest"],
+      "properties": {
+        "apiManifestVersion": {"const": "nexa.dev/api-manifest/v1"},
+        "apiManifestCanonicalDigest": {"$ref": "#/$defs/digest"},
+        "sourceDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "schemaIndex": {"type": "integer"},
+    "schema": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"enum": ["string", "integer", "number", "boolean"]}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": {"const": "array"},
+            "items": {"$ref": "#/$defs/schemaIndex"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fields"],
+          "properties": {
+            "kind": {"const": "object"},
+            "fields": {
+              "type": "object",
+              "propertyNames": {"$ref": "#/$defs/fieldName"},
+              "additionalProperties": {"$ref": "#/$defs/field"}
+            }
+          }
+        }
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "schema"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "schema": {"$ref": "#/$defs/schemaIndex"}
+      }
+    },
+    "pathSegment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["literal"],
+          "properties": {"literal": {"type": "string", "minLength": 1}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["field"],
+          "properties": {"field": {"$ref": "#/$defs/fieldName"}}
+        }
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["in", "name"],
+      "properties": {
+        "in": {"enum": ["path", "query", "header", "body"]},
+        "name": {"$ref": "#/$defs/wireName"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"in": {"const": "header"}}, "required": ["in"]},
+          "then": {"properties": {"name": {"$ref": "#/$defs/headerName"}}}
+        },
+        {
+          "if": {"properties": {"in": {"enum": ["path", "query", "body"]}}, "required": ["in"]},
+          "then": {"properties": {"name": {"$ref": "#/$defs/fieldName"}}}
+        }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "bindings"],
+      "properties": {
+        "schema": {"$ref": "#/$defs/schemaIndex"},
+        "bindings": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/fieldName"},
+          "additionalProperties": {"$ref": "#/$defs/binding"}
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body"],
+      "properties": {
+        "body": {"enum": ["json", "none"]},
+        "schema": {"$ref": "#/$defs/schemaIndex"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"body": {"const": "json"}}, "required": ["body"]},
+          "then": {"required": ["schema"]}
+        },
+        {
+          "if": {"properties": {"body": {"const": "none"}}, "required": ["body"]},
+          "then": {"not": {"required": ["schema"]}}
+        }
+      ]
+    },
+    "credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "in", "name"],
+      "properties": {
+        "type": {"enum": ["bearer", "api-key", "session-cookie"]},
+        "in": {"enum": ["header", "query", "cookie"]},
+        "name": {"$ref": "#/$defs/wireName"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"in": {"const": "header"}}, "required": ["in"]},
+          "then": {"properties": {"name": {"allOf": [{"$ref": "#/$defs/headerName"}, {"not": {"const": "content-type"}}]}}}
+        },
+        {
+          "if": {"properties": {"in": {"const": "query"}}, "required": ["in"]},
+          "then": {"properties": {"name": {"$ref": "#/$defs/fieldName"}}}
+        },
+        {
+          "if": {"properties": {"in": {"const": "cookie"}}, "required": ["in"]},
+          "then": {"properties": {"name": {"type": "string", "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"}}}
+        }
+      ]
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "credentials"],
+      "properties": {
+        "mode": {"enum": ["none", "optional", "required"]},
+        "credentials": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/stableId"},
+          "additionalProperties": {"$ref": "#/$defs/credential"}
+        }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "apiVersion"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*/[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"},
+        "apiVersion": {"type": "string", "minLength": 4}
+      }
+    },
+    "errorTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["domain", "code", "httpStatus"],
+      "properties": {
+        "domain": {"$ref": "#/$defs/errorId"},
+        "code": {"$ref": "#/$defs/errorId"},
+        "httpStatus": {"type": "integer", "minimum": 400, "maximum": 599}
+      }
+    },
+    "errorCodes": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/errorId"},
+      "additionalProperties": {"$ref": "#/$defs/errorTarget"}
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "pathSegments", "request", "response", "auth", "permission", "errorProjections"],
+      "properties": {
+        "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]},
+        "pathSegments": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pathSegment"}},
+        "request": {"$ref": "#/$defs/request"},
+        "response": {"$ref": "#/$defs/response"},
+        "auth": {"$ref": "#/$defs/auth"},
+        "permission": {"type": "string", "pattern": "^(?:[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*)?$"},
+        "capability": {"$ref": "#/$defs/capability"},
+        "errorProjections": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/errorId"},
+          "additionalProperties": {"$ref": "#/$defs/errorCodes"}
+        }
+      }
+    }
+  }
+}

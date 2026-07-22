@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/source-lock-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "release", "profileId", "profileClosure", "target", "trackedFiles"],
+  "properties": {
+    "apiVersion": { "const": "nexa.dev/source-lock/v1" },
+    "kind": { "const": "SourceLock" },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "modulePath", "packagePath", "version", "manifestDigest", "treeDigest"],
+      "properties": {
+        "providerId": { "type": "string" },
+        "modulePath": { "type": "string" },
+        "packagePath": { "type": "string" },
+        "version": { "type": "string" },
+        "manifestDigest": { "type": "string" },
+        "treeDigest": { "type": "string" }
+      }
+    },
+    "profileId": { "type": "string" },
+    "profileClosure": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "target": { "type": "string" },
+    "trackedFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "mode", "size", "digest"],
+        "properties": {
+          "path": { "type": "string" },
+          "mode": { "enum": ["0644", "0755"] },
+          "size": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+          "digest": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "apiVersion": "nexa.dev/frontend-page/v1",
+  "kind": "ObjectPage",
+  "id": "core.identity-accounts",
+  "titleKey": "core.identity.title",
+  "objectSchema": "../object-schema/identity-account.schema.json",
+  "views": ["list", "detail"]
+}

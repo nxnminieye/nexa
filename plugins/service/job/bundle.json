@@ -1,0 +1,54 @@
+{
+  "apiVersion": "nexa.dev/source-bundle/v1",
+  "kind": "SourceBundle",
+  "identity": {
+    "providerId": "job-service",
+    "modulePath": "github.com/nxnminieye/nexa",
+    "packagePath": "github.com/nxnminieye/nexa/plugins/service/job",
+    "version": "v0.1.0"
+  },
+  "files": [
+    {"path": "backend/job/desc/job.proto", "size": 462, "digest": "sha256:ebd3a0b158034830661dff0d3fa678f5f4e6f1d0db2e095beeb1366240dd1e30", "mode": "0644"},
+    {"path": "backend/job/ent/schema/lease.go", "size": 937, "digest": "sha256:8fa3667aaa04dccdc4b367d8be6515208e3d00c9130147a7b3dc6efd3d08b4c8", "mode": "0644"},
+    {"path": "backend/job/ent/schema/meta.go", "size": 820, "digest": "sha256:2444caf105b7b9a3754107c5b69f31c4c1056f7f94225bd71014ead865fbbf69", "mode": "0644"},
+    {"path": "backend/job/ent/schema/run.go", "size": 1994, "digest": "sha256:7c10fdcb25b75a6816a88d3e638af7fa19b2b916d93c2933924728ed0a602ccf", "mode": "0644"},
+    {"path": "backend/job/ent/schema/schedule.go", "size": 1258, "digest": "sha256:9811b2449139ad4fa01fa409fd5892d4727021efd7088db9395ce5fb10fd9dd4", "mode": "0644"},
+    {"path": "backend/job/ent/schema/schema_test.go", "size": 1425, "digest": "sha256:c1a15f19639b8010c30fdb4a561810230e9daffc8428f8e281c1cb62c0c3cd57", "mode": "0644"},
+    {"path": "backend/job/jobapp/error.go", "size": 1003, "digest": "sha256:5ff92bc6bdd78091f7b2ec52f95e2ff51df5978cd267f4b50ac5ff9a545add60", "mode": "0644"},
+    {"path": "backend/job/jobapp/health.go", "size": 895, "digest": "sha256:e848df6d8b61910be4b4b017c6ea5fdf4d0572168b291bb7a03ff6610fc0d97c", "mode": "0644"},
+    {"path": "backend/job/jobapp/jobapp_test.go", "size": 11464, "digest": "sha256:0c471ff0caa136208b47b6f9357274b0cfecdf04ff77aa17eb20f236f650b4af", "mode": "0644"},
+    {"path": "backend/job/jobapp/registry.go", "size": 1563, "digest": "sha256:7aed8a132d1107979d105bc6ad6421f97779889f4ca842c8ff4e719ed98aa4c3", "mode": "0644"},
+    {"path": "backend/job/jobapp/retention.go", "size": 1048, "digest": "sha256:88ffa8f9e8e5c4d0b61341084382f189ea1b7cb34b320e3d05903355148c68ba", "mode": "0644"},
+    {"path": "backend/job/jobapp/run.go", "size": 3898, "digest": "sha256:a1ee6684c15921de4dc6486cf0166e708e1c5dc518842c155ce9b5388008edb7", "mode": "0644"},
+    {"path": "backend/job/jobapp/scheduler.go", "size": 5577, "digest": "sha256:005b73bfda1f47aa02374b4e5d98e8f95629180649665de230c993b3f5781048", "mode": "0644"},
+    {"path": "backend/job/jobapp/task.go", "size": 250, "digest": "sha256:51e77562007c25edca8267f0a3f64622c4cada5855b8dc84e61f4a1070edd1d7", "mode": "0644"},
+    {"path": "backend/job/migrations/0001_job.sql", "size": 843, "digest": "sha256:a519a59c709a15e5bfa832e8d005b3a68bcb01e64bf7f7d226a7aadb5468e672", "mode": "0644"}
+  ],
+  "profiles": [
+    {
+      "id": "backend",
+      "files": [
+        "backend/job/desc/job.proto",
+        "backend/job/ent/schema/lease.go",
+        "backend/job/ent/schema/meta.go",
+        "backend/job/ent/schema/run.go",
+        "backend/job/ent/schema/schedule.go",
+        "backend/job/ent/schema/schema_test.go",
+        "backend/job/jobapp/error.go",
+        "backend/job/jobapp/health.go",
+        "backend/job/jobapp/jobapp_test.go",
+        "backend/job/jobapp/registry.go",
+        "backend/job/jobapp/retention.go",
+        "backend/job/jobapp/run.go",
+        "backend/job/jobapp/scheduler.go",
+        "backend/job/jobapp/task.go",
+        "backend/job/migrations/0001_job.sql"
+      ],
+      "requiresProfiles": [],
+      "requiresBundles": [],
+      "validations": [
+        {"id": "job-kernel", "kind": "go-test", "workingDirectory": "backend/job", "packages": ["./jobapp"]}
+      ]
+    }
+  ]
+}

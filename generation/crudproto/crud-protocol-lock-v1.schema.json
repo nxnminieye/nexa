@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/crudproto/crud-protocol-lock-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "serviceId", "schemas"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/crud-protocol-lock/v1"},
+    "kind": {"const": "CRUDProtocolCompatibilityLock"},
+    "serviceId": {"type": "string", "minLength": 1},
+    "schemas": {"type": "array", "items": {"$ref": "#/$defs/schema"}}
+  },
+  "$defs": {
+    "assignment": {"type": "object", "additionalProperties": false, "required": ["fieldId", "wireName", "number", "wireType", "sourceRef", "sourceDigest"], "properties": {"fieldId": {"type": "string"}, "wireName": {"type": "string"}, "number": {"type": "integer", "minimum": 1}, "wireType": {"type": "string"}, "sourceRef": {"type": "string"}, "sourceDigest": {"type": "string"}}},
+    "message": {"type": "object", "additionalProperties": false, "required": ["id", "active", "current", "retired", "reservedNames", "reservedNumbers"], "properties": {"id": {"type": "string"}, "active": {"type": "boolean"}, "current": {"type": "array", "items": {"$ref": "#/$defs/assignment"}}, "retired": {"type": "array", "items": {"$ref": "#/$defs/assignment"}}, "reservedNames": {"type": "array", "items": {"type": "string"}}, "reservedNumbers": {"type": "array", "items": {"type": "integer"}}}},
+    "enumAssignment": {"type": "object", "additionalProperties": false, "required": ["valueId", "wireName", "number", "semanticValue"], "properties": {"valueId": {"type": "string"}, "wireName": {"type": "string"}, "number": {"type": "integer", "minimum": 0}, "semanticValue": {"type": "string"}}},
+    "enum": {"type": "object", "additionalProperties": false, "required": ["id", "active", "current", "retired", "reservedNames", "reservedNumbers"], "properties": {"id": {"type": "string"}, "active": {"type": "boolean"}, "current": {"type": "array", "items": {"$ref": "#/$defs/enumAssignment"}}, "retired": {"type": "array", "items": {"$ref": "#/$defs/enumAssignment"}}, "reservedNames": {"type": "array", "items": {"type": "string"}}, "reservedNumbers": {"type": "array", "items": {"type": "integer"}}}},
+    "schema": {"type": "object", "additionalProperties": false, "required": ["id", "enums", "messages"], "properties": {"id": {"type": "string"}, "enums": {"type": "array", "items": {"$ref": "#/$defs/enum"}}, "messages": {"type": "array", "items": {"$ref": "#/$defs/message"}}}}
+  }
+}

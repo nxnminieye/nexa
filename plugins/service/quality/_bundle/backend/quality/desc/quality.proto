@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package quality.v1;
+
+message RequirementCoverage {
+  string requirement = 1;
+  string title = 2;
+  string status = 3;
+  repeated string test_refs = 4;
+  repeated string evidence_refs = 5;
+  repeated string freeze_refs = 6;
+  string freeze_status = 7;
+  repeated string gap_codes = 8;
+}
+
+message Snapshot {
+  string api_version = 1;
+  string kind = 2;
+  string source_profile = 3;
+  string read_model_scope = 4;
+  string revision = 5;
+  repeated RequirementCoverage requirements = 6;
+}
+
+message GetSnapshotRequest {}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ready = 1;
+  string code = 2;
+}
+
+service QualityService {
+  rpc GetSnapshot(GetSnapshotRequest) returns (GetSnapshotResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}

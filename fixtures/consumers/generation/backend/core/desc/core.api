@@ -1,0 +1,14 @@
+syntax = "v1"
+
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+
+type HealthRequest {}
+type HealthResponse {
+  OK bool
+}
+
+@server (nexaOperationId: "health.get" nexaAuthMode: "none")
+service core-api {
+  @handler health
+  get /health (HealthRequest) returns (HealthResponse)
+}

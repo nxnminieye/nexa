@@ -1,0 +1,251 @@
+{
+  "apiVersion": "nexa.dev/source-bundle/v1",
+  "kind": "SourceBundle",
+  "identity": {
+    "providerId": "core-application",
+    "modulePath": "github.com/nxnminieye/nexa",
+    "packagePath": "github.com/nxnminieye/nexa/plugins/service/core",
+    "version": "v0.1.0"
+  },
+  "files": [
+    {
+      "path": "backend/core/coreapp/authority.go",
+      "size": 764,
+      "digest": "sha256:1cb75454bb585c7685edac45788f382ca900193078eafbcf84aa9e8c9ce358ca",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/authorization.go",
+      "size": 1677,
+      "digest": "sha256:44e1732858d7a79ca2f8bd363a8457cd4ec48bed84d7da6b5ed82f3f576f3188",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/authorization_test.go",
+      "size": 796,
+      "digest": "sha256:3ea17f7fb9825f362347c08958b2b5d202829dad5244ce436dc22521f22738c4",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/coreapp_test.go",
+      "size": 10512,
+      "digest": "sha256:111f822ac747048b21805bef345e8856282ee9aff023eac4fe47d84c8d196501",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/error.go",
+      "size": 1472,
+      "digest": "sha256:499edda729aca76e67e4facc2e749ba6cf62f38a38b60a19d178f7ed5dd69119",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/external_login_test.go",
+      "size": 18838,
+      "digest": "sha256:f2bf15794b3fb24d242f725ef7426cdfaf8b3116640d53005e276761c56fc53c",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/health.go",
+      "size": 249,
+      "digest": "sha256:84079e12bdaacb8a9f772dc656c7e263f463b7de5df1cba9f7fa93d6bcacd09c",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/identity.go",
+      "size": 1021,
+      "digest": "sha256:81b758bbe09521dd2e94cfe92e140cd11aea8424a7fae9302ff1f77ee38d5d9f",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/local_auth.go",
+      "size": 5708,
+      "digest": "sha256:2dcb4071bb3198c45322cef7a25ef337dba58299115b43a7508a881a3ab218dd",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/oidc_adapter.go",
+      "size": 2476,
+      "digest": "sha256:7c9eb686ceb1366897d568c750ecb29b7c008b08467726e4d728e9547497ecad",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/oidc_adapter_test.go",
+      "size": 2060,
+      "digest": "sha256:d69985485cd36e8b929a1b1d9a3a074c92c80a634bae63acd9e31d14078ea84c",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/password.go",
+      "size": 3289,
+      "digest": "sha256:6292bed9eee181efcba5a5130fb9ada6fa7b2e2b893db1e5dc79546d35b73627",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/provider_set.go",
+      "size": 3574,
+      "digest": "sha256:878a2e76ba90ca24196bf1813c4e749c868889398f149fcb2eb1970fa111172a",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/provision.go",
+      "size": 5800,
+      "digest": "sha256:28e77942aae2a33fa971e8aa74d61952ba0824f0a72b4d65dc6e536a269e20ca",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/session.go",
+      "size": 3560,
+      "digest": "sha256:faf9d4f104f137d85cd49973c18c8b90e191df60c6f1082a54dbb9a8c7097ddc",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/store.go",
+      "size": 2498,
+      "digest": "sha256:a829a0147e9930110f5e589ad8e07af1fc806a72d2b366f85081037858cd05b0",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/desc/core.api",
+      "size": 767,
+      "digest": "sha256:8d3449bc9a272a1867358e34cfd97d59073cd3b61f4846ba4c52495439a60dfc",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/desc/core.proto",
+      "size": 6135,
+      "digest": "sha256:637e9b97c5a7175b4e6db03553c4c4dd54b97fc3d076fe5526485d3d9a20b24f",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/ent/schema/metadata.go",
+      "size": 2462,
+      "digest": "sha256:d09d56e69ee2f23273e5eedd8629820634e74ef705f359806c05a38b8829f86e",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/ent/schema/models.go",
+      "size": 7731,
+      "digest": "sha256:69480612ea4d063f8895102ca4ed8bed106a25eb68cb0ef1821858e40340bcb5",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/ent/schema/models_test.go",
+      "size": 1410,
+      "digest": "sha256:f13c5c5de2e357b0dae3521aaae1e1220914a41eda1103cc6c7896d8d92c1868",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/migrations/001_core.sql",
+      "size": 2041,
+      "digest": "sha256:4ae1bef364cbcec7e84f0ba72f961c7cd974c9332ce7c0d02770b2edcb6acfb5",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/locales/en-US.json",
+      "size": 206,
+      "digest": "sha256:7f3f737f810cb26a22f1ae2c1f211c4773f3bda6ebd80e68813e20ed924a8199",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/locales/zh-CN.json",
+      "size": 203,
+      "digest": "sha256:9c135870e98d40a198aec2a0a912a5ee75f2e11975b6bb74d4f6b1f27da51e95",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/object-schema/identity-account.schema.json",
+      "size": 628,
+      "digest": "sha256:01e1e146b8a0578f29b7c486ca4c58b8204abef860ce20e1c8c8808b03383278",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/pages/identity-accounts.page.json",
+      "size": 241,
+      "digest": "sha256:21f684d7188701ce00c475f6764d291c04d7f3995fa2a59bab0690d647e11ab4",
+      "mode": "0644"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "backend",
+      "files": [
+        "backend/core/coreapp/authority.go",
+        "backend/core/coreapp/authorization.go",
+        "backend/core/coreapp/authorization_test.go",
+        "backend/core/coreapp/coreapp_test.go",
+        "backend/core/coreapp/error.go",
+        "backend/core/coreapp/external_login_test.go",
+        "backend/core/coreapp/health.go",
+        "backend/core/coreapp/identity.go",
+        "backend/core/coreapp/local_auth.go",
+        "backend/core/coreapp/password.go",
+        "backend/core/coreapp/provider_set.go",
+        "backend/core/coreapp/provision.go",
+        "backend/core/coreapp/session.go",
+        "backend/core/coreapp/store.go",
+        "backend/core/desc/core.api",
+        "backend/core/desc/core.proto",
+        "backend/core/ent/schema/metadata.go",
+        "backend/core/ent/schema/models.go",
+        "backend/core/ent/schema/models_test.go",
+        "backend/core/migrations/001_core.sql"
+      ],
+      "requiresProfiles": [],
+      "requiresBundles": [],
+      "validations": [
+        {
+          "id": "core-backend-test",
+          "kind": "go-test",
+          "workingDirectory": "backend/core",
+          "packages": [
+            "./coreapp",
+            "./ent/schema"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "frontend",
+      "files": [
+        "frontend/frontend/core/locales/en-US.json",
+        "frontend/frontend/core/locales/zh-CN.json",
+        "frontend/frontend/core/object-schema/identity-account.schema.json",
+        "frontend/frontend/core/pages/identity-accounts.page.json"
+      ],
+      "requiresProfiles": [],
+      "requiresBundles": [],
+      "validations": []
+    },
+    {
+      "id": "full",
+      "files": [],
+      "requiresProfiles": [
+        "backend",
+        "frontend"
+      ],
+      "requiresBundles": [],
+      "validations": []
+    },
+    {
+      "id": "identity-oidc",
+      "files": [
+        "backend/core/coreapp/oidc_adapter.go",
+        "backend/core/coreapp/oidc_adapter_test.go"
+      ],
+      "requiresProfiles": [
+        "backend"
+      ],
+      "requiresBundles": [],
+      "validations": [
+        {
+          "id": "core-oidc-test",
+          "kind": "go-test",
+          "workingDirectory": "backend/core",
+          "packages": [
+            "./coreapp"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation-plan-v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "generator", "sources", "artifacts", "controlSources", "manifestPath", "changes", "conflicts", "nextManifest", "planDigest"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/generation-plan/v2"},
+    "kind": {"const": "GenerationPlan"},
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$"}
+      }
+    },
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+    "controlSources": {"type": "array", "items": {"$ref": "#/$defs/controlSource"}},
+    "manifestPath": {"type": "string", "minLength": 1},
+    "previousManifest": {"type": "object"},
+    "changes": {"type": "array", "items": {"$ref": "#/$defs/change"}},
+    "conflicts": {"type": "array", "items": {"$ref": "#/$defs/conflict"}},
+    "nextManifest": {"type": "object"},
+    "planDigest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "digest"],
+      "properties": {
+        "ref": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "owner", "digest", "sources", "stalePolicy", "createManual", "overwriteManual"],
+      "allOf": [
+        {
+          "if": {"properties": {"createManual": {"const": true}}, "required": ["createManual"]},
+          "then": {"properties": {"stalePolicy": {"const": "retain"}}}
+        },
+        {
+          "if": {"properties": {"overwriteManual": {"const": true}}, "required": ["overwriteManual"]},
+          "then": {"properties": {"stalePolicy": {"const": "retain"}, "sources": {"minItems": 1}}}
+        },
+        {
+          "not": {
+            "properties": {"createManual": {"const": true}, "overwriteManual": {"const": true}},
+            "required": ["createManual", "overwriteManual"]
+          }
+        }
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+(?:/[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+/v[1-9][0-9]*$"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "sources": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "stalePolicy": {"enum": ["retain", "delete-if-unmodified"]},
+        "createManual": {"type": "boolean"},
+        "overwriteManual": {"type": "boolean"},
+        "priorDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "controlSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "id", "path", "owner", "afterDigest", "sources"],
+      "properties": {
+        "role": {"const": "compatibility-lock"},
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "before": {"$ref": "#/$defs/source"},
+        "afterDigest": {"$ref": "#/$defs/digest"},
+        "sources": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "path", "digest"],
+      "properties": {
+        "kind": {"enum": ["create", "update", "delete", "create-manual"]},
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "digest": {"$ref": "#/$defs/digest"},
+        "priorDigest": {"$ref": "#/$defs/digest"},
+        "controlRole": {"const": "compatibility-lock"}
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "path", "reason"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "controlRole": {"const": "compatibility-lock"}
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/composition/composition-ir-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "coreServiceId", "consumerModulePath", "sourceDigest", "sources", "operations"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/composition-ir/v1"},
+    "kind": {"const": "CompositionIR"},
+    "coreServiceId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "consumerModulePath": {"type": "string", "minLength": 1},
+    "sourceDigest": {"$ref": "#/$defs/digest"},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "operations": {"type": "array", "items": {"$ref": "#/$defs/operation"}}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "sourceRef": {"type": "string", "pattern": "^repo:.+"},
+    "source": {"type": "object", "additionalProperties": false, "required": ["ref", "digest"], "properties": {"ref": {"$ref": "#/$defs/sourceRef"}, "digest": {"$ref": "#/$defs/digest"}}},
+    "provenance": {"type": "object", "additionalProperties": false, "required": ["sources"], "properties": {"sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/sourceRef"}}}},
+    "value": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["scalar", "array", "optional"]}, "name": {"type": "string", "minLength": 1}, "element": {"$ref": "#/$defs/value"}}},
+    "pathSegment": {"type": "object", "additionalProperties": false, "required": ["id", "fullName", "sourceRef", "number", "typeKind"], "properties": {"id": {"type": "string", "minLength": 3}, "fullName": {"type": "string", "minLength": 3}, "sourceRef": {"$ref": "#/$defs/sourceRef"}, "number": {"type": "integer", "minimum": 1}, "typeKind": {"enum": ["scalar", "enum", "message"]}, "typeName": {"type": "string", "minLength": 1}}},
+    "fieldBinding": {"type": "object", "additionalProperties": false, "required": ["httpField", "rpcPath", "valueType", "required", "provenance"], "properties": {"httpField": {"type": "string", "minLength": 1}, "rpcPath": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pathSegment"}}, "valueType": {"$ref": "#/$defs/value"}, "required": {"type": "boolean"}, "provenance": {"$ref": "#/$defs/provenance"}}},
+    "contextBinding": {"type": "object", "additionalProperties": false, "required": ["source", "rpcPath", "valueType", "required", "provenance"], "properties": {"source": {"enum": ["subject-id", "tenant-id", "request-id", "trace-id"]}, "rpcPath": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pathSegment"}}, "valueType": {"$ref": "#/$defs/value"}, "required": {"type": "boolean"}, "provenance": {"$ref": "#/$defs/provenance"}}},
+    "credential": {"type": "object", "additionalProperties": false, "required": ["id", "type", "in", "name"], "properties": {"id": {"type": "string", "minLength": 1}, "type": {"enum": ["bearer", "api-key", "session-cookie"]}, "in": {"enum": ["header", "query", "cookie"]}, "name": {"type": "string", "minLength": 1}}},
+    "auth": {"type": "object", "additionalProperties": false, "required": ["mode", "credentials"], "properties": {"mode": {"enum": ["none", "optional", "required"]}, "credentials": {"type": "array", "items": {"$ref": "#/$defs/credential"}}}},
+    "errorMatch": {"type": "object", "additionalProperties": false, "required": ["domain", "code"], "properties": {"domain": {"type": "string", "minLength": 1}, "code": {"type": "string", "minLength": 1}}},
+    "errorTarget": {"type": "object", "additionalProperties": false, "required": ["domain", "code", "httpStatus"], "properties": {"domain": {"type": "string", "minLength": 1}, "code": {"type": "string", "minLength": 1}, "httpStatus": {"type": "integer", "minimum": 400, "maximum": 599}}},
+    "error": {"type": "object", "additionalProperties": false, "required": ["match", "project"], "properties": {"match": {"$ref": "#/$defs/errorMatch"}, "project": {"$ref": "#/$defs/errorTarget"}}},
+    "operation": {"type": "object", "additionalProperties": false, "required": ["id", "serviceId", "methodFullName", "inputName", "outputName", "requestType", "responseType", "method", "path", "permission", "auth", "requestFields", "contextFields", "responseFields", "errors", "operationProvenance", "requestProvenance", "responseProvenance"], "properties": {"id": {"type": "string", "minLength": 1}, "serviceId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"}, "methodFullName": {"type": "string", "minLength": 1}, "inputName": {"type": "string", "minLength": 1}, "outputName": {"type": "string", "minLength": 1}, "requestType": {"type": "string", "minLength": 1}, "responseType": {"type": "string", "minLength": 1}, "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string", "pattern": "^/"}, "permission": {"type": "string"}, "auth": {"$ref": "#/$defs/auth"}, "requestFields": {"type": "array", "items": {"$ref": "#/$defs/fieldBinding"}}, "contextFields": {"type": "array", "items": {"$ref": "#/$defs/contextBinding"}}, "responseFields": {"type": "array", "items": {"$ref": "#/$defs/fieldBinding"}}, "errors": {"type": "array", "items": {"$ref": "#/$defs/error"}}, "operationProvenance": {"$ref": "#/$defs/provenance"}, "requestProvenance": {"$ref": "#/$defs/provenance"}, "responseProvenance": {"$ref": "#/$defs/provenance"}}}
+  }
+}

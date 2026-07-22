@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package account.v1;
+
+import "nexa/protocol/v1/options.proto";
+
+option go_package = "example.com/nexa-generation-consumer/backend/account/internal/pb;accountpb";
+
+message GetAccountRequest {
+  string id = 1;
+}
+
+message GetAccountResponse {
+  string name = 1;
+}
+
+service AccountService {
+  rpc Get(GetAccountRequest) returns (GetAccountResponse) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "account.get"
+      method: GET
+      path: "/accounts/{id}"
+      auth: { mode: NONE }
+      request_fields: { http_field: "id" rpc_field: "id" }
+      response_fields: { rpc_field: "name" http_field: "name" }
+    };
+  }
+}

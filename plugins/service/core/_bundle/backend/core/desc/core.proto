@@ -1,0 +1,162 @@
+syntax = "proto3";
+
+package core.v1;
+
+import "nexa/protocol/v1/options.proto";
+
+message HealthRequest {}
+message HealthResponse { bool ready = 1; }
+
+message RegisterRequest {
+  string tenant = 1;
+  string username = 2;
+  string password = 3;
+  string email = 4;
+  string display_name = 5;
+  string request_id = 6;
+  string trace_id = 7;
+}
+message RegisterResponse { string account_id = 1; }
+
+message LoginRequest {
+  string tenant = 1;
+  string username = 2;
+  string password = 3;
+  string request_id = 4;
+  string trace_id = 5;
+}
+message LoginResponse {
+  string session_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+}
+
+message RefreshRequest {
+  string refresh_token = 1;
+  string request_id = 2;
+  string trace_id = 3;
+}
+message RefreshResponse {
+  string session_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+}
+
+message RevokeRequest {
+  string session_id = 1;
+  string request_id = 2;
+  string trace_id = 3;
+}
+message RevokeResponse { bool revoked = 1; }
+
+message CheckPermissionRequest {
+  int64 tenant_id = 1;
+  string subject_id = 2;
+  string permission = 3;
+}
+message CheckPermissionResponse { bool allowed = 1; }
+
+service CoreService {
+  rpc Health(HealthRequest) returns (HealthResponse) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.health"
+      method: GET
+      path: "/health"
+      auth: { mode: NONE }
+      response_fields: { rpc_field: "ready" http_field: "ready" }
+    };
+  }
+
+  rpc Register(RegisterRequest) returns (RegisterResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: REQUEST_ID rpc_field: "request_id" }
+      context_fields: { source: TRACE_ID rpc_field: "trace_id" }
+    };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.auth.register"
+      method: POST
+      path: "/auth/register"
+      auth: { mode: NONE }
+      request_fields: { http_field: "tenant" rpc_field: "tenant" }
+      request_fields: { http_field: "username" rpc_field: "username" }
+      request_fields: { http_field: "password" rpc_field: "password" }
+      request_fields: { http_field: "email" rpc_field: "email" }
+      request_fields: { http_field: "displayName" rpc_field: "display_name" }
+      response_fields: { rpc_field: "account_id" http_field: "accountId" }
+      errors: { match: { domain: "core" code: "conflict" } project: { domain: "api" code: "account_conflict" http_status: 409 } }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc Login(LoginRequest) returns (LoginResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: REQUEST_ID rpc_field: "request_id" }
+      context_fields: { source: TRACE_ID rpc_field: "trace_id" }
+    };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.auth.login"
+      method: POST
+      path: "/auth/login"
+      auth: { mode: NONE }
+      request_fields: { http_field: "tenant" rpc_field: "tenant" }
+      request_fields: { http_field: "username" rpc_field: "username" }
+      request_fields: { http_field: "password" rpc_field: "password" }
+      response_fields: { rpc_field: "session_id" http_field: "sessionId" }
+      response_fields: { rpc_field: "access_token" http_field: "accessToken" }
+      response_fields: { rpc_field: "refresh_token" http_field: "refreshToken" }
+      errors: { match: { domain: "core" code: "invalid_credentials" } project: { domain: "api" code: "invalid_credentials" http_status: 401 } }
+    };
+  }
+
+  rpc Refresh(RefreshRequest) returns (RefreshResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: REQUEST_ID rpc_field: "request_id" }
+      context_fields: { source: TRACE_ID rpc_field: "trace_id" }
+    };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.auth.refresh"
+      method: POST
+      path: "/auth/refresh"
+      auth: { mode: NONE }
+      request_fields: { http_field: "refreshToken" rpc_field: "refresh_token" }
+      response_fields: { rpc_field: "session_id" http_field: "sessionId" }
+      response_fields: { rpc_field: "access_token" http_field: "accessToken" }
+      response_fields: { rpc_field: "refresh_token" http_field: "refreshToken" }
+      errors: { match: { domain: "core" code: "session_expired" } project: { domain: "api" code: "session_expired" http_status: 401 } }
+      errors: { match: { domain: "core" code: "session_replayed" } project: { domain: "api" code: "session_replayed" http_status: 401 } }
+    };
+  }
+
+  rpc Revoke(RevokeRequest) returns (RevokeResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: REQUEST_ID rpc_field: "request_id" }
+      context_fields: { source: TRACE_ID rpc_field: "trace_id" }
+    };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.auth.revoke"
+      method: POST
+      path: "/auth/revoke"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.session.revoke"
+      request_fields: { http_field: "sessionId" rpc_field: "session_id" }
+      response_fields: { rpc_field: "revoked" http_field: "revoked" }
+      errors: { match: { domain: "core" code: "session_replayed" } project: { domain: "api" code: "session_unavailable" http_status: 401 } }
+    };
+  }
+
+  rpc CheckPermission(CheckPermissionRequest) returns (CheckPermissionResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: TENANT_ID rpc_field: "tenant_id" }
+      context_fields: { source: SUBJECT_ID rpc_field: "subject_id" }
+    };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.authorization.check"
+      method: GET
+      path: "/auth/permissions/{permission}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.authorization.check"
+      request_fields: { http_field: "permission" rpc_field: "permission" }
+      response_fields: { rpc_field: "allowed" http_field: "allowed" }
+    };
+  }
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/api-manifest-v1.schema.json",
+  "type": "object",
+  "required": ["apiVersion", "kind", "sourceDigest", "sources", "schemas", "operations"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/api-manifest/v1"},
+    "kind": {"const": "APIManifest"},
+    "sourceDigest": {"type": "string"},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "schemas": {"type": "array", "items": {"$ref": "#/$defs/schema"}},
+    "operations": {"type": "array", "items": {"$ref": "#/$defs/operation"}}
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["ref", "digest"],
+      "additionalProperties": false,
+      "properties": {"ref": {"type": "string"}, "digest": {"type": "string"}}
+    },
+    "nodeProvenance": {
+      "type": "object",
+      "required": ["kind", "refs"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string"},
+        "refs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "originBinding": {
+      "type": "object",
+      "required": ["ref"],
+      "additionalProperties": false,
+      "properties": {"ref": {"type": "string"}}
+    },
+    "field": {
+      "type": "object",
+      "required": ["name", "schemaRef", "required", "provenance"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "schemaRef": {"type": "string"},
+        "required": {"type": "boolean"},
+        "provenance": {"$ref": "#/$defs/nodeProvenance"},
+        "origin": {"$ref": "#/$defs/originBinding"}
+      }
+    },
+    "schema": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["id", "kind", "provenance", "fields"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"type": "string"}, "kind": {"const": "object"}, "provenance": {"$ref": "#/$defs/nodeProvenance"},
+            "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["id", "kind", "provenance", "itemSchemaRef"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"type": "string"}, "kind": {"const": "array"}, "provenance": {"$ref": "#/$defs/nodeProvenance"},
+            "itemSchemaRef": {"type": "string"}
+          }
+        },
+        {"type": "object", "required": ["id", "kind"], "additionalProperties": false, "properties": {"id": {"const": "scalar.string"}, "kind": {"const": "string"}}},
+        {"type": "object", "required": ["id", "kind"], "additionalProperties": false, "properties": {"id": {"const": "scalar.integer"}, "kind": {"const": "integer"}}},
+        {"type": "object", "required": ["id", "kind"], "additionalProperties": false, "properties": {"id": {"const": "scalar.number"}, "kind": {"const": "number"}}},
+        {"type": "object", "required": ["id", "kind"], "additionalProperties": false, "properties": {"id": {"const": "scalar.boolean"}, "kind": {"const": "boolean"}}}
+      ]
+    },
+    "requestBinding": {
+      "type": "object",
+      "required": ["field", "in", "name"],
+      "additionalProperties": false,
+      "properties": {"field": {"type": "string"}, "in": {"type": "string"}, "name": {"type": "string"}}
+    },
+    "credential": {
+      "type": "object",
+      "required": ["id", "type", "in", "name"],
+      "additionalProperties": false,
+      "properties": {"id": {"type": "string"}, "type": {"type": "string"}, "in": {"type": "string"}, "name": {"type": "string"}}
+    },
+    "auth": {
+      "type": "object",
+      "required": ["mode", "credentials"],
+      "additionalProperties": false,
+      "properties": {"mode": {"type": "string"}, "credentials": {"type": "array", "items": {"$ref": "#/$defs/credential"}}}
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "apiVersion"],
+      "additionalProperties": false,
+      "properties": {"id": {"type": "string"}, "apiVersion": {"type": "string"}}
+    },
+    "errorMatch": {
+      "type": "object", "required": ["domain", "code"], "additionalProperties": false,
+      "properties": {"domain": {"type": "string"}, "code": {"type": "string"}}
+    },
+    "errorTarget": {
+      "type": "object", "required": ["domain", "code", "httpStatus"], "additionalProperties": false,
+      "properties": {"domain": {"type": "string"}, "code": {"type": "string"}, "httpStatus": {"type": "integer"}}
+    },
+    "errorProjection": {
+      "type": "object", "required": ["match", "project"], "additionalProperties": false,
+      "properties": {"match": {"$ref": "#/$defs/errorMatch"}, "project": {"$ref": "#/$defs/errorTarget"}}
+    },
+    "operation": {
+      "allOf": [
+        {
+          "type": "object",
+          "required": ["id", "method", "path", "provenance", "requestSchemaRef", "responseBody", "requestBindings", "auth", "errorProjections"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"type": "string"}, "method": {"type": "string"}, "path": {"type": "string"},
+            "provenance": {"$ref": "#/$defs/nodeProvenance"}, "requestSchemaRef": {"type": "string"},
+            "responseBody": {"enum": ["json", "none"]}, "responseSchemaRef": {"type": "string"},
+            "requestBindings": {"type": "array", "items": {"$ref": "#/$defs/requestBinding"}},
+            "auth": {"$ref": "#/$defs/auth"}, "permission": {"type": "string"},
+            "capability": {"$ref": "#/$defs/capability"},
+            "errorProjections": {"type": "array", "items": {"$ref": "#/$defs/errorProjection"}}
+          }
+        },
+        {
+          "oneOf": [
+            {"properties": {"responseBody": {"const": "json"}}, "required": ["responseSchemaRef"]},
+            {"properties": {"responseBody": {"const": "none"}}, "not": {"required": ["responseSchemaRef"]}}
+          ]
+        }
+      ]
+    }
+  }
+}

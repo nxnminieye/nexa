@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/project/service-catalog-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "services"],
+  "properties": {
+    "apiVersion": {
+      "const": "nexa.dev/service-catalog/v1"
+    },
+    "kind": {
+      "const": "ServiceCatalog"
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "root", "capabilityBindings"],
+        "properties": {
+          "id": {"type": "string"},
+          "root": {"type": "string"},
+          "dependsOn": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "capabilityBindings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "apiVersion"],
+              "properties": {
+                "id": {"type": "string"},
+                "apiVersion": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

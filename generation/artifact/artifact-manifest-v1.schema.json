@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/artifact-manifest-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "generator", "inputDigest", "sources", "artifacts"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/artifact-manifest/v1"},
+    "kind": {"const": "ArtifactManifest"},
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {"id": {"type": "string"}, "version": {"type": "string"}}
+    },
+    "inputDigest": {"type": "string"},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "digest"],
+        "properties": {"ref": {"type": "string"}, "digest": {"type": "string"}}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "owner", "digest", "sources", "stalePolicy"],
+        "properties": {
+          "id": {"type": "string"},
+          "path": {"type": "string"},
+          "owner": {"type": "string"},
+          "digest": {"type": "string"},
+          "sources": {"type": "array", "items": {"type": "string"}},
+          "stalePolicy": {"type": "string"}
+        }
+      }
+    }
+  }
+}

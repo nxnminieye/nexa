@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/runtime/build-info-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "service",
+    "serviceKind",
+    "contractVersion",
+    "available",
+    "commit",
+    "dirty",
+    "vcsTime",
+    "goVersion",
+    "modulePath",
+    "moduleVersion"
+  ],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/build-info/v1"},
+    "kind": {"const": "BuildInfo"},
+    "service": {"type": "string"},
+    "serviceKind": {"type": "string"},
+    "contractVersion": {"type": "string"},
+    "available": {"type": "boolean"},
+    "commit": {"type": "string"},
+    "dirty": {"type": "boolean"},
+    "vcsTime": {"type": "string"},
+    "goVersion": {"type": "string"},
+    "modulePath": {"type": "string"},
+    "moduleVersion": {"type": "string"}
+  }
+}

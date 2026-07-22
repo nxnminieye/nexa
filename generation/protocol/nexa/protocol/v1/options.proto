@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package nexa.protocol.v1;
+
+import "google/protobuf/descriptor.proto";
+
+enum HTTPMethod {
+  HTTP_METHOD_UNSPECIFIED = 0;
+  GET = 1;
+  POST = 2;
+  PUT = 3;
+  PATCH = 4;
+  DELETE = 5;
+}
+
+enum AuthMode {
+  AUTH_MODE_UNSPECIFIED = 0;
+  NONE = 1;
+  OPTIONAL = 2;
+  REQUIRED = 3;
+}
+
+enum CredentialType {
+  CREDENTIAL_TYPE_UNSPECIFIED = 0;
+  BEARER = 1;
+  API_KEY = 2;
+  SESSION_COOKIE = 3;
+}
+
+enum CredentialLocation {
+  CREDENTIAL_LOCATION_UNSPECIFIED = 0;
+  HEADER = 1;
+  QUERY = 2;
+  COOKIE = 3;
+}
+
+enum ContextValue {
+  CONTEXT_VALUE_UNSPECIFIED = 0;
+  SUBJECT_ID = 1;
+  TENANT_ID = 2;
+  REQUEST_ID = 3;
+  TRACE_ID = 4;
+}
+
+message Credential {
+  string id = 1;
+  CredentialType type = 2;
+  CredentialLocation location = 3;
+  string name = 4;
+}
+
+message Auth {
+  AuthMode mode = 1;
+  repeated Credential credentials = 2;
+}
+
+message RequestFieldBinding {
+  string http_field = 1;
+  string rpc_field = 2;
+}
+
+message ContextBinding {
+  ContextValue source = 1;
+  string rpc_field = 2;
+}
+
+message ResponseFieldBinding {
+  string rpc_field = 1;
+  string http_field = 2;
+}
+
+message ErrorMatch {
+  string domain = 1;
+  string code = 2;
+}
+
+message ErrorTarget {
+  string domain = 1;
+  string code = 2;
+  uint32 http_status = 3;
+}
+
+message ErrorProjection {
+  ErrorMatch match = 1;
+  ErrorTarget project = 2;
+}
+
+message HTTPProxy {
+  string operation_id = 1;
+  HTTPMethod method = 2;
+  string path = 3;
+  Auth auth = 4;
+  string permission = 5;
+  repeated RequestFieldBinding request_fields = 6;
+  reserved 7;
+  reserved "context_fields";
+  repeated ResponseFieldBinding response_fields = 8;
+  repeated ErrorProjection errors = 9;
+}
+
+message RPCContext {
+  repeated ContextBinding context_fields = 1;
+}
+
+extend google.protobuf.MethodOptions {
+  HTTPProxy http_proxy = 51001;
+  RPCContext rpc_context = 51002;
+}

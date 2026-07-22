@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/runtime-corpus-v1.schema.json",
+  "title": "Nexa Runtime API Conformance Corpus v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "manifest", "runtimeLimits", "runtimeLimitSemantics", "requests", "credentials", "wireRequests", "responses", "responseLimitRecipes", "remoteErrorGrammar", "remoteErrorLimitRecipes", "errors", "runtimeContractBases", "runtimeContractCases", "adapterCases"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/runtime-api-conformance/v1"},
+    "manifest": {"type": "string", "minLength": 1},
+    "runtimeLimits": {"$ref": "#/$defs/runtimeLimits"},
+    "runtimeLimitSemantics": {"$ref": "#/$defs/runtimeLimitSemantics"},
+    "requests": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/requestCase"}},
+    "credentials": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/credentialCase"}},
+    "wireRequests": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/wireCase"}},
+    "responses": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/responseCase"}},
+    "responseLimitRecipes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/limitRecipe"}},
+    "remoteErrorGrammar": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/grammarCase"}},
+    "remoteErrorLimitRecipes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/remoteLimitRecipe"}},
+    "errors": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/remoteErrorCase"}},
+    "runtimeContractBases": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/runtimeContractBase"}},
+    "runtimeContractCases": {"type": "array", "minItems": 42, "maxItems": 42, "items": {"$ref": "#/$defs/runtimeContractCase"}},
+    "adapterCases": {"type": "array", "minItems": 25, "maxItems": 25, "items": {"$ref": "#/$defs/adapterCase"}}
+  },
+  "$defs": {
+    "header": {
+      "type": "object", "additionalProperties": false, "required": ["name", "value"],
+      "properties": {"name": {"type": "string"}, "value": {"type": "string"}}
+    },
+    "legacyError": {
+      "type": "object", "additionalProperties": false, "required": ["code", "reason", "pointer"],
+      "properties": {"code": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}, "pointer": {"type": "string"}}
+    },
+    "runtimeLimits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "requestRawBytes", "jsonDepth", "jsonNodes", "responseBytesMin", "responseBytesMax"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/runtime-api-limits/v1"},
+        "requestRawBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "jsonDepth": {"type": "integer", "minimum": 1, "maximum": 64},
+        "jsonNodes": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "responseBytesMin": {"type": "integer", "minimum": 1, "maximum": 67108864},
+        "responseBytesMax": {"type": "integer", "minimum": 1, "maximum": 67108864}
+      }
+    },
+    "runtimeLimitSemantics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestRawBytes", "parserDepthAndNodes", "responseBytes"],
+      "properties": {
+        "requestRawBytes": {
+          "type": "object", "additionalProperties": false, "required": ["scope", "firstFailure"],
+          "properties": {"scope": {"const": "ParseRequest"}, "firstFailure": {"const": true}}
+        },
+        "parserDepthAndNodes": {
+          "type": "object", "additionalProperties": false,
+          "required": ["scopes", "rootDepth", "depthInclusive", "countRoot", "countValues", "countMemberNames"],
+          "properties": {
+            "scopes": {"const": ["ParseRequest", "ParseRemoteError", "ClientSuccessResponse"]},
+            "rootDepth": {"const": 0}, "depthInclusive": {"const": true}, "countRoot": {"const": true},
+            "countValues": {"const": true}, "countMemberNames": {"const": false}
+          }
+        },
+        "responseBytes": {
+          "type": "object", "additionalProperties": false, "required": ["scope", "beforeRemoteErrorParse"],
+          "properties": {"scope": {"const": "Client.Call"}, "beforeRemoteErrorParse": {"const": true}}
+        }
+      }
+    },
+    "requestCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "json", "valid"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "json": {"type": "string"}, "valid": {"type": "boolean"}, "canonical": {"type": "string"}, "error": {"$ref": "#/$defs/legacyError"}},
+      "oneOf": [{"properties": {"valid": {"const": true}}, "required": ["canonical"], "not": {"required": ["error"]}}, {"properties": {"valid": {"const": false}}, "required": ["error"], "not": {"required": ["canonical"]}}]
+    },
+    "credentialCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "values", "valid"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "values": {"type": "array", "items": {"$ref": "#/$defs/credentialValue"}}, "valid": {"type": "boolean"}, "error": {"$ref": "#/$defs/legacyError"}},
+      "oneOf": [{"properties": {"valid": {"const": true}}, "not": {"required": ["error"]}}, {"properties": {"valid": {"const": false}}, "required": ["error"]}]
+    },
+    "wireRequest": {
+      "type": "object", "additionalProperties": false, "required": ["method", "path", "rawPath", "escapedPath", "requestUri", "headers", "body"],
+      "properties": {"method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string"}, "rawPath": {"type": "string"}, "escapedPath": {"type": "string"}, "requestUri": {"type": "string"}, "headers": {"type": "array", "items": {"$ref": "#/$defs/header"}}, "body": {"type": ["string", "null"]}}
+    },
+    "credentialValue": {
+      "type": "object", "additionalProperties": false, "required": ["id", "value"],
+      "properties": {"id": {"type": "string", "minLength": 1}, "value": {"type": "string"}}
+    },
+    "wireCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "endpoint", "apiOperationId", "request", "credentials", "expected"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "endpoint": {"type": "string", "minLength": 1}, "apiOperationId": {"type": "string", "minLength": 1}, "request": {"type": "string"}, "credentials": {"type": "array", "items": {"$ref": "#/$defs/credentialValue"}}, "expected": {"$ref": "#/$defs/wireRequest"}}
+    },
+    "responseCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "responseBody", "status", "headers", "body", "valid"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "responseBody": {"enum": ["json", "none"]}, "status": {"type": "integer", "minimum": 0, "maximum": 599}, "headers": {"type": "array", "items": {"$ref": "#/$defs/header"}}, "body": {"type": "string"}, "maxResponseBytes": {"type": "integer", "minimum": 1, "maximum": 67108864}, "valid": {"type": "boolean"}, "hasJSON": {"type": "boolean"}, "canonical": {"type": "string"}, "error": {"$ref": "#/$defs/legacyError"}},
+      "oneOf": [{"properties": {"valid": {"const": true}}, "required": ["hasJSON"], "not": {"required": ["error"]}}, {"properties": {"valid": {"const": false}}, "required": ["error"], "not": {"anyOf": [{"required": ["hasJSON"]}, {"required": ["canonical"]}]}}]
+    },
+    "limitRecipe": {
+      "type": "object", "additionalProperties": false, "required": ["name", "kind", "amount", "valid"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "kind": {"enum": ["nested-array-depth", "array-value-count"]}, "amount": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "valid": {"type": "boolean"}, "error": {"$ref": "#/$defs/legacyError"}},
+      "oneOf": [{"properties": {"valid": {"const": true}}, "not": {"required": ["error"]}}, {"properties": {"valid": {"const": false}}, "required": ["error"]}]
+    },
+    "grammarCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "field", "body", "valid", "error"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "field": {"enum": ["domain", "code", "message", "requestId", "traceId"]}, "body": {"type": "string"}, "valid": {"const": false}, "error": {"$ref": "#/$defs/legacyError"}}
+    },
+    "remoteLimitRecipe": {
+      "type": "object", "additionalProperties": false, "required": ["name", "kind", "firstObjectMembers", "secondObjectMembers", "valid"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "kind": {"const": "nested-object-members-through-array"}, "firstObjectMembers": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "secondObjectMembers": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "valid": {"type": "boolean"}, "error": {"$ref": "#/$defs/legacyError"}},
+      "oneOf": [{"properties": {"valid": {"const": true}}, "not": {"required": ["error"]}}, {"properties": {"valid": {"const": false}}, "required": ["error"]}]
+    },
+    "projected": {
+      "type": "object", "additionalProperties": false, "required": ["domain", "code", "httpStatus"],
+      "properties": {"domain": {"type": "string", "minLength": 1}, "code": {"type": "string", "minLength": 1}, "httpStatus": {"type": "integer", "minimum": 400, "maximum": 599}}
+    },
+    "remoteErrorCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "status", "body", "valid"],
+      "properties": {"name": {"type": "string", "minLength": 1}, "status": {"type": "integer", "minimum": 200, "maximum": 599}, "body": {"type": "string"}, "valid": {"type": "boolean"}, "projected": {"$ref": "#/$defs/projected"}, "canonical": {"type": "string"}, "error": {"$ref": "#/$defs/legacyError"}},
+      "oneOf": [{"properties": {"valid": {"const": true}}, "anyOf": [{"required": ["projected"]}, {"required": ["canonical"]}], "not": {"required": ["error"]}}, {"properties": {"valid": {"const": false}}, "required": ["error"], "not": {"anyOf": [{"required": ["projected"]}, {"required": ["canonical"]}]}}]
+    },
+    "adapterRequest": {
+      "type": "object", "additionalProperties": false, "required": ["method", "url", "headers", "body"],
+      "properties": {"method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "url": {"type": "string", "minLength": 1}, "headers": {"type": "array", "items": {"$ref": "#/$defs/header"}}, "body": {"type": ["string", "null"]}}
+    },
+    "adapterSuccess": {
+      "type": "object", "additionalProperties": false, "required": ["apiOperationId", "httpStatus", "responseBody", "hasJSON", "canonicalJSON"],
+      "properties": {"apiOperationId": {"type": "string", "minLength": 1}, "httpStatus": {"type": "integer", "minimum": 200, "maximum": 299}, "responseBody": {"enum": ["json", "none"]}, "hasJSON": {"type": "boolean"}, "canonicalJSON": {"type": "string"}},
+      "oneOf": [
+        {"properties": {"responseBody": {"const": "json"}, "hasJSON": {"const": true}, "canonicalJSON": {"minLength": 1}}},
+        {"properties": {"responseBody": {"const": "none"}, "hasJSON": {"const": false}, "canonicalJSON": {"const": ""}}}
+      ]
+    },
+    "adapterError": {
+      "type": "object", "additionalProperties": false,
+      "required": ["domain", "code", "message", "category", "retryable", "apiOperationId", "requestId", "traceId", "reason", "pointer", "httpStatus", "remoteDomain", "remoteCode", "remoteDetailsAbsent"],
+      "properties": {"domain": {"type": "string", "minLength": 1}, "code": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "category": {"enum": ["usage", "input", "review", "drift", "conflict", "unavailable", "external", "canceled", "internal"]}, "retryable": {"type": "boolean"}, "apiOperationId": {"type": "string"}, "requestId": {"type": "string"}, "traceId": {"type": "string"}, "reason": {"type": "string"}, "pointer": {"type": "string"}, "httpStatus": {"type": "integer", "maximum": 599, "oneOf": [{"const": 0}, {"minimum": 200}]}, "remoteDomain": {"type": "string"}, "remoteCode": {"type": "string"}, "remoteDetailsAbsent": {"const": true}}
+    },
+    "runtimeContractBase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "document"],
+      "properties": {"name": {"enum": ["simple", "relation"]}, "document": {"type": "string", "minLength": 1}}
+    },
+    "runtimeContractMutation": {
+      "type": "object", "additionalProperties": false, "required": ["operation", "pointer", "valueJSON"],
+      "properties": {"operation": {"enum": ["set", "remove", "append"]}, "pointer": {"type": "string", "pattern": "^/"}, "valueJSON": {"type": "string"}}
+    },
+    "runtimeContractCase": {
+      "type": "object", "additionalProperties": false, "required": ["name", "base", "compound", "mutations", "expected"],
+      "properties": {"name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"}, "base": {"enum": ["simple", "relation"]}, "compound": {"type": "boolean"}, "mutations": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/runtimeContractMutation"}}, "expected": {"$ref": "#/$defs/legacyError"}}
+    },
+    "adapterOutcome": {
+      "type": "object", "additionalProperties": false,
+      "properties": {"success": {"$ref": "#/$defs/adapterSuccess"}, "error": {"$ref": "#/$defs/adapterError"}},
+      "oneOf": [{"required": ["success"]}, {"required": ["error"]}]
+    },
+    "adapterExpected": {
+      "type": "object", "additionalProperties": false,
+      "required": ["request", "providerCalls", "transportCalls", "bodyReadCalls", "bodyCloseCalls", "outcome"],
+      "properties": {"request": {"oneOf": [{"$ref": "#/$defs/adapterRequest"}, {"type": "null"}]}, "providerCalls": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "transportCalls": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "bodyReadCalls": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "bodyCloseCalls": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "outcome": {"$ref": "#/$defs/adapterOutcome"}}
+    },
+    "adapterTransport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["behavior", "status", "headers", "body", "readBehavior", "closeBehavior"],
+      "properties": {"behavior": {"enum": ["response", "failure", "panic", "response-and-failure", "zero", "cancel", "deadline"]}, "status": {"type": "integer", "minimum": 0, "maximum": 599}, "headers": {"type": "array", "items": {"$ref": "#/$defs/header"}}, "body": {"type": "string"}, "readBehavior": {"enum": ["all", "one-byte", "failure", "panic", "cancel", "deadline", "forbidden", "absent"]}, "closeBehavior": {"enum": ["success", "failure", "panic"]}}
+    },
+    "adapterCase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "endpoint", "apiOperationId", "request", "credentials", "maxResponseBytes", "contextBehavior", "providerBehavior", "transport", "expected"],
+      "properties": {"name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"}, "endpoint": {"type": "string", "minLength": 1}, "apiOperationId": {"type": "string", "minLength": 1}, "request": {"type": "string"}, "credentials": {"type": "array", "items": {"$ref": "#/$defs/credentialValue"}}, "maxResponseBytes": {"type": "integer", "minimum": 1, "maximum": 67108864}, "contextBehavior": {"enum": ["active", "canceled", "deadline"]}, "providerBehavior": {"enum": ["values", "failure", "panic", "cancel", "deadline"]}, "transport": {"$ref": "#/$defs/adapterTransport"}, "expected": {"$ref": "#/$defs/adapterExpected"}}
+    }
+  }
+}

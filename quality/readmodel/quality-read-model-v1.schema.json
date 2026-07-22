@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/quality/quality-read-model-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "sourceProfile", "readModelScope", "revision", "requirements"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/quality-read-model/v1"},
+    "kind": {"const": "QualityReadModel"},
+    "sourceProfile": {"type": "string"},
+    "readModelScope": {"type": "string"},
+    "revision": {"type": "string"},
+    "requirements": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/requirementCoverage"}
+    }
+  },
+  "$defs": {
+    "sourceRef": {"type": "string", "pattern": "^repo:.+"},
+    "sourceRefs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sourceRef"}
+    },
+    "requirementCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirement", "title", "status", "testRefs", "evidenceRefs", "freezeRefs", "freezeStatus", "gapCodes"],
+      "properties": {
+        "requirement": {"$ref": "#/$defs/sourceRef"},
+        "title": {"type": "string"},
+        "status": {"type": "string"},
+        "testRefs": {"$ref": "#/$defs/sourceRefs"},
+        "evidenceRefs": {"$ref": "#/$defs/sourceRefs"},
+        "freezeRefs": {"$ref": "#/$defs/sourceRefs"},
+        "freezeStatus": {"enum": ["none", "frozen", "changed"]},
+        "gapCodes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

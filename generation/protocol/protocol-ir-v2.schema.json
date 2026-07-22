@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/protocol/protocol-ir-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "serviceId", "sourceDigest", "sources", "files"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/protocol-ir/v2"},
+    "kind": {"const": "ProtocolIR"},
+    "serviceId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "sourceDigest": {"$ref": "#/$defs/digest"},
+    "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+    "files": {"type": "array", "items": {"$ref": "#/$defs/file"}}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "sourceRef": {"type": "string", "pattern": "^repo:.+"},
+    "source": {"type": "object", "additionalProperties": false, "required": ["ref", "digest"], "properties": {"ref": {"$ref": "#/$defs/sourceRef"}, "digest": {"$ref": "#/$defs/digest"}}},
+    "typeValue": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind", "name"], "properties": {"kind": {"enum": ["scalar", "enum", "message"]}, "name": {"type": "string", "minLength": 1}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "key", "value"], "properties": {"kind": {"const": "map"}, "key": {"$ref": "#/$defs/typeValue"}, "value": {"$ref": "#/$defs/typeValue"}}}
+      ]
+    },
+    "credential": {"type": "object", "additionalProperties": false, "required": ["id", "type", "in", "name"], "properties": {"id": {"type": "string", "minLength": 1}, "type": {"enum": ["bearer", "api-key", "session-cookie"]}, "in": {"enum": ["header", "query", "cookie"]}, "name": {"type": "string", "minLength": 1}}},
+    "auth": {"type": "object", "additionalProperties": false, "required": ["mode", "credentials"], "properties": {"mode": {"enum": ["none", "optional", "required"]}, "credentials": {"type": "array", "items": {"$ref": "#/$defs/credential"}}}},
+    "rpcPath": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.]*#[1-9][0-9]*$"}},
+    "requestField": {"type": "object", "additionalProperties": false, "required": ["httpField", "rpcPath"], "properties": {"httpField": {"type": "string", "minLength": 1}, "rpcPath": {"$ref": "#/$defs/rpcPath"}}},
+    "contextField": {"type": "object", "additionalProperties": false, "required": ["source", "rpcPath"], "properties": {"source": {"enum": ["subject-id", "tenant-id", "request-id", "trace-id"]}, "rpcPath": {"$ref": "#/$defs/rpcPath"}}},
+    "responseField": {"type": "object", "additionalProperties": false, "required": ["rpcPath", "httpField"], "properties": {"rpcPath": {"$ref": "#/$defs/rpcPath"}, "httpField": {"type": "string", "minLength": 1}}},
+    "errorMatch": {"type": "object", "additionalProperties": false, "required": ["domain", "code"], "properties": {"domain": {"type": "string", "minLength": 1}, "code": {"type": "string", "minLength": 1}}},
+    "errorTarget": {"type": "object", "additionalProperties": false, "required": ["domain", "code", "httpStatus"], "properties": {"domain": {"type": "string", "minLength": 1}, "code": {"type": "string", "minLength": 1}, "httpStatus": {"type": "integer", "minimum": 400, "maximum": 599}}},
+    "error": {"type": "object", "additionalProperties": false, "required": ["match", "project"], "properties": {"match": {"$ref": "#/$defs/errorMatch"}, "project": {"$ref": "#/$defs/errorTarget"}}},
+    "httpProxy": {"type": "object", "additionalProperties": false, "required": ["operationId", "method", "path", "auth", "permission", "requestFields", "responseFields", "errors"], "properties": {"operationId": {"type": "string", "minLength": 1}, "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string", "minLength": 1}, "auth": {"$ref": "#/$defs/auth"}, "permission": {"type": "string"}, "requestFields": {"type": "array", "items": {"$ref": "#/$defs/requestField"}}, "responseFields": {"type": "array", "items": {"$ref": "#/$defs/responseField"}}, "errors": {"type": "array", "items": {"$ref": "#/$defs/error"}}}},
+    "rpcContext": {"type": "object", "additionalProperties": false, "required": ["contextFields"], "properties": {"contextFields": {"type": "array", "items": {"$ref": "#/$defs/contextField"}}}},
+    "field": {"type": "object", "additionalProperties": false, "required": ["fullName", "number", "jsonName", "cardinality", "presence", "type", "sourceRef"], "properties": {"fullName": {"type": "string", "minLength": 1}, "number": {"type": "integer", "minimum": 1}, "jsonName": {"type": "string", "minLength": 1}, "cardinality": {"enum": ["singular", "repeated"]}, "presence": {"enum": ["implicit", "explicit", "oneof", "map"]}, "type": {"$ref": "#/$defs/typeValue"}, "oneof": {"type": "string", "minLength": 1}, "sourceRef": {"$ref": "#/$defs/sourceRef"}}},
+    "message": {"type": "object", "additionalProperties": false, "required": ["fullName", "sourceRef", "fields"], "properties": {"fullName": {"type": "string", "minLength": 1}, "sourceRef": {"$ref": "#/$defs/sourceRef"}, "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}}}},
+    "enumValue": {"type": "object", "additionalProperties": false, "required": ["name", "number"], "properties": {"name": {"type": "string", "minLength": 1}, "number": {"type": "integer"}}},
+    "enum": {"type": "object", "additionalProperties": false, "required": ["fullName", "values"], "properties": {"fullName": {"type": "string", "minLength": 1}, "values": {"type": "array", "items": {"$ref": "#/$defs/enumValue"}}}},
+    "method": {"type": "object", "additionalProperties": false, "required": ["fullName", "input", "output", "clientStreaming", "serverStreaming", "sourceRef"], "properties": {"fullName": {"type": "string", "minLength": 1}, "input": {"type": "string", "minLength": 1}, "output": {"type": "string", "minLength": 1}, "clientStreaming": {"type": "boolean"}, "serverStreaming": {"type": "boolean"}, "httpProxy": {"$ref": "#/$defs/httpProxy"}, "rpcContext": {"$ref": "#/$defs/rpcContext"}, "sourceRef": {"$ref": "#/$defs/sourceRef"}}},
+    "service": {"type": "object", "additionalProperties": false, "required": ["fullName", "methods"], "properties": {"fullName": {"type": "string", "minLength": 1}, "methods": {"type": "array", "items": {"$ref": "#/$defs/method"}}}},
+    "file": {"type": "object", "additionalProperties": false, "required": ["path", "messages", "enums", "services"], "properties": {"path": {"type": "string", "pattern": "^[^/].*\\.proto$"}, "messages": {"type": "array", "items": {"$ref": "#/$defs/message"}}, "enums": {"type": "array", "items": {"$ref": "#/$defs/enum"}}, "services": {"type": "array", "items": {"$ref": "#/$defs/service"}}}}
+  }
+}

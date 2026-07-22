@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/service/service-manifest-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "serviceId", "serviceKind", "modulePath", "contractSources", "contractDigest"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/service-manifest/v1"},
+    "kind": {"const": "ServiceManifest"},
+    "serviceId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "serviceKind": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "modulePath": {"type": "string", "minLength": 1},
+    "contractSources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ref", "digest"],
+        "properties": {
+          "ref": {"type": "string", "pattern": "^repo:.+"},
+          "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "contractDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

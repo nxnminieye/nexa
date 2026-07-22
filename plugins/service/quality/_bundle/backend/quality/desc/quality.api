@@ -1,0 +1,44 @@
+syntax = "v1"
+
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+
+type RequirementCoverage {
+  Requirement string `json:"requirement"`
+  Title string `json:"title"`
+  Status string `json:"status"`
+  TestRefs []string `json:"testRefs"`
+  EvidenceRefs []string `json:"evidenceRefs"`
+  FreezeRefs []string `json:"freezeRefs"`
+  FreezeStatus string `json:"freezeStatus"`
+  GapCodes []string `json:"gapCodes"`
+}
+
+type SnapshotRequest {}
+
+type SnapshotResponse {
+  APIVersion string `json:"apiVersion"`
+  Kind string `json:"kind"`
+  SourceProfile string `json:"sourceProfile"`
+  ReadModelScope string `json:"readModelScope"`
+  Revision string `json:"revision"`
+  Requirements []RequirementCoverage `json:"requirements"`
+}
+
+type HealthRequest {}
+
+type HealthResponse {
+  Ready bool `json:"ready"`
+  Code string `json:"code"`
+}
+
+@server (nexaOperationId: "quality.snapshot.get" nexaAuthMode: "none")
+service quality-api {
+  @handler snapshot
+  get /quality/snapshot (SnapshotRequest) returns (SnapshotResponse)
+}
+
+@server (nexaOperationId: "quality.health.get" nexaAuthMode: "none")
+service quality-api {
+  @handler health
+  get /health (HealthRequest) returns (HealthResponse)
+}

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/toolchain/retained-build-input-manifest-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "buildTags", "digest", "goExecutableVersion", "inputs", "kind", "localModules", "moduleGraphDigest", "schemaImportPath"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/retained-build-input-manifest/v1"},
+    "buildTags": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "digest": {"$ref": "#/$defs/digest"},
+    "goExecutableVersion": {"type": "string", "minLength": 1},
+    "inputs": {"type": "array", "maxItems": 8192, "items": {"$ref": "#/$defs/input"}},
+    "kind": {"const": "RetainedBuildInputManifest"},
+    "localModules": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/localModule"}},
+    "moduleGraphDigest": {"$ref": "#/$defs/digest"},
+    "schemaImportPath": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "moduleRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "version": {"type": "string"}
+      }
+    },
+    "localContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {"kind": {"const": "local"}}
+    },
+    "noneReplacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {"kind": {"const": "none"}}
+    },
+    "repositoryReplacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repositoryPath"],
+      "properties": {
+        "kind": {"const": "repository"},
+        "repositoryPath": {"type": "string", "minLength": 1}
+      }
+    },
+    "scratchIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "path", "replacement", "version"],
+      "properties": {
+        "content": {"$ref": "#/$defs/localContent"},
+        "path": {"type": "string", "minLength": 1},
+        "replacement": {"$ref": "#/$defs/noneReplacement"},
+        "version": {"const": ""}
+      }
+    },
+    "repositoryIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "path", "replacement", "version"],
+      "properties": {
+        "content": {"$ref": "#/$defs/localContent"},
+        "path": {"type": "string", "minLength": 1},
+        "replacement": {"$ref": "#/$defs/repositoryReplacement"},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
+    "localModule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["module", "role"],
+          "properties": {
+            "module": {"$ref": "#/$defs/scratchIdentity"},
+            "role": {"const": "scratch-main"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["module", "repositoryPath", "role"],
+          "properties": {
+            "module": {"$ref": "#/$defs/repositoryIdentity"},
+            "repositoryPath": {"type": "string", "minLength": 1},
+            "role": {"const": "repository-module"}
+          }
+        }
+      ]
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "kind", "module", "path", "size"],
+      "properties": {
+        "digest": {"$ref": "#/$defs/digest"},
+        "kind": {"enum": ["go", "embed", "module-file", "module-sum"]},
+        "module": {"$ref": "#/$defs/moduleRef"},
+        "path": {"type": "string", "minLength": 1},
+        "size": {"type": "integer", "minimum": 0, "maximum": 16777216}
+      }
+    }
+  }
+}

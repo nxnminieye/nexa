@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/nexaent/ent-field-meta-v1.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "payload"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-field-meta/v1"},
+        "kind": {"const": "EntFieldMeta"},
+        "payload": {"$ref": "#/$defs/payload"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "duplicate"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-field-meta/v1"},
+        "kind": {"const": "EntFieldMeta"},
+        "duplicate": {"const": true}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "invalid"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-field-meta/v1"},
+        "kind": {"const": "EntFieldMeta"},
+        "invalid": {"$ref": "#/$defs/invalid"}
+      }
+    }
+  ],
+  "$defs": {
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "zhCN", "enUS"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "zhCN": {"type": "string", "minLength": 1},
+        "enUS": {"type": "string", "minLength": 1}
+      }
+    },
+    "physicalDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field"],
+      "properties": {
+        "field": {"type": "string", "minLength": 1}
+      }
+    },
+    "logicalReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "display"],
+      "properties": {
+        "target": {"type": "string", "minLength": 1},
+        "display": {"type": "string", "minLength": 1}
+      }
+    },
+    "crudPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read", "mutation"],
+      "properties": {
+        "read": {"enum": ["include", "exclude"]},
+        "mutation": {"enum": ["none", "create", "update", "create-update"]}
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "description", "uiHint", "visibility"],
+      "properties": {
+        "label": {"$ref": "#/$defs/localizedText"},
+        "description": {"$ref": "#/$defs/localizedText"},
+        "uiHint": {
+          "enum": [
+            "text", "textarea", "number", "switch", "select", "multi-select", "datetime", "json",
+            "readonly", "sensitive", "member", "reference", "attachment", "tags", "component", "i18n",
+            "iconify", "permission", "route", "scope", "http-method", "http-path", "module", "locale",
+            "timezone"
+          ]
+        },
+        "physicalDisplay": {"$ref": "#/$defs/physicalDisplay"},
+        "logicalReference": {"$ref": "#/$defs/logicalReference"},
+        "visibility": {"enum": ["public", "internal", "sensitive"]},
+        "crud": {"$ref": "#/$defs/crudPolicy"}
+      },
+      "not": {"required": ["physicalDisplay", "logicalReference"]}
+    },
+    "invalid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "pointer"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "localized_text_invalid", "enum_invalid", "reference_invalid", "reference_conflict", "policy_conflict", "unicode_invalid"
+          ]
+        },
+        "pointer": {"type": "string"}
+      }
+    }
+  }
+}

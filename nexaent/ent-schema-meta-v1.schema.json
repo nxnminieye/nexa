@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/nexaent/ent-schema-meta-v1.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "payload"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-schema-meta/v1"},
+        "kind": {"const": "EntSchemaMeta"},
+        "payload": {"$ref": "#/$defs/payload"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "duplicate"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-schema-meta/v1"},
+        "kind": {"const": "EntSchemaMeta"},
+        "duplicate": {"const": true}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "invalid"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-schema-meta/v1"},
+        "kind": {"const": "EntSchemaMeta"},
+        "invalid": {"$ref": "#/$defs/invalid"}
+      }
+    }
+  ],
+  "$defs": {
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "zhCN", "enUS"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "zhCN": {"type": "string", "minLength": 1},
+        "enUS": {"type": "string", "minLength": 1}
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "description", "identity", "scope"],
+      "properties": {
+        "label": {"$ref": "#/$defs/localizedText"},
+        "description": {"$ref": "#/$defs/localizedText"},
+        "identity": {"enum": ["ent-id"]},
+        "scope": {"enum": ["global", "tenant"]}
+      }
+    },
+    "invalid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "pointer"],
+      "properties": {
+        "reason": {"enum": ["localized_text_invalid", "enum_invalid", "unicode_invalid"]},
+        "pointer": {"type": "string"}
+      }
+    }
+  }
+}

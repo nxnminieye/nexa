@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/nexaent/mixin/tenant-field-v1.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "payload"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-tenant-field/v1"},
+        "kind": {"const": "EntTenantField"},
+        "payload": {"type": "object", "additionalProperties": false, "maxProperties": 0}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "duplicate"],
+      "properties": {
+        "apiVersion": {"const": "nexa.dev/ent-tenant-field/v1"},
+        "kind": {"const": "EntTenantField"},
+        "duplicate": {"const": true}
+      }
+    }
+  ]
+}

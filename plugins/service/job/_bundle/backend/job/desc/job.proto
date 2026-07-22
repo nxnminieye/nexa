@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package nexa.job.v1;
+
+service JobService {
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+}
+
+message RunTaskRequest {
+  string run_id = 1;
+  string task_id = 2;
+  bytes payload = 3;
+}
+
+message RunTaskResponse {
+  bytes output = 1;
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  string status = 1;
+  int32 active_runs = 2;
+  string last_error_code = 3;
+}

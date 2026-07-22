@@ -1,0 +1,33 @@
+syntax = "v1"
+
+info (
+  nexaContractVersion: "nexa.dev/http-api/v1"
+)
+
+type ProviderCapabilities {
+  Authenticate bool `json:"authenticate"`
+  AutoProvision bool `json:"autoProvision"`
+  GroupClaims bool `json:"groupClaims"`
+}
+
+type ProviderDescriptor {
+  ID string `json:"id"`
+  Protocol string `json:"protocol"`
+  Capabilities ProviderCapabilities `json:"capabilities"`
+}
+
+type ListProvidersRequest {}
+type ListProvidersResponse {
+  Items []ProviderDescriptor `json:"items"`
+}
+
+@server (
+  nexaOperationId: "core.auth.providers"
+  nexaAuthMode: "none"
+  nexaCapabilityId: "nexa.dev/core-api"
+  nexaCapabilityVersion: "nexa.dev/core-api/v1"
+)
+service core-api {
+  @handler listProviders
+  get /auth/providers (ListProvidersRequest) returns (ListProvidersResponse)
+}

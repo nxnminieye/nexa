@@ -1,0 +1,16 @@
+apiVersion: nexa.dev/service-catalog/v1
+kind: ServiceCatalog
+services:
+  - id: core
+    root: backend/core
+    dependsOn:
+      - account
+    capabilityBindings:
+      - id: nexa.dev/generation-api-proxy
+        apiVersion: nexa.dev/generation-api-proxy/v1
+  - id: account
+    root: backend/account
+    dependsOn: []
+    capabilityBindings:
+      - id: nexa.dev/generation-api-proxy
+        apiVersion: nexa.dev/generation-api-proxy/v1
