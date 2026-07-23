@@ -31,7 +31,8 @@ type ValidationInput struct {
 	RPCGoTool      toolchain.Tool
 	GoTool         toolchain.Tool
 	Runner         toolchain.Runner
-	Environment    []toolchain.EnvVar
+	RPCEnvironment []toolchain.EnvVar
+	GoEnvironment  []toolchain.EnvVar
 }
 
 type Plan struct{ state *planState }
@@ -173,6 +174,8 @@ type validatedPlanState struct {
 	plan             *planState
 	digest           provenance.Digest
 	transactionInput []transaction.ArtifactInput
+	contents         map[string][]byte
+	sources          []provenance.Source
 }
 
 type validatedFile struct {
@@ -184,7 +187,8 @@ type validationCanonicalInput struct {
 	PlanDigest       provenance.Digest
 	RPCGoTool        toolchain.Tool
 	GoTool           toolchain.Tool
-	Environment      []validationEnvironment
+	RPCEnvironment   []validationEnvironment
+	GoEnvironment    []validationEnvironment
 	CandidateDigests []provenance.Digest
 	WiringDigest     provenance.Digest
 	ReadFiles        []validatedFile
@@ -216,14 +220,24 @@ func (p ValidatedPlan) TransactionInputs(emit func(string, []byte) error) ([]tra
 	}
 	result := append([]transaction.ArtifactInput(nil), p.state.transactionInput...)
 	for index, input := range result {
-		candidate := p.state.plan.candidates[index]
-		if err := emit(input.Path, candidate.content); err != nil {
+		content, ok := p.state.contents[input.Path]
+		if !ok || provenance.SHA256(content) != input.Digest {
+			return nil, invalid("validated_plan_invalid", "/artifacts", nil)
+		}
+		if err := emit(input.Path, content); err != nil {
 			return nil, invalid("candidate_emit_failed", "/artifacts", err)
 		}
 		input.Sources = append([]provenance.SourceRef(nil), input.Sources...)
 		result[index] = input
 	}
 	return result, nil
+}
+
+func (p ValidatedPlan) Sources() ([]provenance.Source, error) {
+	if p.state == nil {
+		return nil, invalid("validated_plan_invalid", "/plan", nil)
+	}
+	return append([]provenance.Source(nil), p.state.sources...), nil
 }
 
 func (p ValidatedPlan) StaleOwnershipProbes() ([]transaction.OwnershipProbe, error) {

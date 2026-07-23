@@ -28,7 +28,7 @@ func TestProviderTargetsMaterializedCoreFacts(t *testing.T) {
 			}
 		case "account":
 			account = true
-			if service.ProtoEntry == "" || service.RPCGoTool.ID == "" {
+			if service.ProtoEntry == "" || service.LogicRoot != "backend/account/internal/logic" || service.RPCGoTool.ID == "" {
 				t.Fatalf("account proxy project = %#v", service)
 			}
 		}

@@ -37,7 +37,6 @@ func TestGenerationPluginExternalConsumer(t *testing.T) {
 		"GOMODCACHE="+rootModuleCache(t),
 		"GOPROXY=file://"+filepath.ToSlash(filepath.Join(rootModuleCache(t), "cache", "download")), "GOSUMDB=off",
 	)
-	runGenerationConsumerCommand(t, consumer, environment, "go", "mod", "tidy")
 	helper := filepath.Join(base, "generation-helper")
 	runGenerationConsumerCommand(t, consumer, environment, "go", "build", "-mod=readonly", "-o", helper, "./cmd/generation-helper")
 	output := runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper)

@@ -81,13 +81,14 @@ func New(options Options) (plugin.Plugin, error) {
 	if err != nil {
 		return nil, err
 	}
+	crudTools := append(cloneDelegatedTools(runner.delegatedTools[ToolRoleEntCRUD]), runner.delegatedTools[ToolRoleRPCGo]...)
 	return plugin.NewStatic(plugin.Spec{
 		Descriptor: plugin.Descriptor{
 			ID:              "generation",
 			Version:         pluginVersion,
 			ContractVersion: plugin.ContractVersion,
 			Provides: []plugin.Capability{
-				{ID: "generation.crud-proto", Version: capabilityVersion},
+				{ID: "generation.crud", Version: capabilityVersion},
 				{ID: "generation.ent", Version: capabilityVersion},
 				{ID: "generation.rpc", Version: capabilityVersion},
 				{ID: "generation.api", Version: capabilityVersion},
@@ -96,9 +97,9 @@ func New(options Options) (plugin.Plugin, error) {
 		},
 		Commands: []plugin.CommandSpec{
 			entGenerateCommand(runner.delegatedTools[ToolRoleEntGenerate], runner.generateEnt),
-			generationCommand("crud-proto", "plan", serviceFlags(), false, true, runner.delegatedTools[ToolRoleEntCRUD], runner.plan),
-			generationCommand("crud-proto", "check", serviceFlags(), false, true, runner.delegatedTools[ToolRoleEntCRUD], runner.check),
-			generationCommand("crud-proto", "write", serviceFlags(), true, true, runner.delegatedTools[ToolRoleEntCRUD], runner.write),
+			generationCommand("crud", "plan", serviceFlags(), false, true, crudTools, runner.plan),
+			generationCommand("crud", "check", serviceFlags(), false, true, crudTools, runner.check),
+			generationCommand("crud", "write", serviceFlags(), true, true, crudTools, runner.write),
 			generationCommand("rpc", "plan", serviceFlags(), false, true, runner.delegatedTools[ToolRoleRPCGo], runner.rpcPlan),
 			generationCommand("rpc", "check", serviceFlags(), false, true, runner.delegatedTools[ToolRoleRPCGo], runner.rpcCheck),
 			generationCommand("rpc", "write", serviceFlags(), true, true, runner.delegatedTools[ToolRoleRPCGo], runner.rpcWrite),
@@ -116,7 +117,7 @@ func entGenerateCommand(tools []plugin.DelegatedToolSpec, run plugin.Handler) pl
 		Path:           []string{"gen", "ent"},
 		Summary:        "generate Ent Go code",
 		Flags:          serviceFlags(),
-		InputSchema:    inputSchema("service", false, false),
+		InputSchema:    inputSchema("service", false, false, false),
 		OutputSchema:   json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service"],"properties":{"apiVersion":{"const":"nexa.dev/ent-generation-result/v1"},"kind":{"const":"EntGenerationResult"},"status":{"const":"generated"},"service":{"type":"string"}}}`),
 		SideEffect:     plugin.SideEffectRepositoryWrite,
 		DelegatedTools: cloneDelegatedTools(tools),
@@ -125,9 +126,13 @@ func entGenerateCommand(tools []plugin.DelegatedToolSpec, run plugin.Handler) pl
 }
 
 func generationCommand(owner, action string, flags []plugin.FlagSpec, write, delegated bool, tools []plugin.DelegatedToolSpec, run plugin.Handler) plugin.CommandSpec {
+	crud := owner == "crud"
+	if crud {
+		flags = append(flags, plugin.FlagSpec{Name: "overwrite-logic", Type: plugin.FlagBool, Summary: "overwrite existing CRUD logic", Default: json.RawMessage(`false`)})
+	}
 	if write {
 		flags = append(flags, plugin.FlagSpec{Name: "plan-digest", Type: plugin.FlagString, Summary: "accepted generation plan digest", Required: true})
-		if owner == "crud-proto" {
+		if crud {
 			flags = append(flags, plugin.FlagSpec{Name: "lock-digest", Type: plugin.FlagString, Summary: "accepted compatibility lock digest"})
 		}
 	}
@@ -143,7 +148,7 @@ func generationCommand(owner, action string, flags []plugin.FlagSpec, write, del
 		Path:         []string{"generation", owner, action},
 		Summary:      action + " " + owner + " generation",
 		Flags:        flags,
-		InputSchema:  inputSchema(selector, write, owner == "crud-proto"),
+		InputSchema:  inputSchema(selector, write, crud, crud),
 		OutputSchema: outputSchema(action == "plan"),
 		SideEffect:   sideEffect,
 		Run:          run,
@@ -170,9 +175,12 @@ func selectorFlags(selector string) []plugin.FlagSpec {
 	}
 }
 
-func inputSchema(selector string, write, lock bool) json.RawMessage {
+func inputSchema(selector string, write, lock, overwrite bool) json.RawMessage {
 	required := `["repo-root","provider","` + selector + `"`
 	properties := `"repo-root":{"type":"string"},"provider":{"type":"string"},"` + selector + `":{"type":"string"}`
+	if overwrite {
+		properties += `,"overwrite-logic":{"type":"boolean","default":false}`
+	}
 	if write {
 		required += `,"plan-digest"`
 		properties += `,"plan-digest":{"type":"string"}`

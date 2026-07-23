@@ -7,6 +7,7 @@ import (
 	goparser "go/parser"
 	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"github.com/nxnminieye/nexa/generation/apigo"
 	"github.com/nxnminieye/nexa/generation/artifact"
 	"github.com/nxnminieye/nexa/generation/composition"
+	"github.com/nxnminieye/nexa/generation/crudlogic"
 	"github.com/nxnminieye/nexa/generation/crudproto"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
@@ -67,7 +69,7 @@ func (r *commandRunner) generateEnt(ctx context.Context, invocation plugin.Invoc
 	if err != nil {
 		return nil, inputError("fact_source_invalid", "provider", "schema_source_invalid", "/project/services/entSchemaDir", "")
 	}
-	invocationRoot, stagingRoot, scratchParent, environment, err := r.invocationEnvironment(service.EntGenerateTool)
+	invocationRoot, stagingRoot, scratchParent, environment, err := r.invocationEnvironment(service.EntGenerateTool, "go")
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +212,13 @@ func (runner invocationRunner) Run(ctx context.Context, request toolchain.Reques
 			if request.Environment[valueIndex].Name != rule.Name {
 				continue
 			}
-			directory := filepath.Join(staging, ".nexa-env", strconv.Itoa(ruleIndex)+"-"+strings.ToLower(rule.Name))
+			base := filepath.Base(request.Environment[valueIndex].Value)
+			suffix := "-" + strconv.Itoa(ruleIndex) + "-" + strings.ToLower(rule.Name)
+			role := strings.TrimSuffix(base, suffix)
+			if role == "" || role+suffix != base || strings.ContainsAny(role, `/\\`) {
+				return toolchain.Result{}, errors.New("delegated scratch environment is invalid")
+			}
+			directory := filepath.Join(staging, ".nexa-env", base)
 			if err := os.MkdirAll(directory, 0o700); err != nil {
 				return toolchain.Result{}, errors.New("delegated scratch environment is unavailable")
 			}
@@ -412,7 +420,7 @@ func (r *commandRunner) buildRPC(ctx context.Context, invocation plugin.Invocati
 	if err != nil {
 		return commandBuild{}, nil, projectOwnerError(err)
 	}
-	invocationRoot, toolStagingRoot, _, environment, err := r.invocationEnvironment(selected.RPCGoTool)
+	invocationRoot, toolStagingRoot, _, environment, err := r.invocationEnvironment(selected.RPCGoTool, "rpc")
 	if err != nil {
 		return commandBuild{}, nil, err
 	}
@@ -524,7 +532,7 @@ func (r *commandRunner) buildAPI(ctx context.Context, invocation plugin.Invocati
 	if err != nil {
 		return commandBuild{}, nil, err
 	}
-	invocationRoot, toolStagingRoot, _, environment, err := r.invocationEnvironment(selected.APIGoTool)
+	invocationRoot, toolStagingRoot, _, environment, err := r.invocationEnvironment(selected.APIGoTool, "api")
 	if err != nil {
 		return commandBuild{}, nil, err
 	}
@@ -1179,13 +1187,19 @@ func (r *commandRunner) build(ctx context.Context, invocation plugin.Invocation)
 	if err != nil {
 		return commandBuild{}, nil, err
 	}
-	invocationRoot, toolStagingRoot, scratchParent, environment, err := r.invocationEnvironment(service.EntCRUDTool)
+	invocationRoot, toolStagingRoot, scratchParent, environment, err := r.invocationEnvironment(service.EntCRUDTool, "go")
 	if err != nil {
 		return commandBuild{}, nil, err
 	}
 	cleanup := func() { _ = os.RemoveAll(invocationRoot) }
+	validationStagingRoot := filepath.Join(invocationRoot, "typecheck")
+	if err := os.Mkdir(validationStagingRoot, 0o700); err != nil {
+		return commandBuild{}, cleanup, inputError("execution_environment_invalid", "environment", "invocation_root_failed", "", "")
+	}
+	overwriteLogic, _ := invocation.Flags["overwrite-logic"].(bool)
 	var request transaction.PlanRequest
 	var hostPlan crudproto.EntGraphPlan
+	logicOutputRequired := false
 	plan, err := transaction.Build(ctx, repositoryPath, func(_ string, emit func(string, []byte) error) (transaction.PlanRequest, error) {
 		var hostErr error
 		hostPlan, hostErr = crudproto.InvokeEntGraphHost(ctx, crudproto.EntGraphHostSpec{
@@ -1214,51 +1228,159 @@ func (r *commandRunner) build(ctx context.Context, invocation plugin.Invocation)
 		if hostErr = validateCRUDMultiTenant(service, hasTenantMixin); hostErr != nil {
 			return transaction.PlanRequest{}, hostErr
 		}
-		request, hostErr = projectTransactionRequest(hostPlan, previous, destination.ManifestPath(), emit)
-		if hostErr != nil {
-			return transaction.PlanRequest{}, projectOwnerError(hostErr)
+		hasCRUD := hostPlan.HasCRUD()
+		needsTenantHelper := service.MultiTenant.Enabled && hasTenantMixin
+		logicOutputRequired = service.LogicRoot != "" && (hasCRUD || needsTenantHelper)
+		var removalSources []provenance.Source
+		var removalProbes []transaction.OwnershipProbe
+		if !hasCRUD {
+			removalSources, removalProbes, hostErr = crudRemovalState(repositoryPath, service, packageFacts.goPackage, previous, destination)
+			if hostErr != nil {
+				return transaction.PlanRequest{}, hostErr
+			}
 		}
-		moduleGraphDigest, digestErr := hostPlan.ModuleGraphDigest()
-		if digestErr != nil {
-			return transaction.PlanRequest{}, projectOwnerError(digestErr)
+		if !logicOutputRequired {
+			request, hostErr = projectTransactionRequest(hostPlan, previous, destination.ManifestPath(), emit)
+			if hostErr != nil {
+				return transaction.PlanRequest{}, projectOwnerError(hostErr)
+			}
+		} else {
+			if hostErr = r.requireProviderTool(invocation.Flags["provider"].(string), ToolRoleRPCGo, service.RPCGoTool, "/project/services/rpcGoTool"); hostErr != nil {
+				return transaction.PlanRequest{}, hostErr
+			}
+			logicPlan, logicErr := crudlogic.BuildPlan(hostPlan, crudlogic.ServiceLayout{ServiceID: service.ServiceID, EntSchemaDir: service.EntSchemaDir, LogicRoot: service.LogicRoot}, crudlogic.BuildOptions{OverwriteExisting: overwriteLogic})
+			if logicErr != nil {
+				return transaction.PlanRequest{}, projectOwnerError(logicErr)
+			}
+			logicEnvironment, environmentErr := r.toolEnvironmentForStaging(service.EntCRUDTool, validationStagingRoot, "go")
+			if environmentErr != nil {
+				return transaction.PlanRequest{}, environmentErr
+			}
+			rpcEnvironment, environmentErr := r.toolEnvironmentForStaging(service.RPCGoTool, validationStagingRoot, "rpc")
+			if environmentErr != nil {
+				return transaction.PlanRequest{}, environmentErr
+			}
+			validatedLogic, logicErr := crudlogic.Validate(ctx, logicPlan, crudLogicValidationInput(repositoryPath, validationStagingRoot, service, r.runner, rpcEnvironment, logicEnvironment))
+			if logicErr != nil {
+				return transaction.PlanRequest{}, projectOwnerError(logicErr)
+			}
+			validationRef, refErr := provenance.RepositoryRef(service.LogicRoot, "crudlogic-validation")
+			if refErr != nil {
+				return transaction.PlanRequest{}, inputError("fact_source_invalid", "validation", "validation_source_invalid", "/project/services/logicRoot", "")
+			}
+			validatedSource := provenance.Source{Ref: validationRef, Digest: validatedLogic.ValidationDigest()}
+			request, hostErr = projectUnifiedTransactionRequest(hostPlan, validatedLogic, validatedSource, previous, destination.ManifestPath(), emit)
+			if hostErr != nil {
+				return transaction.PlanRequest{}, projectOwnerError(hostErr)
+			}
 		}
-		buildInputDigest, digestErr := hostPlan.BuildInputDigest()
-		if digestErr != nil {
-			return transaction.PlanRequest{}, projectOwnerError(digestErr)
-		}
-		projectedSources := entitySnapshot.ProjectedSources()
+		request.Sources = append(request.Sources, removalSources...)
+		request.StaleOwnershipProbes = append(request.StaleOwnershipProbes, removalProbes...)
 		request.RevalidateSources = func(revalidateCtx context.Context) ([]provenance.Source, error) {
-			inspection, inspectErr := toolchain.InspectEntityInputs(revalidateCtx, toolchain.EntityInputInspectionSpec{
-				RepositoryRoot: repositoryPath, SchemaDir: schema, BuildTags: nil,
-				ExpectedModuleGraphDigest: toolchain.OptionalDigest{Value: moduleGraphDigest, Present: true},
-				ExpectedBuildInputDigest:  toolchain.OptionalDigest{Value: buildInputDigest, Present: true},
-			})
-			if inspectErr != nil {
-				return nil, inspectErr
-			}
-			current, inspectErr := inspection.ModuleSources()
-			if inspectErr != nil {
-				return nil, inspectErr
-			}
-			current = append(current, projectedSources...)
 			currentRoot, openErr := os.OpenRoot(repositoryPath)
 			if openErr != nil {
 				return nil, openErr
 			}
 			defer currentRoot.Close()
+			currentPackageFacts, factsErr := loadProtoPackageFacts(currentRoot, service.ProtoEntry)
+			if factsErr != nil {
+				return nil, factsErr
+			}
 			currentLock, lockErr := loadExistingLock(currentRoot, destination)
 			if lockErr != nil {
 				return nil, lockErr
-			}
-			if currentLock != nil {
-				current = append(current, currentLock.Source)
 			}
 			_, currentPublished, manifestErr := loadPreviousManifest(currentRoot, destination)
 			if manifestErr != nil {
 				return nil, manifestErr
 			}
-			if currentPublished != nil {
-				current = append(current, currentPublished.ManifestSource)
+			hostStaging, stagingErr := os.MkdirTemp(invocationRoot, "revalidate-host-")
+			if stagingErr != nil {
+				return nil, stagingErr
+			}
+			defer os.RemoveAll(hostStaging)
+			hostEnvironment, environmentErr := r.toolEnvironmentForStaging(service.EntCRUDTool, hostStaging, "go")
+			if environmentErr != nil {
+				return nil, environmentErr
+			}
+			if environmentErr = materializeToolScratchEnvironment(service.EntCRUDTool, hostEnvironment); environmentErr != nil {
+				return nil, environmentErr
+			}
+			currentHost, hostErr := crudproto.InvokeEntGraphHost(revalidateCtx, crudproto.EntGraphHostSpec{
+				RepositoryRoot: repositoryPath, StagingRoot: hostStaging, ScratchParent: scratchParent,
+				SchemaDir: schema, BuildTags: nil, ProtoPackage: currentPackageFacts.protoPackage, GoPackage: currentPackageFacts.goPackage,
+				Destination: destination, Tool: service.EntCRUDTool, Environment: hostEnvironment, Runner: r.runner,
+				ExistingLock: currentLock, PublishedArtifact: currentPublished,
+				MultiTenant: crudproto.MultiTenantConfig{Enabled: service.MultiTenant.Enabled},
+			})
+			if hostErr != nil {
+				return nil, hostErr
+			}
+			currentSnapshot, snapshotErr := currentHost.EntitySnapshot()
+			if snapshotErr != nil {
+				return nil, snapshotErr
+			}
+			currentHasTenantMixin := false
+			for _, item := range currentSnapshot.Entities() {
+				for _, field := range item.Fields() {
+					if field.IsTenantField() {
+						currentHasTenantMixin = true
+						break
+					}
+				}
+			}
+			if validationErr := validateCRUDMultiTenant(service, currentHasTenantMixin); validationErr != nil {
+				return nil, validationErr
+			}
+			currentHasCRUD := currentHost.HasCRUD()
+			currentNeedsTenantHelper := service.MultiTenant.Enabled && currentHasTenantMixin
+			currentLogicRequired := service.LogicRoot != "" && (currentHasCRUD || currentNeedsTenantHelper)
+			if currentLogicRequired != logicOutputRequired {
+				return nil, errors.New("CRUD logic output set changed after plan")
+			}
+			current, sourcesErr := currentHost.Sources()
+			if sourcesErr != nil {
+				return nil, sourcesErr
+			}
+			if currentLogicRequired {
+				logicPlan, logicErr := crudlogic.BuildPlan(currentHost, crudlogic.ServiceLayout{ServiceID: service.ServiceID, EntSchemaDir: service.EntSchemaDir, LogicRoot: service.LogicRoot}, crudlogic.BuildOptions{OverwriteExisting: overwriteLogic})
+				if logicErr != nil {
+					return nil, logicErr
+				}
+				logicStaging, stagingErr := os.MkdirTemp(invocationRoot, "revalidate-logic-")
+				if stagingErr != nil {
+					return nil, stagingErr
+				}
+				defer os.RemoveAll(logicStaging)
+				logicEnvironment, environmentErr := r.toolEnvironmentForStaging(service.EntCRUDTool, logicStaging, "go")
+				if environmentErr != nil {
+					return nil, environmentErr
+				}
+				rpcEnvironment, environmentErr := r.toolEnvironmentForStaging(service.RPCGoTool, logicStaging, "rpc")
+				if environmentErr != nil {
+					return nil, environmentErr
+				}
+				validated, logicErr := crudlogic.Validate(revalidateCtx, logicPlan, crudLogicValidationInput(repositoryPath, logicStaging, service, r.runner, rpcEnvironment, logicEnvironment))
+				if logicErr != nil {
+					return nil, logicErr
+				}
+				logicSources, sourceErr := validated.Sources()
+				if sourceErr != nil {
+					return nil, sourceErr
+				}
+				current = append(current, logicSources...)
+				validationRef, refErr := provenance.RepositoryRef(service.LogicRoot, "crudlogic-validation")
+				if refErr != nil {
+					return nil, refErr
+				}
+				current = append(current, provenance.Source{Ref: validationRef, Digest: validated.ValidationDigest()})
+			}
+			if !currentHasCRUD {
+				removalSources, removalErr := validateCRUDRemoval(repositoryPath, service.LogicRoot, currentPackageFacts.goPackage)
+				if removalErr != nil {
+					return nil, removalErr
+				}
+				current = append(current, removalSources...)
 			}
 			return current, nil
 		}
@@ -1274,6 +1396,19 @@ func (r *commandRunner) build(ctx context.Context, invocation plugin.Invocation)
 	return built, cleanup, nil
 }
 
+func crudRemovalState(repositoryRoot string, service ServiceProject, goPackage string, previous *artifact.Manifest, destination crudproto.ProtoDestination) ([]provenance.Source, []transaction.OwnershipProbe, error) {
+	sources, err := validateCRUDRemoval(repositoryRoot, service.LogicRoot, goPackage)
+	if err != nil {
+		return nil, nil, err
+	}
+	pbImport, pbPackage, _ := strings.Cut(goPackage, ";")
+	if pbPackage == "" {
+		pbPackage = path.Base(pbImport)
+	}
+	probes := crudlogic.StaleRPCOwnershipProbes(previous, crudlogic.ServiceLayout{ServiceID: service.ServiceID, EntSchemaDir: service.EntSchemaDir, LogicRoot: service.LogicRoot}, destination.ArtifactPath(), pbPackage)
+	return sources, probes, nil
+}
+
 func projectBuildError(err error) error {
 	if err == nil {
 		return err
@@ -1285,11 +1420,107 @@ func projectBuildError(err error) error {
 	return projectOwnerError(err)
 }
 
+func crudLogicValidationInput(repositoryRoot, stagingRoot string, service ServiceProject, runner toolchain.Runner, rpcEnvironment, goEnvironment []toolchain.EnvVar) crudlogic.ValidationInput {
+	return crudlogic.ValidationInput{
+		RepositoryRoot: repositoryRoot,
+		StagingRoot:    stagingRoot,
+		RPCGoTool:      service.RPCGoTool,
+		GoTool:         service.EntCRUDTool,
+		Runner:         runner,
+		RPCEnvironment: append([]toolchain.EnvVar(nil), rpcEnvironment...),
+		GoEnvironment:  append([]toolchain.EnvVar(nil), goEnvironment...),
+	}
+}
+
 func validateCRUDMultiTenant(service ServiceProject, hasTenantMixin bool) error {
 	if hasTenantMixin && !service.MultiTenant.Enabled {
 		return inputError("fact_source_invalid", "provider", "multi_tenant_disabled", "/project/services/multiTenant/enabled", "")
 	}
 	return nil
+}
+
+func validateCRUDRemoval(repositoryRoot, logicRoot, goPackage string) ([]provenance.Source, error) {
+	if logicRoot == "" {
+		return nil, nil
+	}
+	pbImport, _, _ := strings.Cut(goPackage, ";")
+	if pbImport == "" {
+		return nil, inputError("fact_source_invalid", "validation", "logic_dependency_scan_failed", "/project/services/logicRoot", "")
+	}
+	depends, sources, err := logicImportsPackage(repositoryRoot, logicRoot, pbImport)
+	if err != nil {
+		return nil, inputError("fact_source_invalid", "validation", "logic_dependency_scan_failed", "/project/services/logicRoot", "")
+	}
+	if depends {
+		return nil, generationError("crud_logic_removal_blocked", cliprotocol.CategoryConflict, "CRUD removal is blocked by protected Logic", "validation", "protected_logic_depends_on_generated_pb", "/project/services/logicRoot", "")
+	}
+	return sources, nil
+}
+
+func logicImportsPackage(repositoryRoot, logicRoot, importPath string) (bool, []provenance.Source, error) {
+	domainRoot, err := provenance.ParseDomainSource(logicRoot)
+	if err != nil || domainRoot.String() != logicRoot || !filepath.IsLocal(filepath.FromSlash(logicRoot)) {
+		return false, nil, os.ErrInvalid
+	}
+	repository, err := os.OpenRoot(repositoryRoot)
+	if err != nil {
+		return false, nil, err
+	}
+	defer repository.Close()
+	root, err := repository.OpenRoot(logicRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil, nil
+	}
+	if err != nil {
+		return false, nil, err
+	}
+	defer root.Close()
+	return logicImportsPackageFrom(root, logicRoot, importPath)
+}
+
+type logicScanRoot interface {
+	rootedRegularReader
+	FS() fs.FS
+}
+
+func logicImportsPackageFrom(root logicScanRoot, logicRoot, importPath string) (bool, []provenance.Source, error) {
+	found := false
+	sources := make([]provenance.Source, 0)
+	err := fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return os.ErrInvalid
+		}
+		if entry.IsDir() || path.Ext(name) != ".go" {
+			return nil
+		}
+		content, exists, readErr := readOptionalRegularFrom(root, name)
+		if readErr != nil || !exists {
+			return errors.Join(readErr, os.ErrInvalid)
+		}
+		ref, refErr := provenance.RepositoryRef(path.Join(logicRoot, name), "crud-pb-import-scan")
+		if refErr != nil {
+			return refErr
+		}
+		sources = append(sources, provenance.Source{Ref: ref, Digest: provenance.SHA256(content)})
+		file, parseErr := goparser.ParseFile(token.NewFileSet(), name, content, goparser.ImportsOnly)
+		if parseErr != nil {
+			return parseErr
+		}
+		for _, spec := range file.Imports {
+			value, unquoteErr := strconv.Unquote(spec.Path.Value)
+			if unquoteErr != nil {
+				return unquoteErr
+			}
+			if value == importPath {
+				found = true
+			}
+		}
+		return nil
+	})
+	return found, sources, err
 }
 
 func finalizeCRUDCommandBuild(repositoryPath string, plan transaction.Plan, hostPlan crudproto.EntGraphPlan, lockChanged bool) (commandBuild, error) {
@@ -1340,6 +1571,42 @@ type transactionProjection interface {
 	TransactionInputs(func(string, []byte) error) ([]transaction.ArtifactInput, []transaction.ControlSourceMutation, error)
 	StaleOwnershipProbes() ([]transaction.OwnershipProbe, error)
 	Sources() ([]provenance.Source, error)
+}
+
+type logicTransactionProjection interface {
+	TransactionInputs(func(string, []byte) error) ([]transaction.ArtifactInput, error)
+	StaleOwnershipProbes() ([]transaction.OwnershipProbe, error)
+	Sources() ([]provenance.Source, error)
+}
+
+func projectUnifiedTransactionRequest(proto transactionProjection, logic logicTransactionProjection, validation provenance.Source, previous *artifact.Manifest, manifestPath string, emit func(string, []byte) error) (transaction.PlanRequest, error) {
+	request, err := projectTransactionRequest(proto, previous, manifestPath, emit)
+	if err != nil {
+		return transaction.PlanRequest{}, err
+	}
+	if validation.Ref.String() == "" {
+		return transaction.PlanRequest{}, inputError("fact_source_invalid", "validation", "validation_source_invalid", "/validation", "")
+	}
+	if _, err := provenance.ParseDigest(validation.Digest.String()); err != nil {
+		return transaction.PlanRequest{}, inputError("fact_source_invalid", "validation", "validation_source_invalid", "/validation", "")
+	}
+	inputs, err := logic.TransactionInputs(emit)
+	if err != nil {
+		return transaction.PlanRequest{}, err
+	}
+	probes, err := logic.StaleOwnershipProbes()
+	if err != nil {
+		return transaction.PlanRequest{}, err
+	}
+	logicSources, err := logic.Sources()
+	if err != nil {
+		return transaction.PlanRequest{}, err
+	}
+	request.Sources = append(request.Sources, logicSources...)
+	request.Sources = append(request.Sources, validation)
+	request.Expected = append(request.Expected, inputs...)
+	request.StaleOwnershipProbes = append(request.StaleOwnershipProbes, probes...)
+	return request, nil
 }
 
 func projectTransactionRequest(projection transactionProjection, previous *artifact.Manifest, manifestPath string, emit func(string, []byte) error) (transaction.PlanRequest, error) {
@@ -1440,7 +1707,7 @@ func loadProtoPackageFacts(root *os.Root, source string) (protoPackageFacts, err
 	return protoPackageFacts{protoPackage: descriptor.GetPackage(), goPackage: descriptor.GetOptions().GetGoPackage()}, nil
 }
 
-func (r *commandRunner) invocationEnvironment(tool toolchain.Tool) (string, string, string, []toolchain.EnvVar, error) {
+func (r *commandRunner) invocationEnvironment(tool toolchain.Tool, role string) (string, string, string, []toolchain.EnvVar, error) {
 	root, err := os.MkdirTemp("", "nexactl-generation-")
 	if err != nil {
 		return "", "", "", nil, inputError("execution_environment_invalid", "environment", "invocation_root_failed", "", "")
@@ -1460,11 +1727,23 @@ func (r *commandRunner) invocationEnvironment(tool toolchain.Tool) (string, stri
 		_ = os.RemoveAll(canonical)
 		return "", "", "", nil, inputError("execution_environment_invalid", "environment", "invocation_root_failed", "", "")
 	}
+	environment, err := r.toolEnvironmentForStaging(tool, staging, role)
+	if err != nil {
+		_ = os.RemoveAll(canonical)
+		return "", "", "", nil, err
+	}
+	if err := materializeToolScratchEnvironment(tool, environment); err != nil {
+		_ = os.RemoveAll(canonical)
+		return "", "", "", nil, err
+	}
+	return canonical, staging, scratch, environment, nil
+}
+
+func (r *commandRunner) toolEnvironmentForStaging(tool toolchain.Tool, staging, role string) ([]toolchain.EnvVar, error) {
 	host := make(map[string]string, len(r.hostEnvironment))
 	for _, value := range r.hostEnvironment {
 		if _, duplicate := host[value.Name]; duplicate {
-			_ = os.RemoveAll(canonical)
-			return "", "", "", nil, inputError("execution_environment_invalid", "environment", "host_environment_duplicate", "/hostEnvironment", "")
+			return nil, inputError("execution_environment_invalid", "environment", "host_environment_duplicate", "/hostEnvironment", "")
 		}
 		host[value.Name] = value.Value
 	}
@@ -1475,23 +1754,33 @@ func (r *commandRunner) invocationEnvironment(tool toolchain.Tool) (string, stri
 		case toolchain.EnvironmentHost:
 			value = host[rule.Name]
 			if value == "" {
-				_ = os.RemoveAll(canonical)
-				return "", "", "", nil, inputError("execution_environment_invalid", "environment", "host_environment_missing", indexedPointer("/tool/environment", index), "")
+				return nil, inputError("execution_environment_invalid", "environment", "host_environment_missing", indexedPointer("/tool/environment", index), "")
 			}
 		case toolchain.EnvironmentScratch:
-			value = filepath.Join(staging, strings.ToLower(rule.Name))
-			if err := os.MkdirAll(value, 0o700); err != nil {
-				_ = os.RemoveAll(canonical)
-				return "", "", "", nil, inputError("execution_environment_invalid", "environment", "scratch_environment_failed", indexedPointer("/tool/environment", index), "")
-			}
+			value = filepath.Join(staging, ".nexa-env", role+"-"+strconv.Itoa(index)+"-"+strings.ToLower(rule.Name))
 		case toolchain.EnvironmentFixed:
 		default:
-			_ = os.RemoveAll(canonical)
-			return "", "", "", nil, inputError("execution_environment_invalid", "environment", "environment_source_invalid", indexedPointer("/tool/environment", index), "")
+			return nil, inputError("execution_environment_invalid", "environment", "environment_source_invalid", indexedPointer("/tool/environment", index), "")
 		}
 		environment = append(environment, toolchain.EnvVar{Name: rule.Name, Value: value})
 	}
-	return canonical, staging, scratch, environment, nil
+	return environment, nil
+}
+
+func materializeToolScratchEnvironment(tool toolchain.Tool, environment []toolchain.EnvVar) error {
+	values := make(map[string]string, len(environment))
+	for _, item := range environment {
+		values[item.Name] = item.Value
+	}
+	for index, rule := range tool.Environment {
+		if rule.Source != toolchain.EnvironmentScratch {
+			continue
+		}
+		if err := os.MkdirAll(values[rule.Name], 0o700); err != nil {
+			return inputError("execution_environment_invalid", "environment", "scratch_environment_failed", indexedPointer("/tool/environment", index), "")
+		}
+	}
+	return nil
 }
 
 func loadExistingLock(root *os.Root, destination crudproto.ProtoDestination) (*crudproto.ExistingLockInput, error) {

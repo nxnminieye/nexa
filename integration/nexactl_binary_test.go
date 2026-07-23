@@ -94,7 +94,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 	}
 	wantGenerationProvides := []struct{ id, version string }{
-		{id: "generation.crud-proto", version: "v1.0.0"},
+		{id: "generation.crud", version: "v1.0.0"},
 		{id: "generation.ent", version: "v1.0.0"},
 		{id: "generation.rpc", version: "v1.0.0"},
 		{id: "generation.api", version: "v1.0.0"},
@@ -114,7 +114,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	}
 	wantCapabilities := []struct{ id, provider string }{
 		{id: "generation.api", provider: "generation"},
-		{id: "generation.crud-proto", provider: "generation"},
+		{id: "generation.crud", provider: "generation"},
 		{id: "generation.ent", provider: "generation"},
 		{id: "generation.rpc", provider: "generation"},
 		{id: "generation.sdk-python-assets", provider: "sdk-python-assets"},
@@ -137,9 +137,9 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		{path: "generation api check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "core-service"}, required: []bool{true, true, true}},
 		{path: "generation api plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "core-service"}, required: []bool{true, true, true}},
 		{path: "generation api write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "core-service", "plan-digest"}, required: []bool{true, true, true, true}},
-		{path: "generation crud-proto check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation crud-proto plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation crud-proto write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "plan-digest", "lock-digest"}, required: []bool{true, true, true, true, false}},
+		{path: "generation crud check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
+		{path: "generation crud plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
+		{path: "generation crud write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic", "plan-digest", "lock-digest"}, required: []bool{true, true, true, false, true, false}},
 		{path: "generation rpc check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
 		{path: "generation rpc plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
 		{path: "generation rpc write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "plan-digest"}, required: []bool{true, true, true, true}},
@@ -169,7 +169,11 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		for flagIndex, flag := range command.Flags {
 			flagNames = append(flagNames, flag.Name)
 			required = append(required, flag.Required)
-			if flag.Type != "string" {
+			wantType := "string"
+			if flag.Name == "overwrite-logic" {
+				wantType = "bool"
+			}
+			if flag.Type != wantType {
 				t.Fatalf("command[%d] flag[%d] type = %q", index, flagIndex, flag.Type)
 			}
 		}
