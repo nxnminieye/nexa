@@ -1,43 +1,52 @@
-# Skill 分发与路由
+# Skill 路由
 
-Framework skill 是可审计的 AI 路由材料。它解释如何发现 public contract、组织审核和验证执行结果，但不复制 CLI command schema，不创造 capability，也不代替任务计划、测试或 release evidence。
+Nexa Skill 是 AI 开发或采用 Nexa 的必选入口。它负责把任务路由到正确 owner、公共契约和验证入口；它不
+创建 capability、不批准副作用，也不替代源码、schema、CLI inspection 或测试结果。
 
-## Skill asset
+## 必选顺序
 
-- Asset manifest 对每个 skill 文件记录 repository-relative path 与 SHA-256；zip member 顺序、mode 和时间戳确定，解包必须拒绝绝对路径和 traversal。
-- Materialize 后的 skill 是 consumer-owned 普通文本，不依赖远端服务才能阅读。
-- Provenance lock 只参与 status、diff 和 upgrade。它不在日常路由时远程取回 skill，也不授权任何命令。
-- Detach 只删除来源管理关系，保留 materialized skill。后续修改由 consumer 审核和维护。
-- Skill、binary、inspection apiVersion 或精确版本不兼容时 fail closed，不尝试用 help、README、Make target 或路径猜测恢复。
+1. 读取 consumer 的 `AGENTS.md` 和当前任务约束；
+2. 确认 Nexa module 的精确版本或当前源码 commit；
+3. 对包含同步命令的版本运行 `nexactl version --json`，核对 CLI 报告的真实 Nexa module 版本；
+4. 使用同版本 `nexactl skills sync --repo-root <absolute-repo> --json` 同步 Nexa Skills；
+5. 在任何 Nexa 专项操作前读取同步后的 `nexa-framework-router`；
+6. 由 router 按任务选择最窄专项，跨领域时才组合多个专项；
+7. 对 consumer 实际二进制执行 `nexactl inspect --json`；
+8. 用 public source/type、schema、inspection 与测试核对计划、输入、affected files 和验证；
+9. 写入前再次确认目标、ownership 和副作用范围，执行后保留当前结果证据。
 
-## Inspect-first 路由
+当前专项包括：
 
-每次处理 consumer 时先读取 consumer `AGENTS.md`，然后用以下命令读取当前实现信息：
+| 任务 | 专项 Skill |
+| --- | --- |
+| facts、IR、generation、manifest、generated/manual ownership | `nexa-controlled-generation` |
+| CLI、machine envelope、error、exit code、stdout/stderr | `nexa-ai-first-cli` |
+| 计划、隔离实现、review、验证与外部写入边界 | `nexa-development-workflow` |
 
-```bash
-nexactl inspect --json
-nexactl version --json
-```
+不要求每次加载全部专项，但禁止绕过 router 直接从旧文档、命令名称或历史输出推断执行方式。
 
-`inspect` 是当前二进制 command、flag、schema、side effect、plugin 和 capability 的发现入口。`version` 报告 binary identity。两者都不批准命令；当前已审核的任务计划直接决定执行内容。
+## Skill 的权限边界
 
-执行任务计划中的命令时按以下顺序完成：
+Skill 中出现的命令名称只是路由上下文。Skill 和 inspection 都不授权 repository write、push、发布、部署或
+第三方系统变更；授权仍来自当前任务和 consumer 规则。命令缺失、版本不兼容、输入不完整或副作用越界时
+必须停止，不能用 help、README、路径猜测或旧版本输出恢复执行。
 
-1. strict decode inspection envelope，并要求受支持的 inspection `apiVersion`；
-2. 读取已审核任务计划中的准确命令、输入、affected files、允许的副作用、验证和回滚步骤；
-3. 用 inspection 核对 command path、owner、flags、schema、side effect 和 delegated tools；
-4. repository write 前重新确认输入和 affected files，之后调用计划中的命令；
-5. 任何缺失或漂移都返回结构化 gap 并停止执行。
+Nexa Skills 自包含，不依赖任何外部开发工作流。Consumer 可以自行选择通用工作流工具，但该选择不是 Nexa
+采用、构建、CI 或运行的前提，也不能替代 Nexa Skill 路由。
 
-Capability presence 只说明某个 owner 声明了兼容能力，不能替代任务计划或自行扩大执行范围。
+## 同版本与同步
 
-## Materialize、detach 与 companion skill
+Nexa Skill 的版本化资产位于 module 的 `skills/`，与源码一起编入同版本 `nexactl`。同步命令把这些资产写到
+consumer 的 `.codex/skills/nexa-*`：每次完整收敛到当前 embedded set，替换当前目录、删除已经退役的
+`nexa-*` 目录，同时保留 consumer 自己维护的非 `nexa-*` Skill。该投影不使用网络下载、Git tag 解析、
+manifest、lock 或历史 merge。
 
-- Materialize 从精确版本的 asset 建立 consumer-owned 文本与 provenance；同一选择可确定性重建。
-- Consumer 可以编辑 materialized skill；status/diff 显示与来源基线的差异，upgrade 使用 old/local/new 三方语义，不能静默覆盖本地修改。
-- Detach 后 skill 继续存在并可使用，但不再有来源 status/diff/upgrade 关系。
-- Companion skill 可以随 asset 安装；未绑定已实现责任时，它不得选择 nonbuiltin command，也不得创建 requirements、evidence、frontend 或 deployment 事实。
-- 外部工作流不是 Framework skill 的依赖。Skill 只执行 consumer 当前已审核的任务计划。
-- 任何不直接服务 starter 或受控代码生成的新增框架能力，必须先交用户审核。
+同步在写入前验证全部待替换或删除的 Nexa Skill 路径。同步失败意味着目标可能仍是旧版本，或在普通文件
+写入失败时只完成了部分更新；不得继续使用其中的 Nexa Skills。修复错误后重新运行同版本同步并确认成功。
 
-首个 RC 明确不选择 runtime `nexa` CLI、Python SDK、Python artifacts 和 HTTP parity。Skill 可以说明职责边界，但不得写入或探测这些命令路径，不得把缺席 binary、空目录或 placeholder 解释为已安装能力。
+已发布版本的 module、docs、CLI 和 Skills 必须来自同一个 tag；未发布源码工作则使用同一个 commit。当前
+分支文档不能解释较旧 tag，另一版本的本地 Skill 也不能操作当前 module。同步后如需审查变化，直接使用
+consumer 自己的 Git diff；平台不替用户决定是否接受版本变化。
+
+`v0.1.0-alpha.1` 早于 `skills sync`，不能从当前文档反推该 tag 已有此命令。后续包含该命令的版本通过
+`version --json` 报告 `go run ...@version` 实际解析到的 Nexa module 版本。

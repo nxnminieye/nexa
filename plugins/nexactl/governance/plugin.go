@@ -41,8 +41,36 @@ func New() (plugin.Plugin, error) {
 				SideEffect: plugin.SideEffectRepositoryRead,
 				Run:        validateSkillCommand,
 			},
+			{
+				Path:    []string{"skills", "sync"},
+				Summary: "synchronize embedded Nexa skills into a consumer repository",
+				Flags: []plugin.FlagSpec{
+					{Name: "repo-root", Type: plugin.FlagString, Summary: "absolute existing consumer repository root", Required: true},
+				},
+				InputSchema: json.RawMessage(`{
+  "type":"object",
+  "required":["repo-root"],
+  "properties":{"repo-root":{"type":"string"}}
+}`),
+				OutputSchema: json.RawMessage(`{
+  "type":"object",
+  "required":["apiVersion","target","skills","fileCount"],
+  "properties":{
+    "apiVersion":{"const":"nexa.dev/governance-skill-sync-result/v1"},
+    "target":{"const":".codex/skills"},
+    "skills":{"type":"array","items":{"type":"string"}},
+    "fileCount":{"type":"integer","minimum":0}
+  }
+}`),
+				SideEffect: plugin.SideEffectRepositoryWrite,
+				Run:        syncSkillsCommand,
+			},
 		},
 	})
+}
+
+func syncSkillsCommand(_ context.Context, invocation plugin.Invocation) (any, error) {
+	return syncSkills(invocation.Flags["repo-root"].(string))
 }
 
 func validateSkillCommand(_ context.Context, invocation plugin.Invocation) (any, error) {

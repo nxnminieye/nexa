@@ -10,8 +10,10 @@
 
 - AI-native 是本仓库的最高工程原则。
 - CLI 是 agent、CI 和其他自动化消费者的可执行契约。公共命令优先提供非交互参数、稳定机器输出、结构化错误、operation id、明确 exit code 和能力自省。
-- Skill 是 AI 的路由入口，负责定位 CLI 能力、组织审核和解释人工 gate；实际命令由当前已审核任务计划决定。Skill 不复制命令、schema 或业务事实，也不代替 CLI、测试和 release 证据。
-- Framework skill 必须自包含，不 bundle、默认安装或依赖外部开发工作流。Consumer 可以自行选择工作流工具，但该选择不得成为 Nexa capability、构建、CI 或运行前提。
+- Nexa Skill 是 AI 开发或采用 Nexa 的必选路由入口。Agent 读取目标仓 `AGENTS.md` 并确认 Nexa 版本后，必须先进入同版本的 `nexa-framework-router`，再按任务进入最窄的专项 Skill；不得绕过 Skill 直接猜测生成链、CLI 或公共契约。
+- Skill 负责定位 owner、能力发现入口、实施顺序和验证边界；实际命令及副作用仍由当前任务约束和真实 CLI/schema 决定。Skill 不复制命令、schema 或业务事实，也不代替 CLI、测试和 release 证据。
+- Nexa Skills 必须自包含，不依赖 Superpowers 或其他外部开发工作流。它们是 AI 工程接口，不是 Go module 构建、业务服务运行、CI 或部署的 runtime dependency。
+- Nexa Skill 的人工事实源是根 `skills/`；仓库或 consumer 的 `.codex/skills/nexa-*` 由同版本 `nexactl skills sync` 重建，不作为第二份人工入口。同步只替换 Nexa 管理的 Skill，必须保留其他 Skill。
 - Make target 和文档只能消费公开 CLI/schema，不得成为并行命令事实源。
 - 当前二进制实际包含的命令、flag、schema、capability 和副作用以 `nexactl inspect --json` 为准。
 
@@ -48,12 +50,13 @@
 
 ## Consumer 采用与 Skill 路由
 
-- Framework skill 是 consumer-owned 的普通路由文本，不是命令授权文件，也不替代当前任务的人工审核。
-- 处理 consumer 前先读取 consumer 的 `AGENTS.md`，再运行实际使用的 `nexactl inspect --json`。Inspection 用于发现当前二进制提供的命令、flag、owner 和副作用，并在执行前检查它们是否与计划一致；它不批准命令。
+- AI 处理 Nexa framework 或 consumer 前，必须先读取目标仓 `AGENTS.md`，确认 consumer 固定的 Nexa module/ref，再用同版本 `nexactl skills sync --repo-root <absolute-repo> --json` 同步 Nexa Skills；随后先读取 `nexa-framework-router`，任务相关专项 Skill 按 router 结果选择，不要求无关专项同时加载。
+- Framework skill 是 consumer-owned 的普通路由文本，不是命令授权文件，也不替代当前任务中的用户判断。Skill 版本无法确认或与 module/ref 不一致时，先报告漂移，不沿用旧 Skill 猜测当前能力。
+- 完成 Skill 路由后，再运行 consumer 实际使用的 `nexactl inspect --json`。Inspection 用于发现当前二进制提供的命令、flag、owner 和副作用，并在执行前检查它们是否与计划一致；它不批准命令。
 - 非内建命令由当前已审核的任务计划直接决定。计划必须写明准确命令、输入、affected files、允许的副作用、验证命令和回滚方式；不得从 capability presence、help、README、Make target 或历史执行记录自行扩大范围。
 - Inspection 与计划不一致、输入不完整或副作用超出计划时停止执行并报告差异。Repository write 前重新确认 affected files 和副作用范围。
 - 任何不直接服务 starter 或受控代码生成的新增框架能力，必须在设计、写计划或实现前交由用户审核。
-- V0.1 未选择 runtime `nexa` CLI、Python SDK、Python artifacts、HTTP parity、governance/quality/deployment 扩展；不得探测缺失 binary、创建占位事实或把 companion skill 的安装解释为 capability 选择。
+- V0.1 未选择 runtime `nexa` CLI、可发布的 Python SDK/wheel、HTTP parity、quality 或 deployment 扩展。Reference `nexactl` 当前会编入 governance validation、Skill sync 与 `sdk-python-assets` 工程命令；这些命令存在不等于 Python SDK 已发布，也不要求 consumer 选择对应 runtime 能力。不得探测缺失 runtime binary、创建占位事实或把 Skill 同步解释为 capability 选择。
 - 采用、升级和回滚的公开最终态入口见 `docs/adoption/`；设计来源只作解释性 provenance，Nexa 的 public contract、schema 和行为 gate 始终权威。
 
 ## 测试规则

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexa AI-First CLI"
+  short_description: "Design and review Nexa CLI contracts"
+  default_prompt: "Use $nexa-ai-first-cli to apply Nexa AI-first CLI and SDK contracts to this command-line task."

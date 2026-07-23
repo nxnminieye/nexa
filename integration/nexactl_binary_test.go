@@ -78,7 +78,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	if err := json.Unmarshal(encodedResult, &inspection); err != nil {
 		t.Fatalf("decode inspection result: %v", err)
 	}
-	if len(inspection.Plugins) != 4 || len(inspection.Capabilities) != 8 || len(inspection.Commands) != 24 {
+	if len(inspection.Plugins) != 4 || len(inspection.Capabilities) != 8 || len(inspection.Commands) != 25 {
 		t.Fatalf("unexpected reference composition: %#v", inspection)
 	}
 	wantPlugins := []struct{ id, version string }{
@@ -149,6 +149,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		{path: "generation service-manifest write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "plan-digest"}, required: []bool{true, true, true, true}},
 		{path: "governance skill validate", owner: "governance", sideEffect: "repository-read", flags: []string{"root"}, required: []bool{true}},
 		{path: "inspect", owner: "nexactl.host", sideEffect: "none"},
+		{path: "skills sync", owner: "governance", sideEffect: "repository-write", flags: []string{"repo-root"}, required: []bool{true}},
 		{path: "source check", owner: "source", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "version", "profile", "target", "manifest-digest", "tree-digest"}, required: []bool{true, true, true, true, true, true, true}},
 		{path: "source detach", owner: "source", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "target"}, required: []bool{true, true, true}},
 		{path: "source diff", owner: "source", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "target"}, required: []bool{true, true, true}},
@@ -291,6 +292,43 @@ func TestReferenceNexactlGovernanceSkillValidation(t *testing.T) {
 	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "skill_manifest_invalid" ||
 		envelope.Error.Domain != "nexactl.governance" || len(envelope.Error.Details) == 0 {
 		t.Fatalf("unexpected failure envelope: %#v", envelope)
+	}
+}
+
+func TestReferenceNexactlSkillsSync(t *testing.T) {
+	binary := buildNexactl(t)
+	repository := t.TempDir()
+	stdout, stderr, exit := runBinary(t, binary, "skills", "sync", "--repo-root", repository, "--json")
+	if exit != 0 || stderr != "" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
+	}
+	var envelope protocol.Envelope
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if !envelope.OK || !protocol.IsValidOperationID(envelope.OperationID) {
+		t.Fatalf("unexpected success envelope: %#v", envelope)
+	}
+	encoded, err := json.Marshal(envelope.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		APIVersion string   `json:"apiVersion"`
+		Target     string   `json:"target"`
+		Skills     []string `json:"skills"`
+		FileCount  int      `json:"fileCount"`
+	}
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		t.Fatal(err)
+	}
+	wantSkills := []string{"nexa-ai-first-cli", "nexa-controlled-generation", "nexa-development-workflow", "nexa-framework-router"}
+	if result.APIVersion != "nexa.dev/governance-skill-sync-result/v1" || result.Target != ".codex/skills" ||
+		result.FileCount != 8 || !reflect.DeepEqual(result.Skills, wantSkills) {
+		t.Fatalf("sync result = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(repository, ".codex", "skills", "nexa-framework-router", "SKILL.md")); err != nil {
+		t.Fatalf("synced router skill: %v", err)
 	}
 }
 

@@ -1,46 +1,59 @@
 # Nexa 文档
 
-本目录维护 Nexa 最终态架构、稳定契约和公开使用方式。
+Nexa 是面向业务后端的 AI-first Go 框架。它让 AI 从业务仓中的真实事实出发，使用可执行契约完成代码生成、
+标准源码采用和验证，同时让业务仓继续拥有业务定义、生成结果、运行配置与发布节奏。
 
-## 渐进式阅读
+## 为什么是 Nexa
 
-1. 从仓库根 `AGENTS.md` 了解 AI-native、所有权和测试边界。
-2. 阅读[框架架构](architecture/framework.md)，确认对象分类、依赖方向和业务事实所有权。
-3. 涉及自动化时读取[CLI 机器协议](contracts/cli-machine-protocol.md)，再通过 `nexactl inspect --json` 查询当前二进制的真实能力。
-4. 涉及业务事实、受控生成、生成清单或标准源码物化时读取对应公共契约，再按 owner package accessor 获取 machine schema。
-5. 涉及代码组合时进入对应插件文档；具体实现与可用性以 public Go API、测试和 release 证据为准。
+- **AI 不猜能力。** 先通过同版本 Nexa Skill 路由，再从当前源码、CLI inspection、schema 和测试确认行为。
+- **业务事实仍由业务拥有。** Ent、Proto、`.api` 和产品配置保留在最接近业务语义的位置。
+- **结果可以审核和重建。** Framework 输出普通源码、versioned projection 和明确验证结果，不接管业务运行。
 
-## 架构
+## 五个核心概念
 
-- [架构文档索引](architecture/README.md)：框架边界与设计来源入口。
-- [框架架构](architecture/framework.md)：module 边界、最近事实源优先级、领域 owner、Service Catalog v1 封闭 binding、typed relation 演进、Business API Composition、可选能力和 Minimum Runtime。
-- [设计影响](architecture/design-influences.md)：参考设计到 Nexa owner、authoring surface、公开契约和行为 gate 的固定版本映射。
-- [Tenant Mixin 与统一 CRUD 生成目标设计](architecture/tenant-mixin-and-crud-generation.md)：实现待验证的严格 Tenant mixin、多租户生成条件、统一 CRUD 协议与默认 logic、覆盖行为及非目标。
+```mermaid
+flowchart LR
+    H["人做判断，AI 做工程"] --> F["业务事实保持唯一"]
+    F --> C["AI 读取真实契约"]
+    C --> G["变更过程受控"]
+    G --> V["结果可验证、可回退"]
+```
 
-## 采用
+[核心概念总览](concepts/README.md)提供五个概念的逐页入口，负责建立共同语言，不复制命令、schema 或协议字段。
 
-- [Consumer 闭包](adoption/consumers.md)：neutral、backend-only 与真实业务采用边界。
-- [Skill 分发与路由](adoption/skills.md)：skill asset、inspect-first 能力发现和已审核任务计划的执行边界。
-- [升级与回滚](adoption/upgrade-and-rollback.md)：本地 module/workspace 切换保护、四层回滚和各层验证责任。
+## 选择你的视角
 
-## 公共契约
+- [业务开发者视角](developer/nexa.md)：Nexa 能解决什么、哪些能力需要显式选择、最终结果归谁所有。
+- [框架开发者视角](developer/framework.md)：系统分层、三条公共边界、变化影响和验证责任。
+- [稳定边界](developer/stable-surface.md)：如何判断 Go API、CLI、schema、Skill 和 generated surface 能否依赖。
+- [技术选择](developer/technology-choices.md)：为什么采用 typed facts、普通源码和静态组合。
 
-- [CLI 机器协议](contracts/cli-machine-protocol.md)：envelope、错误分类、exit code、operation id、输出通道和能力自省。
-- [业务事实契约](contracts/business-facts.md)：事实所有权、Service Catalog、最近事实源、typed relation、Ent 责任边界和 machine schema accessor。
-- [受控生成契约](contracts/controlled-generation.md)：typed owner facts、Entity/Protocol/API/Composition IR、12 命令矩阵、ProviderTool、serial staged publish ownership、可选组合与设计影响边界。
-- [生成清单契约](contracts/generated-manifests.md)：Artifact/API Manifest、provenance、确定性、artifact ownership 和 stale policy。
-- [Source Bundle 契约](contracts/source-bundles.md)：owner、identity、Provider、resolver/cache、安全树、七命令、provenance、三方升级、serial staged publish 与错误投影。
-- [Quality Read Model 契约](contracts/quality-read-model.md)：只读 requirement coverage wire、strict schema、canonical snapshot、digest、empty 与可选消费边界。
-- [Runtime 公共契约](contracts/runtime-packages.md)：CRUD、Kafka/franz、slog、gRPC access、OTel adapter、实例所有权与 Minimum Runtime 可选链接边界。
+## Nexa 能提供什么
 
-## 插件
+- [业务事实契约](contracts/business-facts.md)：强类型 Ent metadata、服务关系与 authoring ownership。
+- [受控生成](contracts/controlled-generation.md)：从事实到 IR、staging、普通源码和 manifest。
+- [标准服务 starter](starters/standard-services.md)：可由 consumer 接管和继续修改的标准源码。
+- [Runtime packages](contracts/runtime-packages.md)：按 Go import 和 constructor 显式选择的公共运行契约。
+- [Nexactl Build Plugin](plugins/nexactl-build-plugin.md)：显式组合工程期能力，不是运行时插件系统。
+- [Service Source Plugin](plugins/service-source-plugin.md)：选择和交付标准服务源码的工程期入口。
 
-- [Service Source Plugin](plugins/service-source-plugin.md)：标准服务 Provider、物化后的业务所有权和普通服务边界。
-- [标准服务 Source Bundles](plugins/standard-service-source-bundles.md)：Framework Minimum、Core reference 组合、官方可选源码 package 和 materialize/generate/run 独立性。
-- [Nexactl Build Plugin](plugins/nexactl-build-plugin.md)：工程命令的编译期显式组合、能力依赖和业务私有扩展。
+## 开始采用
 
-## 维护规则
+- [Nexa Skill 路由](adoption/skills.md)：AI 开发和采用的必选入口及版本边界。
+- [快速开始](adoption/quick-start.md)：Skill、module pin、能力发现、最小构建和生成顺序。
+- [验证矩阵](adoption/verification-matrix.md)：module、CLI、facts、generated、source 和回滚检查。
+- [升级与回滚](adoption/upgrade-and-rollback.md)：分层 checkpoint、升级与恢复边界。
 
-- 文档描述持续有效的最终契约，不记录仓库差异、一次性实施步骤或临时状态。
-- 新增或移动文档必须同步更新本索引或对应分域索引。
-- 文档不能替代代码、测试、schema、CLI 输出或 release 证据。
+## 精确 Reference
+
+- [当前架构](architecture/framework.md)与[测试策略](architecture/testing-strategy.md)
+- [生成清单](contracts/generated-manifests.md)与[Source Bundle](contracts/source-bundles.md)
+- [CLI 机器协议](contracts/cli-machine-protocol.md)与[Quality Read Model](contracts/quality-read-model.md)
+
+## 事实与可用性
+
+本目录只描述 `github.com/nxnminieye/nexa` 当前公开实现。Nexa Skill 是 AI 的必选路由入口，但不授权命令
+或 repository write。命令、flag、schema、exported API 和 capability 的精确事实由当前二进制 inspection、
+owner package、schema 和行为测试拥有；Markdown 不维护第二份机器事实。
+
+[文档治理](architecture/documentation-governance.md)定义渐进披露、主题 owner、当前事实和过程材料边界。

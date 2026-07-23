@@ -23,17 +23,22 @@ func TestNewDefinesGovernanceValidationCapability(t *testing.T) {
 	if !reflect.DeepEqual(spec.Descriptor.Provides, []plugin.Capability{{ID: "governance.validation", Version: "v1.0.0"}}) {
 		t.Fatalf("provides = %#v", spec.Descriptor.Provides)
 	}
-	if len(spec.Descriptor.Requires) != 0 || len(spec.Commands) != 1 {
+	if len(spec.Descriptor.Requires) != 0 || len(spec.Commands) != 2 {
 		t.Fatalf("unexpected plugin spec: %#v", spec)
 	}
 	wantPaths := [][]string{
 		{"governance", "skill", "validate"},
+		{"skills", "sync"},
 	}
 	for i, command := range spec.Commands {
 		if !reflect.DeepEqual(command.Path, wantPaths[i]) {
 			t.Fatalf("command %d path = %#v", i, command.Path)
 		}
-		if command.SideEffect != plugin.SideEffectRepositoryRead {
+		wantSideEffect := plugin.SideEffectRepositoryRead
+		if i == 1 {
+			wantSideEffect = plugin.SideEffectRepositoryWrite
+		}
+		if command.SideEffect != wantSideEffect {
 			t.Fatalf("command %d side effect = %q", i, command.SideEffect)
 		}
 		if !json.Valid(command.InputSchema) || !json.Valid(command.OutputSchema) {
@@ -42,6 +47,26 @@ func TestNewDefinesGovernanceValidationCapability(t *testing.T) {
 	}
 	if len(spec.Commands[0].Flags) != 1 || spec.Commands[0].Flags[0].Name != "root" || !spec.Commands[0].Flags[0].Required {
 		t.Fatalf("skill flags = %#v", spec.Commands[0].Flags)
+	}
+	if len(spec.Commands[1].Flags) != 1 || spec.Commands[1].Flags[0].Name != "repo-root" ||
+		spec.Commands[1].Flags[0].Type != plugin.FlagString || !spec.Commands[1].Flags[0].Required {
+		t.Fatalf("skill sync flags = %#v", spec.Commands[1].Flags)
+	}
+}
+
+func TestSkillSyncCommandReturnsStructuredResult(t *testing.T) {
+	repository := t.TempDir()
+	candidate, err := governance.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, stderr, exit := executePlugin(t, candidate, "skills", "sync", "--repo-root", repository, "--json")
+	if exit != 0 || stderr != "" || !envelope.OK {
+		t.Fatalf("exit=%d stderr=%q envelope=%#v", exit, stderr, envelope)
+	}
+	result := decodeResult[skillSyncResult](t, envelope.Result)
+	if result.APIVersion != "nexa.dev/governance-skill-sync-result/v1" || result.Target != ".codex/skills" || result.FileCount != 8 {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexa Controlled Generation"
+  short_description: "Preserve Nexa facts and generated ownership"
+  default_prompt: "Use $nexa-controlled-generation to preserve Nexa business facts, generated ownership, and verification for this change."

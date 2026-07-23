@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nexa Development Workflow"
+  short_description: "Deliver Nexa changes with evidence"
+  default_prompt: "Use $nexa-development-workflow to run this Nexa framework change through planning, implementation, review, and verification gates."

@@ -1,153 +1,89 @@
-# 业务事实契约
+# 业务事实
 
-Nexa 提供版本化 schema、不可变 value object、strict parser、validator 和 canonical protocol。使用
-Nexa 的 consumer repository 负责业务事实实例、关系决策和生成投影；公共框架不会接管这些人工入口。
+Nexa 为业务事实提供 typed value、strict parser、versioned schema 和 canonical projection。事实实例由
+consumer repository author，框架只读取并投影；IR、manifest 和 generated source 不能反向成为事实源。
 
-## 所有权
+## Ownership
 
-| 对象 | Authoring owner | Nexa 提供的公共边界 | Derived projection |
-| --- | --- | --- | --- |
-| 服务发现、拓扑、跨事实或跨服务 capability binding | consumer repository | `project/servicecatalog` schema、loader、parser、validator | composition IR、静态注册与服务文档 |
-| Ent schema、type、field 和 CRUD intent | consumer Ent schema | typed annotation contract 与生成能力边界 | entity/CRUD IR、协议与代码 |
-| RPC、message、method | consumer Proto | descriptor/custom option parser contract | RPC IR、client、proxy 和 SDK model |
-| HTTP route、type、field | consumer API contract | API parser/validator contract | API Manifest、路由、SDK 和文档 |
-| Artifact/API Manifest | 无人工 authoring surface；consumer 持有生成实例 | `generation/artifact`、`generation/api` immutable contract；selected generation capability 管理生成生命周期 | 可重建的生成清单 |
-| Runtime BuildInfo | consumer composition identity 与 Go build settings | `runtime/buildinfo` resolver 和 output schema | 只读 runtime identity projection |
-| Source Bundle manifest、profile 与 tree | provider publisher | `sourceplugin` typed contract、strict parser 与 immutable Provider | exact release、cache entry 与 source plan |
-| Source provenance lock | 无人工 authoring surface；consumer 持有生成实例 | `sourceplugin/lock` key、schema、derive 与 verify | status、diff 与三方升级基线 |
-| Quality read-model wire | Nexa `quality/readmodel`；snapshot instance 由 consumer 持有 | public typed constructor、strict schema 与 canonical parser | 只读 requirement coverage snapshot/API/frontend view |
-
-生成投影不能反向覆盖 authoring surface。更完整的 ownership 和依赖方向见
-[框架架构](../architecture/framework.md)，manifest lifecycle 见[生成清单契约](generated-manifests.md)。
-
-## Service Catalog v1
-
-Service Catalog v1 只拥有：
-
-- service id 与 repository-relative source root；
-- service dependency；
-- service 到 capability contract 的 closed binding，其中 binding 只有 `id` 与 `apiVersion`。
-
-Capability identity 使用 `<namespace>/<name>`，版本使用同一 identity 前缀的
-`<namespace>/<name>/v<positive-integer>`；例如 API proxy capability 是
-`nexa.dev/generation-api-proxy` 与 `nexa.dev/generation-api-proxy/v1`。ID 与版本前缀不一致是非法 binding。
-
-Catalog parser 为每个 service topology node 和 capability binding node 派生 canonical
-`SourceRef + semantic Digest`，不向 authored catalog 增加来源字段。Service digest 只拥有
-`id/root/dependsOn`，binding digest 只拥有 service id 与 binding id/version；JSON/YAML 表达、字段顺序、
-注释和 source location 不进入 digest。`Service.Source()`、`CapabilityBinding.Source()`、
-`Catalog.Sources()` 与 `Catalog.Source(ref)` 暴露防御性、精确的 owner projection；
-`Service.CanonicalSourceJSON()` 与 `CapabilityBinding.CanonicalSourceJSON()` 返回 digest 对应 bytes 的防御副本。
-节点 fragment 分别是 `service:<id>` 与
-`service:<id>/binding:<capability-id>@<capability-api-version>`，并统一通过 `provenance.RepositoryRef`
-生成 canonical reference。
-
-节点 semantic bytes 使用 RFC 8785 JSON Canonicalization Scheme，UTF-8 编码且不带换行。Object member
-按 JCS 的 UTF-16 code unit 顺序排序，字符串使用 JCS escaping，不执行 Unicode normalization；
-`dependsOn` 在编码前按 service id 排序，空集合固定为 `[]`。两个 versioned envelope 精确为：
-
-```json
-{"apiVersion":"nexa.dev/service-node/v1","dependsOn":["foundation"],"id":"sample","root":"backend/sample"}
-{"apiVersion":"nexa.dev/capability-binding-node/v1","capabilityApiVersion":"nexa.dev/generation-api-proxy/v1","id":"nexa.dev/generation-api-proxy","serviceId":"sample"}
-```
-
-实现对上述无换行 bytes 计算 SHA-256。Consumer 可以仅使用公开 service/binding values 和本段 envelope
-独立复算 canonical bytes 与 digest，不依赖 Catalog parser 的内部状态。
-
-它不拥有 Ent、Proto、HTTP API、数据库、部署、前端、CLI 或 capability 本体，也不提供 generic
-`configRef`、开放 extension 或 sidecar path。Binding presence 只表达关系，不能携带或复制节点事实。
-
-### Empty、显式空与缺失 source
-
-- composition 没有选择任何需要 catalog 的 capability 时，使用 `servicecatalog.Empty()`，不读取文件；
-- 已选择的 loader 显式请求 catalog 而 source 不存在时，返回 `fact_source_missing`；
-- 空白文件非法；包含 `services: []` 的 strict document 是有效、显式的空事实。
-
-这三种状态不能互相替代。Minimum Runtime 不需要空目录、占位 catalog 或可选 capability。
+| 事实 | Authoring owner | Nexa public boundary |
+| --- | --- | --- |
+| Ent schema、field、CRUD intent、tenant scope | Consumer Ent schema | `nexaent` annotation 与 `nexaent/mixin` |
+| RPC、message、method、transport metadata | Consumer Proto | `generation/protocol` compile 与 schema |
+| Native HTTP route、type、field | Consumer `.api` | `generation/httpapi` loader 与 schema |
+| Service topology 与 capability binding | Consumer Service Catalog | `project/servicecatalog` strict document |
+| Cross-owner relation | Consumer 对应领域 relation document | Closed typed relation contract |
+| Source manifest/profile/tree | Provider publisher | `sourceplugin` immutable contract |
+| Generated manifest/source lock | 无人工 authoring surface | Owner package 从当前输入重建 |
+| Runtime/deployment facts | Consumer runtime/ops | 不进入上述 framework facts |
 
 ## 最近事实源
 
-同一事实只能有一个人工入口，优先级固定为：
+同一语义只允许一个人工入口，优先使用最接近业务节点的正式表达：
 
-1. 同一语法节点上的 typed metadata；
-2. 同一事实文件或 package 中的结构化声明；
-3. 领域 owner 定义的 closed typed relation document；
-4. 只表达跨事实关系、服务发现与拓扑的全局 catalog。
+1. 同一 Ent/Proto/`.api` 节点上的 typed metadata；
+2. 同一领域 package/file 中的结构化声明；
+3. 只保存跨 owner 关系的 closed typed relation；
+4. 只表达服务拓扑与 capability binding 的 Service Catalog。
 
-Typed relation 只用于事实真实横跨多个权威源，或原格式无法表达该关系的情况。Relation document 只
-保存关系或决策，并以 canonical `SourceRef` 与 `Digest` 指向每个原事实；它不能复制 Ent、Proto、API
-或其他 source 字段。需要 catalog 暴露的新关系必须通过新的 catalog `apiVersion` 表达；领域专属关系
-由 capability-specific typed contract 及其 loader 消费，二者都不扩展 Service Catalog v1。
+Relation 只引用原事实的 canonical `SourceRef` 和 `Digest`，不复制字段。Comment、目录名、generated source、
+manifest 和 catalog generic extension 都不能覆盖更近的 typed fact。
 
-## Ent 责任边界
+## Ent typed facts
 
-Ent toolchain delegation 与 typed Ent annotation 驱动的 CRUD projection 是两项独立责任：
+Ent schema 使用三个相互独立的 annotation：
 
-- delegation 只定位并调用 consumer 声明的 Ent toolchain，Ent schema 与 generated Go 仍归 consumer；
-- CRUD projection 只读取 typed `schema.Annotation`；annotation presence 加非空 closed operations 是唯一
-  opt-in，annotation 缺失即不生成 CRUD；
-- Go comments、catalog binding 或 generic reference 都不参与 CRUD 选择。
+- `nexaent.Schema(SchemaMeta)`：localized label/description、identity strategy 和 record scope；
+- `nexaent.Field(FieldMeta)`：localized label/description、UI hint、reference、visibility 和可选 CRUD field policy；
+- `nexaent.CRUD(operations...)`：schema 对闭合 CRUD operation set 的显式选择。
 
-公开文档只描述这些职责。某个二进制的实际命令、capability、schema 与 side effect 以
-`nexactl inspect --json` 为准。
+CRUD operation 只包含 `list`、`get`、`create`、`update`、`delete`。Annotation 缺失表示不选择；空、重复、
+未知 operation 或重复同类 annotation 都是 typed error。Loader 只接受当前 public `nexaent` contract，
+不读取 legacy annotation、comments、catalog binding 或字段名称作为 fallback。
 
-## 生成投影方向
+Schema scope 是 `global` 或 `tenant`。Framework-owned `nexaent/mixin.Tenant` 提供 fixed `tenant_id` field：
+required、positive、immutable、internal、read-only。使用 mixin 不会自行把 schema 改为 tenant scope；业务方
+必须同时在 `SchemaMeta` 明确 `ScopeTenant`。反过来，普通同名字段也不能伪装成该 mixin。
 
-业务事实只沿 owner 到 projection 的方向流动：
+Field visibility 与 CRUD policy 保持闭合：internal field 不允许 mutation policy，sensitive field 必须排除
+read projection。物理 Ent edge display 与 logical business reference 是两种不同的 typed relation，不互相
+fallback。
 
-| Owner facts | Versioned projection | Generated output |
-| --- | --- | --- |
-| Ent typed `SchemaMeta` / `FieldMeta` / CRUD annotation | `EntityIR`、`CRUDProtocolIR` | 可选 CRUD Proto fragment |
-| 服务 Proto AST/custom options | `ProtocolIR` | RPC Go、proxy inputs 与 SDK model |
-| Core `.api` AST/typed metadata | native APIIR | Core native API contract projection |
-| Service Catalog binding/topology + ProtocolIR + native APIIR | `CompositionIR`、merged APIIR | API Manifest 与静态业务 proxy 普通源码 |
-| 上述 service contract owner nodes | canonical contract source set | Service Manifest |
+## Proto 与 HTTP facts
 
-Project provider 只定位这些 authoring surface 并绑定受控 toolchain，不拥有节点事实。Artifact/API/Service
-Manifest 只记录 provenance、digest 与 projection 状态，也不能反向成为配置入口。完整链路、CLI 命令族
-与 serial staged publish ownership 见[受控生成契约](controlled-generation.md)。
+Proto 是 RPC/message/method 的 owner，并可通过 typed custom option 表达 HTTP proxy、authentication、
+credential 和 RPC context binding。`.api` 是 Core native HTTP contract 的 owner。Composition 可以合并两类
+projection，但不能把生成 route 写回 Proto 或 `.api`。
 
-Source Bundle manifest/tree 是 provider 发布事实，materialized source 是 consumer 普通源码，provenance
-lock 是可重建 projection；三者不能互相替代。Source Bundle 不拥有 consumer runtime config、deployment
-instance 或 health state。完整 identity、resolver/cache、七命令与 serial staged publish 见
-[Source Bundle 契约](source-bundles.md)。
+跨服务 context 在协议层保持明确的 wire type；需要 tenant context 时，CRUD projection 使用内部
+`tenant_id` binding，不凭字段名猜测或向公开 item/mutation 暴露该字段。
 
-标准 Core、Job 与 Quality source package 的 authored-only inventory、profile closure、reference composition 与
-detach independence 见[标准服务 Source Bundles](../plugins/standard-service-source-bundles.md)。V0.1 reference
-composition 只包含 Core，端到端参考路径选择 backend，并要求当前自省结果直接暴露 exact Provider/profile；
-Provider package presence 或 `source.bundle` capability 都不创建运行时 service instance，也不能替代该发现门禁。
+## Service Catalog
 
-## 可选业务域
+Service Catalog 只拥有 service id、repository-relative root、dependency 和 service-to-capability binding。
+Binding 由 closed id 与 version 组成，不携带 Ent、Proto、HTTP、deployment 或任意 config payload。
 
-Role、Menu 和 ProductProfile 不是基础公共事实袋。它们由选择相应能力的 consumer contract 拥有；没有
-这些事实时，Core 与业务后端仍可构建和运行。Frontend、requirements、gate、evidence、deployment 和
-observability instance 同样不能反向成为 Minimum Runtime 的构建或启动前提。
+没有选择需要 catalog 的能力时，可以使用 `servicecatalog.Empty()`；显式 `services: []` 是有效空事实；
+已请求文件但 source 缺失或内容空白则是错误。这三种状态不能互相替代。
 
-Quality read model 是关系投影，不是 requirement、test、evidence 或 freeze 的人工事实源。其 owner、strict
-schema、canonical digest、empty semantics 与可选消费边界见
-[Quality Read Model 契约](quality-read-model.md)。Requirements、work、UserOperation、人工 gate、TestSpec、
-evidence、quality producer、frontend 与 deployment 可以全部缺席，Core backend 仍可构建和运行。
+## Canonical source
 
-## Machine schema access
+Owner parser 为可追踪节点产生 repository-relative `SourceRef` 和 semantic SHA-256 digest。Canonical bytes
+忽略 JSON/YAML 格式、注释和字段顺序，但保留协议定义的语义。Consumer 可以通过 public accessor 读取防御
+副本，不依赖 parser 内部状态。
 
-Document schema 与 owner package 同置并由 accessor 返回防御副本：
+## Machine schema
 
-| Contract | Public accessor |
+Schema 与 owner package 同置，常用 accessor 包括：
+
+| Contract | Accessor |
 | --- | --- |
+| Ent schema/field/CRUD annotation | `nexaent.SchemaAnnotationSchema()`、`FieldAnnotationSchema()`、`CRUDAnnotationSchema()` |
+| Tenant mixin marker | `mixin.TenantAnnotationSchema()` |
 | Service Catalog | `servicecatalog.Schema()` |
-| Artifact Manifest | `artifact.Schema()` |
-| API Manifest | `api.DocumentSchema()` |
-| Ent EntityIR | `entity.Schema()` |
-| CRUDProtocolIR / compatibility lock | `crudproto.IRSchema()` / `crudproto.LockSchema()` |
-| ProtocolIR | `protocol.Schema()` |
-| APIIR | `httpapi.Schema()` |
-| CompositionIR | `composition.Schema()` |
-| Generation plan / result | `transaction.PlanSchema()` / `transaction.ResultSchema()` |
-| Service Manifest | `service.Schema()` |
-| BuildInfo | `buildinfo.Schema()` |
-| Source Bundle | `sourceplugin.Schema()` |
-| Source provenance lock | `lock.Schema()` |
-| Quality read model | `readmodel.Schema()` |
+| Entity/Protocol/HTTP/Composition IR | 对应 generation package 的 `Schema()` |
+| Artifact/API/Service Manifest | 对应 manifest owner 的 schema accessor |
+| Source Bundle/Source Lock | `sourceplugin.Schema()`、`lock.Schema()` |
+| Quality Read Model | `readmodel.Schema()` |
 
-`provenance` 提供 Digest、SourceRef、Source 与 TreeDigest value object，不定义 document schema。Consumer
-直接使用 owner accessor；文档和全局 registry 不复制 schema。
+精确字段以 accessor 返回的当前 schema 和 public Go type 为准。投影及写入行为见
+[受控生成](controlled-generation.md)，manifest 语义见[生成清单](generated-manifests.md)。

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -20,6 +21,60 @@ import (
 	"github.com/nxnminieye/nexa/sourceplugin/engine"
 	"github.com/nxnminieye/nexa/sourceplugin/release"
 )
+
+func TestResolveBuildVersionUsesExplicitNonDevVersionFirst(t *testing.T) {
+	info := &debug.BuildInfo{Main: debug.Module{Path: "github.com/nxnminieye/nexa", Version: "v0.2.0"}}
+	if got := resolveBuildVersion("v9.1.0", info, true); got != "v9.1.0" {
+		t.Fatalf("resolveBuildVersion() = %q, want explicit version", got)
+	}
+}
+
+func TestResolveBuildVersionFindsNexaModuleInMainOrDependencies(t *testing.T) {
+	tests := []struct {
+		name string
+		info *debug.BuildInfo
+		want string
+	}{
+		{
+			name: "main module",
+			info: &debug.BuildInfo{Main: debug.Module{Path: "github.com/nxnminieye/nexa", Version: "v0.2.0"}},
+			want: "v0.2.0",
+		},
+		{
+			name: "dependency module",
+			info: &debug.BuildInfo{
+				Main: debug.Module{Path: "example.com/consumer", Version: "v1.0.0"},
+				Deps: []*debug.Module{
+					{Path: "example.com/other", Version: "v1.0.0"},
+					{Path: "github.com/nxnminieye/nexa", Version: "v0.3.0-alpha.2"},
+				},
+			},
+			want: "v0.3.0-alpha.2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveBuildVersion("v0.0.0-dev", tt.info, true); got != tt.want {
+				t.Fatalf("resolveBuildVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveBuildVersionKeepsDevWhenNexaModuleVersionIsUnavailable(t *testing.T) {
+	for _, input := range []struct {
+		info      *debug.BuildInfo
+		available bool
+	}{
+		{info: nil, available: false},
+		{info: &debug.BuildInfo{Main: debug.Module{Path: "github.com/nxnminieye/nexa", Version: "(devel)"}}, available: true},
+		{info: &debug.BuildInfo{Main: debug.Module{Path: "example.com/consumer", Version: "v1.0.0"}}, available: true},
+	} {
+		if got := resolveBuildVersion("v0.0.0-dev", input.info, input.available); got != "v0.0.0-dev" {
+			t.Fatalf("resolveBuildVersion() = %q, want dev fallback", got)
+		}
+	}
+}
 
 func TestReferenceSourceCompositionDoesNotSelectGitMerge(t *testing.T) {
 	result, err := newReferenceMergeDriver().Merge(context.Background(), engine.TextMergeInput{

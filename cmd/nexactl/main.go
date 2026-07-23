@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/nxnminieye/nexa/cli/protocol"
@@ -22,9 +23,15 @@ import (
 	"github.com/nxnminieye/nexa/sourceplugin/engine"
 	"github.com/nxnminieye/nexa/sourceplugin/lock"
 	"github.com/nxnminieye/nexa/sourceplugin/release"
+	"golang.org/x/mod/semver"
 )
 
-var buildVersion = "v0.0.0-dev"
+const (
+	defaultBuildVersion = "v0.0.0-dev"
+	nexaModulePath      = "github.com/nxnminieye/nexa"
+)
+
+var buildVersion = defaultBuildVersion
 
 type referenceSourcePluginFactory func() (plugin.Plugin, func(), error)
 
@@ -37,6 +44,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourceFactory referenceSourcePluginFactory) int {
+	version := effectiveBuildVersion()
 	governancePlugin, err := governance.New()
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
@@ -57,11 +65,34 @@ func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourc
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
 	defer cleanup()
-	composed, err := host.New(host.Options{Version: buildVersion}, governancePlugin, generationPlugin, sdkPythonPlugin, sourcePlugin)
+	composed, err := host.New(host.Options{Version: version}, governancePlugin, generationPlugin, sdkPythonPlugin, sourcePlugin)
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
 	return composed.Execute(context.Background(), args, stdout, stderr)
+}
+
+func effectiveBuildVersion() string {
+	info, available := debug.ReadBuildInfo()
+	return resolveBuildVersion(buildVersion, info, available)
+}
+
+func resolveBuildVersion(configured string, info *debug.BuildInfo, available bool) string {
+	if configured != defaultBuildVersion {
+		return configured
+	}
+	if !available || info == nil {
+		return configured
+	}
+	if info.Main.Path == nexaModulePath && semver.IsValid(info.Main.Version) {
+		return info.Main.Version
+	}
+	for _, dependency := range info.Deps {
+		if dependency != nil && dependency.Path == nexaModulePath && semver.IsValid(dependency.Version) {
+			return dependency.Version
+		}
+	}
+	return configured
 }
 
 func newReferenceSourcePlugin() (plugin.Plugin, func(), error) {
@@ -138,7 +169,7 @@ func newReferenceSourceDependencies(cacheRoot string) (sourceadapter.Options, so
 		return fail(err)
 	}
 	return sourceadapter.Options{
-		Version: buildVersion, Cache: cache, CacheLimits: cacheLimits, TreeLimits: cacheLimits.Tree,
+		Version: effectiveBuildVersion(), Cache: cache, CacheLimits: cacheLimits, TreeLimits: cacheLimits.Tree,
 		LockLimits: lock.DefaultLimits(), MergeDriver: newReferenceMergeDriver(), Executor: engine.NewOSExecutor(),
 		GoToolchain: engine.GoToolchain{
 			Executable: goExecutable, Home: directories["home"], TempDir: directories["temp"],
