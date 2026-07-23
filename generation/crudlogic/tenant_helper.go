@@ -6,12 +6,46 @@ import (
 	"go/parser"
 	"go/token"
 	"path"
+	"strings"
 
+	"github.com/nxnminieye/nexa/generation/artifact"
 	"github.com/nxnminieye/nexa/generation/transaction"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
 type tenantHelperOwnershipProbe struct{ id, path string }
+
+type unifiedRPCOwnershipProbe struct {
+	id, path, protoPath, packageName string
+}
+
+// StaleRPCOwnershipProbes restores the exact ownership checks needed to
+// remove unmodified RPC artifacts after CRUD output is no longer required.
+func StaleRPCOwnershipProbes(previous *artifact.Manifest, layout ServiceLayout, protoPath, packageName string) []transaction.OwnershipProbe {
+	if previous == nil || previous.Generator().ID() != transactionGeneratorID || previous.Generator().Version() != "v1.0.0" {
+		return nil
+	}
+	pbRoot := path.Join(path.Dir(layout.LogicRoot), "pb") + "/"
+	result := make([]transaction.OwnershipProbe, 0)
+	for _, item := range previous.Artifacts() {
+		if item.StalePolicy() != artifact.StaleDeleteIfUnmodified || !strings.HasPrefix(item.ID(), "rpc.") || !strings.HasPrefix(item.Path(), pbRoot) || path.Ext(item.Path()) != ".go" {
+			continue
+		}
+		result = append(result, unifiedRPCOwnershipProbe{id: item.ID(), path: item.Path(), protoPath: protoPath, packageName: packageName})
+	}
+	return result
+}
+
+func (p unifiedRPCOwnershipProbe) Inspect(name string, content []byte, expected transaction.Ownership) (bool, error) {
+	if name != p.path || expected.GeneratorID != transactionGeneratorID || expected.ArtifactID != p.id {
+		return false, nil
+	}
+	if _, err := provenance.ParseDigest(expected.InputDigest.String()); err != nil {
+		return false, nil
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), name, content, parser.ParseComments|parser.AllErrors)
+	return err == nil && ast.IsGenerated(file) && file.Name.Name == p.packageName && generatedRPCProtoSourceAllowed(file, p.protoPath), nil
+}
 
 func tenantHelperIdentity(layout ServiceLayout) (string, string) {
 	return artifactIDPrefix + "." + layout.ServiceID + ".tenant-helper", path.Join(layout.LogicRoot, "crudtenant/tenant.generated.go")

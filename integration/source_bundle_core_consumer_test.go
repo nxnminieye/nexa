@@ -181,7 +181,6 @@ func TestSourceBundleCoreMaterializesGeneratesCompilesAndRuns(t *testing.T) {
 	framework = consumerFramework
 	configureCoreConsumerModule(t, consumer, framework)
 	writeToolModule(t, generationModule, "example.com/nexa-generation-tool", framework)
-	runFrameworkConsumer(t, consumer, environment, "go", "mod", "tidy")
 	runFrameworkConsumer(t, consumer, environment, "go", "test", "-mod=readonly", "./backend/core/coreapp", "./backend/core/ent/schema")
 
 	helper := filepath.Join(temporary, "generation-helper")
@@ -431,7 +430,7 @@ func validateGenerationDigestReports(label string, index int, kind string, diges
 func expectedCoreGenerationCommands(writeMode coreGenerationWriteMode) map[string]int {
 	result := map[string]int{}
 	for _, identity := range []string{
-		"generation.crud-proto?provider=consumer&service=account",
+		"generation.crud?provider=consumer&service=account",
 		"generation.rpc?provider=consumer&service=core",
 		"generation.rpc?provider=consumer&service=account",
 		"generation.api?provider=consumer&core-service=core",
@@ -538,7 +537,6 @@ func materializeFreshCoreGeneratedSnapshot(t *testing.T, expectedRef coreSourceR
 	framework = consumerFramework
 	configureCoreConsumerModule(t, consumer, framework)
 	writeToolModule(t, generationModule, "example.com/nexa-fresh-generation-tool", framework)
-	runFrameworkConsumer(t, consumer, environment, "go", "mod", "tidy")
 	runFrameworkConsumer(t, consumer, environment, "go", "test", "-mod=readonly", "./backend/core/coreapp", "./backend/core/ent/schema")
 
 	helper := filepath.Join(temporary, "fresh-generation-helper")
@@ -1342,11 +1340,11 @@ func TestSourceBundleCoreCompositionRendersCoreAndAccountProxyArtifacts(t *testi
 	if err := os.CopyFS(helperModule, os.DirFS(filepath.Join(repositoryRoot(t), "integration", "testdata", "source_bundle_core", "cmd", "generation-helper"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte(fmt.Sprintf("module example.com/core-helper\n\ngo 1.25.0\n\nrequire github.com/nxnminieye/nexa v0.0.0\n\nreplace github.com/nxnminieye/nexa => %s\n", repositoryRoot(t))), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	helper := filepath.Join(temporary, "composition-helper-bin")
-	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
+	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-mod=mod", "-o", helper, ".")
 	command := exec.Command(helper, "api", "generate", "--core-service", "core")
 	command.Dir = staging
 	command.Env = append(os.Environ(), "NEXA_FRAMEWORK_ROOT="+repositoryRoot(t))
@@ -1404,14 +1402,8 @@ func TestSourceBundleCoreCompositionRendersCoreAndAccountProxyArtifacts(t *testi
 		ID: "consumer.api-go", Version: "v1.0.0", Executable: helper, Args: []string{"api"},
 		Probe: toolchain.ExecutableProbe{Args: []string{"version"}, ExpectedVersion: "nexa-core-generation-helper v1.0.0"},
 	}
-	generationRoot := t.TempDir()
-	generationRepository := filepath.Join(generationRoot, "repository")
-	generationStaging := filepath.Join(generationRoot, "staging")
-	for _, directory := range []string{generationRepository, generationStaging} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
+	generationRepository := t.TempDir()
+	generationStaging := t.TempDir()
 	if _, err := apigo.Plan(context.Background(), merged, artifacts, apigo.Options{
 		CoreServiceID: "core", RepositoryRoot: generationRepository, StagingRoot: generationStaging,
 		Emit: func(name string, content []byte) error {

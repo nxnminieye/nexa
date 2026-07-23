@@ -46,7 +46,7 @@ func (p provider) Resolve(context.Context, string) (generation.Project, error) {
 			ServiceID: "core", EntSchemaDir: "backend/core/ent/schema", ProtoEntry: "backend/core/desc/core.proto", APIEntry: "backend/core/desc/core.api",
 			EntGenerateTool: p.tools.ent, RPCGoTool: p.tools.rpc, APIGoTool: p.tools.api,
 		},
-		{ServiceID: "account", EntSchemaDir: "backend/account/ent/schema", ProtoEntry: "backend/account/desc/account.proto", EntGenerateTool: p.tools.ent, EntCRUDTool: p.tools.crud, RPCGoTool: p.tools.rpc},
+		{ServiceID: "account", EntSchemaDir: "backend/account/ent/schema", ProtoEntry: "backend/account/desc/account.proto", LogicRoot: "backend/account/internal/logic", EntGenerateTool: p.tools.ent, EntCRUDTool: p.tools.crud, RPCGoTool: p.tools.rpc},
 	}}, nil
 }
 
@@ -125,7 +125,7 @@ func main() {
 	report := generationReport{}
 	generateEnt(run, "core", []string{"--repo-root", *repository, "--provider", providerID, "--service", "core"})
 	generateEnt(run, "account", []string{"--repo-root", *repository, "--provider", providerID, "--service", "account"})
-	apply(cli, &report, []string{"generation", "crud-proto"}, []string{"--repo-root", *repository, "--provider", providerID, "--service", "account"}, true)
+	apply(cli, &report, []string{"generation", "crud"}, []string{"--repo-root", *repository, "--provider", providerID, "--service", "account"}, true)
 	apply(cli, &report, []string{"generation", "rpc"}, []string{"--repo-root", *repository, "--provider", providerID, "--service", "core"}, false)
 	apply(cli, &report, []string{"generation", "rpc"}, []string{"--repo-root", *repository, "--provider", providerID, "--service", "account"}, false)
 	apply(cli, &report, []string{"generation", "api"}, []string{"--repo-root", *repository, "--provider", providerID, "--core-service", "core"}, false)

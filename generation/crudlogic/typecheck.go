@@ -11,16 +11,20 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/artifact"
 	"github.com/nxnminieye/nexa/generation/crudproto"
+	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
+	"github.com/nxnminieye/nexa/generation/rpcgo"
 	"github.com/nxnminieye/nexa/generation/toolchain"
 	"github.com/nxnminieye/nexa/generation/transaction"
 	"github.com/nxnminieye/nexa/provenance"
@@ -35,7 +39,11 @@ func Validate(ctx context.Context, plan Plan, input ValidationInput) (ValidatedP
 	if err := ctx.Err(); err != nil {
 		return ValidatedPlan{}, err
 	}
-	goExecutable, provider, providerValues, err := validateGoProvider(input.GoTool, input.Environment)
+	goExecutable, goProvider, providerValues, err := validateGoProvider(input.GoTool, input.GoEnvironment)
+	if err != nil {
+		return ValidatedPlan{}, err
+	}
+	rpcProvider, err := validateDeclaredEnvironment(input.RPCGoTool, input.RPCEnvironment, "/validation/rpcEnvironment")
 	if err != nil {
 		return ValidatedPlan{}, err
 	}
@@ -54,36 +62,41 @@ func Validate(ctx context.Context, plan Plan, input ValidationInput) (ValidatedP
 	if err != nil || len(entries) != 0 {
 		return ValidatedPlan{}, invalid("staging_invalid", "/validation/stagingRoot", err)
 	}
+	scratchPaths, err := materializeValidationScratch(staging,
+		validationScratchGroup{role: "rpc", pointer: "/validation/rpcEnvironment", tool: input.RPCGoTool, environment: input.RPCEnvironment},
+		validationScratchGroup{role: "go", pointer: "/validation/goEnvironment", tool: input.GoTool, environment: input.GoEnvironment},
+	)
+	if err != nil {
+		return ValidatedPlan{}, err
+	}
 	resolvedPlan, module, err := resolveServiceImport(plan.state, repository)
 	if err != nil {
 		return ValidatedPlan{}, err
 	}
+	var rpcInputs []transaction.ArtifactInput
+	var rpcContents map[string][]byte
+	var rpcSources []provenance.Source
 	if len(resolvedPlan.protoContent) != 0 {
-		protoTarget := filepath.Join(staging, filepath.FromSlash(resolvedPlan.protoPath))
-		if err := os.MkdirAll(filepath.Dir(protoTarget), 0o700); err != nil {
-			return ValidatedPlan{}, invalid("staging_write_failed", "/validation/stagingRoot", err)
-		}
-		if err := os.WriteFile(protoTarget, resolvedPlan.protoContent, 0o600); err != nil {
-			return ValidatedPlan{}, invalid("staging_write_failed", "/validation/stagingRoot", err)
-		}
-		result, runErr := input.Runner.Run(ctx, toolchain.Request{RepositoryRoot: repository, StagingRoot: staging, WorkDir: staging, Tool: input.RPCGoTool, Args: []string{"generate", "--service", resolvedPlan.layout.ServiceID}, Environment: append([]toolchain.EnvVar(nil), input.Environment...), Stdin: append([]byte(nil), resolvedPlan.protoContent...)})
-		if runErr != nil {
-			return ValidatedPlan{}, invalid("rpc_go_generation_failed", "/validation/rpcGoTool", runErr)
-		}
-		if result.ToolID != input.RPCGoTool.ID || result.Version != input.RPCGoTool.Version || result.ExecutableVersion != input.RPCGoTool.Probe.ExpectedVersion || result.ExitCode != 0 {
-			return ValidatedPlan{}, invalid("rpc_go_result_invalid", "/validation/rpcGoTool", nil)
+		var rpcErr error
+		rpcInputs, rpcContents, rpcSources, rpcErr = generateRPCContracts(ctx, repository, staging, resolvedPlan, input)
+		if rpcErr != nil {
+			return ValidatedPlan{}, rpcErr
 		}
 	}
-	generatedOverlay, err := collectGeneratedRPCOverlay(staging, repository, resolvedPlan, module)
+	generatedOverlay, err := collectGeneratedRPCOverlay(staging, repository, resolvedPlan, module, scratchPaths)
 	if err != nil {
 		return ValidatedPlan{}, invalid("rpc_go_result_invalid", "/validation/rpcGoTool", err)
 	}
 	if len(resolvedPlan.protoContent) != 0 && len(generatedOverlay) == 0 {
 		return ValidatedPlan{}, invalid("rpc_go_dependency_missing", "/validation/rpcGoTool", nil)
 	}
-	candidateOverlay := map[string][]byte{}
-	for _, candidate := range resolvedPlan.candidates {
-		candidateOverlay[filepath.Join(repository, filepath.FromSlash(candidate.path))] = append([]byte(nil), candidate.content...)
+	validationModFile, err := prepareValidationModule(staging, module)
+	if err != nil {
+		return ValidatedPlan{}, invalid("module_staging_failed", "/validation/typecheck", err)
+	}
+	candidateOverlay, manualSnapshots, err := candidateValidationOverlay(repository, resolvedPlan.candidates)
+	if err != nil {
+		return ValidatedPlan{}, err
 	}
 	overlay := mergeOverlay(generatedOverlay, candidateOverlay)
 	wiringPath, wiringContent, err := renderWiringValidation(resolvedPlan, repository)
@@ -97,7 +110,7 @@ func Validate(ctx context.Context, plan Plan, input ValidationInput) (ValidatedP
 	if err != nil {
 		return ValidatedPlan{}, invalid("go_environment_invalid", "/validation/environment", err)
 	}
-	config := &packages.Config{Context: ctx, Dir: filepath.Join(repository, filepath.FromSlash(resolvedPlan.serviceRoot)), Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo, Overlay: overlay, Env: closedEnvironment, BuildFlags: []string{"-mod=readonly"}}
+	config := &packages.Config{Context: ctx, Dir: filepath.Join(repository, filepath.FromSlash(resolvedPlan.serviceRoot)), Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo, Overlay: overlay, Env: closedEnvironment, BuildFlags: []string{"-mod=mod", "-modfile=" + validationModFile}}
 	loaded, err := packages.Load(config, "./internal/logic/...")
 	if err != nil {
 		return ValidatedPlan{}, invalid("typecheck_failed", "/validation/typecheck", err)
@@ -116,16 +129,20 @@ func Validate(ctx context.Context, plan Plan, input ValidationInput) (ValidatedP
 		return ValidatedPlan{}, invalid("rpc_go_dependency_missing", "/validation/typecheck", nil)
 	}
 	readFiles := collectReadFiles(repository, loaded, overlay)
+	readFiles = appendValidatedFiles(readFiles, manualSnapshots...)
 	readFiles = appendValidatedFiles(readFiles, module.files...)
-	canonicalInput := validationCanonicalInput{PlanDigest: resolvedPlan.digest, RPCGoTool: input.RPCGoTool, GoTool: input.GoTool, Environment: provider, WiringDigest: provenance.SHA256(wiringContent), ReadFiles: readFiles}
-	for _, candidate := range resolvedPlan.candidates {
-		canonicalInput.CandidateDigests = append(canonicalInput.CandidateDigests, candidate.digest)
+	resolvedModuleFiles, err := validationModuleDigests(validationModFile)
+	if err != nil {
+		return ValidatedPlan{}, invalid("module_staging_failed", "/validation/typecheck", err)
 	}
+	readFiles = appendValidatedFiles(readFiles, resolvedModuleFiles...)
+	canonicalInput := validationCanonicalInput{PlanDigest: resolvedPlan.digest, RPCGoTool: input.RPCGoTool, GoTool: input.GoTool, RPCEnvironment: rpcProvider, GoEnvironment: goProvider, WiringDigest: provenance.SHA256(wiringContent), ReadFiles: readFiles}
+	canonicalInput.CandidateDigests = validationArtifactDigests(resolvedPlan, rpcInputs)
 	canonical, err := canonicalValidation(canonicalInput)
 	if err != nil {
 		return ValidatedPlan{}, err
 	}
-	state := &validatedPlanState{plan: resolvedPlan, digest: provenance.SHA256(canonical)}
+	state := &validatedPlanState{plan: resolvedPlan, digest: provenance.SHA256(canonical), contents: make(map[string][]byte, len(resolvedPlan.candidates)+len(rpcInputs)), sources: append([]provenance.Source(nil), rpcSources...)}
 	helperID, helperPath := tenantHelperIdentity(resolvedPlan.layout)
 	for _, c := range resolvedPlan.candidates {
 		input := transaction.ArtifactInput{ID: c.id, Path: c.path, Owner: c.owner, Digest: c.digest, Sources: append([]provenance.SourceRef(nil), c.sources...), StalePolicy: map[bool]artifact.StalePolicy{true: artifact.StaleRetain, false: artifact.StaleDeleteIfUnmodified}[c.manual], CreateManual: c.manual && !c.overwrite, OverwriteManual: c.manual && c.overwrite}
@@ -133,13 +150,175 @@ func Validate(ctx context.Context, plan Plan, input ValidationInput) (ValidatedP
 			input.Probe = tenantHelperOwnershipProbe{id: c.id, path: c.path}
 		}
 		state.transactionInput = append(state.transactionInput, input)
+		state.contents[c.path] = append([]byte(nil), c.content...)
+	}
+	for _, rpcInput := range rpcInputs {
+		rpcInput.Probe = unifiedRPCOwnershipProbe{id: rpcInput.ID, path: rpcInput.Path, protoPath: resolvedPlan.protoPath, packageName: resolvedPlan.pbPackage}
+		state.transactionInput = append(state.transactionInput, rpcInput)
+		state.contents[rpcInput.Path] = append([]byte(nil), rpcContents[rpcInput.Path]...)
 	}
 	return ValidatedPlan{state: state}, nil
 }
 
+const maxManualCandidateBytes = 16 << 20
+
+func candidateValidationOverlay(repository string, candidates []candidate) (map[string][]byte, []validatedFile, error) {
+	root, err := os.OpenRoot(repository)
+	if err != nil {
+		return nil, nil, invalid("candidate_source_invalid", "/validation/repositoryRoot", err)
+	}
+	defer root.Close()
+	overlay := make(map[string][]byte, len(candidates))
+	var snapshots []validatedFile
+	for _, candidate := range candidates {
+		content := append([]byte(nil), candidate.content...)
+		if candidate.manual && !candidate.overwrite {
+			existing, found, readErr := readManualCandidate(root, candidate.path)
+			if readErr != nil {
+				return nil, nil, readErr
+			}
+			if found {
+				content = existing
+				snapshots = append(snapshots, validatedFile{Path: candidate.path, Digest: provenance.SHA256(existing)})
+			}
+		}
+		overlay[filepath.Join(repository, filepath.FromSlash(candidate.path))] = content
+	}
+	return overlay, snapshots, nil
+}
+
+func readManualCandidate(root *os.Root, name string) ([]byte, bool, error) {
+	before, err := root.Lstat(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil || !safeManualCandidate(before) {
+		return nil, false, invalid("candidate_source_invalid", "/validation/repositoryRoot", errors.Join(err, os.ErrInvalid))
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, false, invalid("candidate_source_invalid", "/validation/repositoryRoot", err)
+	}
+	opened, statErr := file.Stat()
+	if statErr != nil || !safeManualCandidate(opened) || !os.SameFile(before, opened) {
+		_ = file.Close()
+		return nil, false, invalid("candidate_source_invalid", "/validation/repositoryRoot", errors.Join(statErr, os.ErrInvalid))
+	}
+	content, readErr := io.ReadAll(io.LimitReader(file, maxManualCandidateBytes+1))
+	closeErr := file.Close()
+	after, afterErr := root.Lstat(name)
+	if readErr != nil || closeErr != nil || afterErr != nil || len(content) > maxManualCandidateBytes || !safeManualCandidate(after) || !os.SameFile(opened, after) || before.Size() != opened.Size() || opened.Size() != after.Size() || int64(len(content)) != opened.Size() {
+		return nil, false, invalid("candidate_source_invalid", "/validation/repositoryRoot", errors.Join(readErr, closeErr, afterErr, os.ErrInvalid))
+	}
+	return content, true, nil
+}
+
+func safeManualCandidate(info os.FileInfo) bool {
+	return info != nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() && info.Size() >= 0 && info.Size() <= maxManualCandidateBytes
+}
+
+func validationArtifactDigests(plan *planState, rpcInputs []transaction.ArtifactInput) []provenance.Digest {
+	result := make([]provenance.Digest, 0, len(plan.candidates)+len(rpcInputs))
+	for _, candidate := range plan.candidates {
+		result = append(result, candidate.digest)
+	}
+	stable := append([]transaction.ArtifactInput(nil), rpcInputs...)
+	sort.Slice(stable, func(i, j int) bool {
+		if stable[i].ID != stable[j].ID {
+			return stable[i].ID < stable[j].ID
+		}
+		return stable[i].Path < stable[j].Path
+	})
+	for _, input := range stable {
+		result = append(result, input.Digest)
+	}
+	return result
+}
+
+type crudProtocolResolver struct {
+	path    string
+	content []byte
+}
+
+func (r crudProtocolResolver) Open(_ context.Context, name string) (io.ReadCloser, error) {
+	if name != r.path {
+		return nil, os.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(r.content)), nil
+}
+
+func generateRPCContracts(ctx context.Context, repository, staging string, plan *planState, input ValidationInput) ([]transaction.ArtifactInput, map[string][]byte, []provenance.Source, error) {
+	protoTarget := filepath.Join(staging, filepath.FromSlash(plan.protoPath))
+	if err := os.MkdirAll(filepath.Dir(protoTarget), 0o700); err != nil {
+		return nil, nil, nil, invalid("staging_write_failed", "/validation/stagingRoot", err)
+	}
+	if err := os.WriteFile(protoTarget, plan.protoContent, 0o600); err != nil {
+		return nil, nil, nil, invalid("staging_write_failed", "/validation/stagingRoot", err)
+	}
+	document, err := genprotocol.Compile(ctx, genprotocol.CompileOptions{
+		ServiceID:  plan.layout.ServiceID,
+		EntryFiles: []string{plan.protoPath},
+		Resolver:   crudProtocolResolver{path: plan.protoPath, content: plan.protoContent},
+	})
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = errors.Join(err, ctxErr)
+		}
+		return nil, nil, nil, invalid("rpc_go_generation_failed", "/validation/rpcGoTool", err)
+	}
+	contents := map[string][]byte{}
+	inputs, err := rpcgo.Plan(ctx, document, rpcgo.Options{
+		ServiceID: plan.layout.ServiceID, RepositoryRoot: repository, StagingRoot: staging,
+		Emit: func(name string, content []byte) error {
+			contents[name] = append([]byte(nil), content...)
+			return nil
+		}, Tool: input.RPCGoTool, Runner: input.Runner,
+		Environment: append([]toolchain.EnvVar(nil), input.RPCEnvironment...),
+	})
+	if err != nil {
+		return nil, nil, nil, invalid("rpc_go_generation_failed", "/validation/rpcGoTool", err)
+	}
+	return inputs, contents, document.Sources(), nil
+}
+
 type resolvedServiceModule struct {
 	root, importPath, pbDirectory string
+	goMod, goSum                  []byte
 	files                         []validatedFile
+}
+
+func prepareValidationModule(staging string, module resolvedServiceModule) (string, error) {
+	if len(module.goMod) == 0 {
+		return "", os.ErrInvalid
+	}
+	modPath := filepath.Join(staging, ".nexa-crudlogic.mod")
+	if err := os.WriteFile(modPath, module.goMod, 0o600); err != nil {
+		return "", err
+	}
+	if len(module.goSum) != 0 {
+		if err := os.WriteFile(strings.TrimSuffix(modPath, ".mod")+".sum", module.goSum, 0o600); err != nil {
+			return "", err
+		}
+	}
+	return modPath, nil
+}
+
+func validationModuleDigests(modPath string) ([]validatedFile, error) {
+	result := make([]validatedFile, 0, 2)
+	for _, item := range []struct{ path, identity string }{
+		{modPath, "$VALIDATION/go.mod"},
+		{strings.TrimSuffix(modPath, ".mod") + ".sum", "$VALIDATION/go.sum"},
+	} {
+		content, err := os.ReadFile(item.path)
+		if errors.Is(err, os.ErrNotExist) && item.identity == "$VALIDATION/go.sum" {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, validatedFile{Path: item.identity, Digest: provenance.SHA256(content)})
+	}
+	return result, nil
 }
 
 func resolveServiceImport(input *planState, repository string) (*planState, resolvedServiceModule, error) {
@@ -174,7 +353,7 @@ func resolveServiceImport(input *planState, repository string) (*planState, reso
 			if relErr != nil || !filepath.IsLocal(relativeModule) {
 				return nil, resolvedServiceModule{}, invalid("service_module_invalid", "/validation/repositoryRoot", relErr)
 			}
-			module := resolvedServiceModule{root: current, importPath: parsed.Module.Mod.Path, files: []validatedFile{{Path: filepath.ToSlash(relativeModule), Digest: provenance.SHA256(content)}}}
+			module := resolvedServiceModule{root: current, importPath: parsed.Module.Mod.Path, goMod: append([]byte(nil), content...), files: []validatedFile{{Path: filepath.ToSlash(relativeModule), Digest: provenance.SHA256(content)}}}
 			if input.pbImport == "" {
 				module.pbDirectory = ""
 			} else if input.pbImport == module.importPath {
@@ -191,6 +370,7 @@ func resolveServiceImport(input *planState, repository string) (*planState, reso
 			}
 			goSumPath := filepath.Join(current, "go.sum")
 			if goSum, readErr := os.ReadFile(goSumPath); readErr == nil {
+				module.goSum = append([]byte(nil), goSum...)
 				relativeSum, relErr := filepath.Rel(repository, goSumPath)
 				if relErr != nil || !filepath.IsLocal(relativeSum) {
 					return nil, resolvedServiceModule{}, invalid("service_module_invalid", "/validation/repositoryRoot", relErr)
@@ -216,7 +396,7 @@ func resolveServiceImport(input *planState, repository string) (*planState, reso
 	return nil, resolvedServiceModule{}, invalid("service_module_invalid", "/validation/repositoryRoot", os.ErrNotExist)
 }
 
-func collectGeneratedRPCOverlay(staging, repository string, plan *planState, module resolvedServiceModule) (map[string][]byte, error) {
+func collectGeneratedRPCOverlay(staging, repository string, plan *planState, module resolvedServiceModule, scratchPaths map[string]bool) (map[string][]byte, error) {
 	result := map[string][]byte{}
 	if len(plan.protoContent) == 0 {
 		return result, nil
@@ -227,12 +407,26 @@ func collectGeneratedRPCOverlay(staging, repository string, plan *planState, mod
 	}
 	expectedPB = filepath.Clean(expectedPB)
 	protoPath := filepath.Clean(filepath.FromSlash(plan.protoPath))
+	rpcModule := []byte("module example.invalid/nexa/rpc/" + plan.layout.ServiceID + "\n\ngo 1.25.0\n")
 	protoSeen := len(plan.protoContent) == 0
 	err = filepath.WalkDir(staging, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if name == staging || entry.IsDir() {
+		if name == staging {
+			return nil
+		}
+		if entry.IsDir() {
+			if scratchPaths[name] {
+				return fs.SkipDir
+			}
+			if len(scratchPaths) != 0 && name == filepath.Join(staging, ".nexa-env") {
+				return nil
+			}
+			relative, relErr := filepath.Rel(staging, name)
+			if relErr != nil || !filepath.IsLocal(relative) || !generatedDirectoryAllowed(relative, filepath.Dir(protoPath), expectedPB) {
+				return errors.New("generated RPC output contains unknown directory")
+			}
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
@@ -254,6 +448,9 @@ func collectGeneratedRPCOverlay(staging, repository string, plan *planState, mod
 			protoSeen = true
 			return nil
 		}
+		if relative == "go.mod" && bytes.Equal(content, rpcModule) {
+			return nil
+		}
 		if filepath.Ext(relative) != ".go" || filepath.Dir(relative) != expectedPB {
 			return errors.New("generated RPC output escaped expected package")
 		}
@@ -271,6 +468,20 @@ func collectGeneratedRPCOverlay(staging, repository string, plan *planState, mod
 		return nil, errors.New("generated RPC input missing")
 	}
 	return result, nil
+}
+
+func generatedDirectoryAllowed(candidate string, targets ...string) bool {
+	candidate = filepath.Clean(candidate)
+	if candidate == "." || !filepath.IsLocal(candidate) {
+		return false
+	}
+	for _, target := range targets {
+		target = filepath.Clean(target)
+		if target == candidate || target != "." && strings.HasPrefix(target, candidate+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func loadedGeneratedContracts(roots []*packages.Package, importPath string, snapshot crudproto.Snapshot, names protoGoNameSet, generated map[string][]byte) bool {
@@ -392,6 +603,62 @@ func validToolIdentity(value toolchain.Tool) bool {
 	return value.ID != "" && value.Version != "" && value.Executable != "" && value.Probe.ExpectedVersion != ""
 }
 
+type validationScratchGroup struct {
+	role, pointer string
+	tool          toolchain.Tool
+	environment   []toolchain.EnvVar
+}
+
+func validationScratchPath(staging, role string, index int, name string) string {
+	return filepath.Join(staging, ".nexa-env", role+"-"+strconv.Itoa(index)+"-"+strings.ToLower(name))
+}
+
+func materializeValidationScratch(staging string, groups ...validationScratchGroup) (map[string]bool, error) {
+	values := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, group := range groups {
+		byName := make(map[string]string, len(group.environment))
+		for _, item := range group.environment {
+			byName[item.Name] = item.Value
+		}
+		for index, rule := range group.tool.Environment {
+			if rule.Source != toolchain.EnvironmentScratch {
+				continue
+			}
+			value := byName[rule.Name]
+			expected := validationScratchPath(staging, group.role, index, rule.Name)
+			relative, err := filepath.Rel(staging, value)
+			if err != nil || value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value || value != expected || !filepath.IsLocal(relative) || relative == "." || seen[value] {
+				return nil, invalid("scratch_environment_invalid", group.pointer, errors.Join(err, os.ErrInvalid))
+			}
+			seen[value] = true
+			values = append(values, value)
+		}
+	}
+	if len(values) == 0 {
+		return nil, nil
+	}
+	scratchRoot := filepath.Join(staging, ".nexa-env")
+	if _, err := os.Lstat(scratchRoot); !errors.Is(err, os.ErrNotExist) {
+		return nil, invalid("scratch_environment_invalid", "/validation", errors.Join(err, os.ErrExist))
+	}
+	root, err := os.OpenRoot(staging)
+	if err != nil {
+		return nil, invalid("scratch_environment_invalid", "/validation", err)
+	}
+	defer root.Close()
+	for _, value := range values {
+		relative, relErr := filepath.Rel(staging, value)
+		if relErr != nil {
+			return nil, invalid("scratch_environment_invalid", "/validation", relErr)
+		}
+		if mkdirErr := root.MkdirAll(relative, 0o700); mkdirErr != nil {
+			return nil, invalid("scratch_environment_invalid", "/validation", mkdirErr)
+		}
+	}
+	return seen, nil
+}
+
 func validateGoProvider(value toolchain.Tool, environment []toolchain.EnvVar) (string, []validationEnvironment, map[string]string, error) {
 	if !validToolIdentity(value) || value.ID != "go" || len(value.Args) != 0 || !sameStrings(value.InputScopes, []string{"repository", "scratch"}) || !sameStrings(value.WriteScopes, []string{"scratch"}) || !sameStrings(value.Probe.Args, []string{"version"}) {
 		return "", nil, nil, invalid("go_tool_invalid", "/validation/goTool", nil)
@@ -458,6 +725,41 @@ func validateGoProvider(value toolchain.Tool, environment []toolchain.EnvVar) (s
 	return executable, provider, values, nil
 }
 
+func validateDeclaredEnvironment(tool toolchain.Tool, environment []toolchain.EnvVar, pointer string) ([]validationEnvironment, error) {
+	if len(tool.Environment) != len(environment) {
+		return nil, invalid("rpc_environment_invalid", pointer, nil)
+	}
+	rules := make(map[string]toolchain.EnvironmentRule, len(tool.Environment))
+	for _, rule := range tool.Environment {
+		if rule.Name == "" || (rule.Source != toolchain.EnvironmentHost && rule.Source != toolchain.EnvironmentScratch && rule.Source != toolchain.EnvironmentFixed) || rule.Source != toolchain.EnvironmentFixed && rule.FixedValue != "" {
+			return nil, invalid("rpc_environment_invalid", pointer, nil)
+		}
+		if _, duplicate := rules[rule.Name]; duplicate {
+			return nil, invalid("rpc_environment_invalid", pointer, nil)
+		}
+		rules[rule.Name] = rule
+	}
+	result := make([]validationEnvironment, 0, len(environment))
+	seen := make(map[string]bool, len(environment))
+	for _, item := range environment {
+		rule, ok := rules[item.Name]
+		if !ok || seen[item.Name] || rule.Source == toolchain.EnvironmentFixed && item.Value != rule.FixedValue || rule.Source != toolchain.EnvironmentFixed && item.Value == "" {
+			return nil, invalid("rpc_environment_invalid", pointer, nil)
+		}
+		seen[item.Name] = true
+		semantic := rule.FixedValue
+		switch rule.Source {
+		case toolchain.EnvironmentScratch:
+			semantic = "$STAGING/" + rule.Name
+		case toolchain.EnvironmentHost:
+			semantic = "$HOST/" + rule.Name
+		}
+		result = append(result, validationEnvironment{Name: rule.Name, Source: rule.Source, Value: semantic})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result, nil
+}
+
 func sameStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -521,7 +823,8 @@ func canonicalValidation(input validationCanonicalInput) ([]byte, error) {
 	type wire struct {
 		PlanDigest, WiringDigest string
 		RPCGoTool, GoTool        toolWire
-		Environment              []environmentWire
+		RPCEnvironment           []environmentWire
+		GoEnvironment            []environmentWire
 		Candidates               []string
 		Files                    []fileWire
 	}
@@ -534,8 +837,11 @@ func canonicalValidation(input validationCanonicalInput) ([]byte, error) {
 		return result
 	}
 	value := wire{PlanDigest: input.PlanDigest.String(), WiringDigest: input.WiringDigest.String(), RPCGoTool: canonicalTool(input.RPCGoTool), GoTool: canonicalTool(input.GoTool)}
-	for _, item := range input.Environment {
-		value.Environment = append(value.Environment, environmentWire{Name: item.Name, Source: string(item.Source), Value: item.Value})
+	for _, item := range input.RPCEnvironment {
+		value.RPCEnvironment = append(value.RPCEnvironment, environmentWire{Name: item.Name, Source: string(item.Source), Value: item.Value})
+	}
+	for _, item := range input.GoEnvironment {
+		value.GoEnvironment = append(value.GoEnvironment, environmentWire{Name: item.Name, Source: string(item.Source), Value: item.Value})
 	}
 	for _, digest := range input.CandidateDigests {
 		value.Candidates = append(value.Candidates, digest.String())
@@ -544,7 +850,8 @@ func canonicalValidation(input validationCanonicalInput) ([]byte, error) {
 		value.Files = append(value.Files, fileWire{file.Path, file.Digest.String()})
 	}
 	sort.Strings(value.Candidates)
-	sort.Slice(value.Environment, func(i, j int) bool { return value.Environment[i].Name < value.Environment[j].Name })
+	sort.Slice(value.RPCEnvironment, func(i, j int) bool { return value.RPCEnvironment[i].Name < value.RPCEnvironment[j].Name })
+	sort.Slice(value.GoEnvironment, func(i, j int) bool { return value.GoEnvironment[i].Name < value.GoEnvironment[j].Name })
 	sort.Slice(value.Files, func(i, j int) bool { return value.Files[i].Path < value.Files[j].Path })
 	raw, err := json.Marshal(value)
 	if err != nil {

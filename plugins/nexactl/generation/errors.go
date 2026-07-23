@@ -10,6 +10,7 @@ import (
 	"github.com/nxnminieye/nexa/generation/apigo"
 	"github.com/nxnminieye/nexa/generation/artifact"
 	"github.com/nxnminieye/nexa/generation/composition"
+	"github.com/nxnminieye/nexa/generation/crudlogic"
 	"github.com/nxnminieye/nexa/generation/crudproto"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
@@ -131,10 +132,12 @@ func projectOwnerError(owner error) (projected error) {
 			}
 			return canceledError(staged.Stage(), staged.Reason(), staged.Pointer(), source)
 		}
-	} else if errors.Is(err, context.Canceled) {
-		return canceledError("context", "context_canceled", "/context", "")
-	} else if errors.Is(err, context.DeadlineExceeded) {
-		return canceledError("context", "context_deadline_exceeded", "/context", "")
+		if errors.Is(err, context.Canceled) {
+			return canceledError("context", "context_canceled", "/context", "")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return canceledError("context", "context_deadline_exceeded", "/context", "")
+		}
 	}
 	var transactionError *transaction.Error
 	if errors.As(err, &transactionError) {
@@ -149,9 +152,19 @@ func projectOwnerError(owner error) (projected error) {
 		}
 		return generationError(transactionError.Code(), category, "generation transaction failed", transactionError.Stage(), transactionError.Reason(), transactionError.Pointer(), "")
 	}
+	if errors.Is(err, context.Canceled) {
+		return canceledError("context", "context_canceled", "/context", "")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return canceledError("context", "context_deadline_exceeded", "/context", "")
+	}
 	var crudError *crudproto.Error
 	if errors.As(err, &crudError) {
 		return generationDiagnosticError(crudError.Code(), protocol.CategoryInput, "CRUD Proto generation failed", crudError.Stage(), crudError.Reason(), crudError.Pointer(), crudError.Source(), crudError.ToolID(), crudError.ExitCode(), crudError.Diagnostic())
+	}
+	var logicError *crudlogic.Error
+	if errors.As(err, &logicError) {
+		return generationError(logicError.Code(), protocol.CategoryInput, "CRUD logic generation failed", logicError.Stage(), logicError.Reason(), logicError.Pointer(), "")
 	}
 	var protocolError *genprotocol.Error
 	if errors.As(err, &protocolError) {

@@ -48,7 +48,7 @@ func TestNewDefinesGenerationCapabilities(t *testing.T) {
 		t.Fatalf("descriptor = %#v", spec.Descriptor)
 	}
 	if !reflect.DeepEqual(spec.Descriptor.Provides, []plugin.Capability{
-		{ID: "generation.crud-proto", Version: "v1.0.0"},
+		{ID: "generation.crud", Version: "v1.0.0"},
 		{ID: "generation.ent", Version: "v1.0.0"},
 		{ID: "generation.rpc", Version: "v1.0.0"},
 		{ID: "generation.api", Version: "v1.0.0"},
@@ -75,25 +75,25 @@ func TestNewDefinesGenerationCapabilities(t *testing.T) {
 			tools:      []plugin.DelegatedToolSpec{entTool},
 		},
 		{
-			path:       []string{"generation", "crud-proto", "plan"},
-			flags:      []string{"repo-root", "provider", "service"},
-			required:   []bool{true, true, true},
+			path:       []string{"generation", "crud", "plan"},
+			flags:      []string{"repo-root", "provider", "service", "overwrite-logic"},
+			required:   []bool{true, true, true, false},
 			sideEffect: plugin.SideEffectRepositoryRead,
-			tools:      []plugin.DelegatedToolSpec{crudTool},
+			tools:      []plugin.DelegatedToolSpec{crudTool, rpcTool},
 		},
 		{
-			path:       []string{"generation", "crud-proto", "check"},
-			flags:      []string{"repo-root", "provider", "service"},
-			required:   []bool{true, true, true},
+			path:       []string{"generation", "crud", "check"},
+			flags:      []string{"repo-root", "provider", "service", "overwrite-logic"},
+			required:   []bool{true, true, true, false},
 			sideEffect: plugin.SideEffectRepositoryRead,
-			tools:      []plugin.DelegatedToolSpec{crudTool},
+			tools:      []plugin.DelegatedToolSpec{crudTool, rpcTool},
 		},
 		{
-			path:       []string{"generation", "crud-proto", "write"},
-			flags:      []string{"repo-root", "provider", "service", "plan-digest", "lock-digest"},
-			required:   []bool{true, true, true, true, false},
+			path:       []string{"generation", "crud", "write"},
+			flags:      []string{"repo-root", "provider", "service", "overwrite-logic", "plan-digest", "lock-digest"},
+			required:   []bool{true, true, true, false, true, false},
 			sideEffect: plugin.SideEffectRepositoryWrite,
-			tools:      []plugin.DelegatedToolSpec{crudTool},
+			tools:      []plugin.DelegatedToolSpec{crudTool, rpcTool},
 		},
 		{
 			path:       []string{"generation", "rpc", "plan"},
@@ -128,7 +128,11 @@ func TestNewDefinesGenerationCapabilities(t *testing.T) {
 			t.Fatalf("command %d flags = %#v", index, command.Flags)
 		}
 		for flagIndex, flag := range command.Flags {
-			if flag.Name != want[index].flags[flagIndex] || flag.Type != plugin.FlagString || flag.Required != want[index].required[flagIndex] {
+			wantType := plugin.FlagString
+			if flag.Name == "overwrite-logic" {
+				wantType = plugin.FlagBool
+			}
+			if flag.Name != want[index].flags[flagIndex] || flag.Type != wantType || flag.Required != want[index].required[flagIndex] {
 				t.Fatalf("command %d flag %d = %#v", index, flagIndex, flag)
 			}
 		}
@@ -201,6 +205,60 @@ func TestServiceProjectMultiTenantAndLogicRootShape(t *testing.T) {
 	}
 }
 
+func TestCRUDCommandReplacesCRUDProtoWithoutAlias(t *testing.T) {
+	candidate, err := generation.New(generation.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities := map[string]bool{}
+	for _, capability := range candidate.Spec().Descriptor.Provides {
+		capabilities[capability.ID] = true
+	}
+	if !capabilities["generation.crud"] || capabilities["generation.crud-proto"] {
+		t.Fatalf("capabilities = %#v", capabilities)
+	}
+	actions := map[string]bool{}
+	for _, command := range candidate.Spec().Commands {
+		path := strings.Join(command.Path, " ")
+		if strings.HasPrefix(path, "generation crud-proto ") {
+			t.Fatalf("legacy command remains: %q", path)
+		}
+		if strings.HasPrefix(path, "generation crud ") {
+			actions[command.Path[2]] = true
+		}
+	}
+	if !reflect.DeepEqual(actions, map[string]bool{"plan": true, "check": true, "write": true}) {
+		t.Fatalf("crud actions = %#v", actions)
+	}
+}
+
+func TestCRUDCommandsExposeOverwriteLogicOnPlanCheckWrite(t *testing.T) {
+	candidate, err := generation.New(generation.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, command := range candidate.Spec().Commands {
+		if len(command.Path) != 3 || command.Path[0] != "generation" || command.Path[1] != "crud" {
+			continue
+		}
+		found++
+		var overwrite *plugin.FlagSpec
+		for index := range command.Flags {
+			if command.Flags[index].Name == "overwrite-logic" {
+				overwrite = &command.Flags[index]
+				break
+			}
+		}
+		if overwrite == nil || overwrite.Type != plugin.FlagBool || overwrite.Required || string(overwrite.Default) != "false" {
+			t.Fatalf("%v overwrite flag = %#v", command.Path, overwrite)
+		}
+	}
+	if found != 3 {
+		t.Fatalf("crud command count = %d", found)
+	}
+}
+
 func TestZeroProviderInvocationReturnsStableUnavailableEnvelope(t *testing.T) {
 	candidate, err := generation.New(generation.Options{})
 	if err != nil {
@@ -218,7 +276,7 @@ func TestZeroProviderInvocationReturnsStableUnavailableEnvelope(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	exit := composed.Execute(context.Background(), []string{
-		"generation", "crud-proto", "plan",
+		"generation", "crud", "plan",
 		"--repo-root", t.TempDir(),
 		"--provider", "consumer",
 		"--service", "accounts",
@@ -260,7 +318,7 @@ func TestCommandResolvesOnlyTheSelectedProviderOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	envelope, stderr, exit := executeGenerationPlugin(t, candidate,
-		"generation", "crud-proto", "plan",
+		"generation", "crud", "plan",
 		"--repo-root", t.TempDir(), "--provider", "second", "--service", "accounts", "--json",
 	)
 	if exit != 3 || stderr != "" || envelope.Error == nil || envelope.Error.Code != "fact_source_missing" {
@@ -808,7 +866,7 @@ func TestCommandRejectsMissingAndDuplicateServices(t *testing.T) {
 				t.Fatal(err)
 			}
 			envelope, stderr, exit := executeGenerationPlugin(t, candidate,
-				"generation", "crud-proto", "plan",
+				"generation", "crud", "plan",
 				"--repo-root", t.TempDir(), "--provider", "consumer", "--service", "accounts", "--json",
 			)
 			if exit != 3 || stderr != "" || envelope.OK || envelope.Error == nil || envelope.Error.Code != test.code || envelope.Error.Category != test.category {

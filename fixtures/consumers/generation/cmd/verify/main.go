@@ -70,7 +70,7 @@ func (p consumerProvider) Resolve(context.Context, string) (generation.Project, 
 			{ServiceID: "core", APIEntry: "backend/core/desc/core.api", APIGoTool: p.tools.api},
 			{
 				ServiceID: "account", EntSchemaDir: "backend/account/ent/schema", ProtoEntry: "backend/account/desc/account.proto",
-				EntGenerateTool: p.tools.entGenerate, EntCRUDTool: p.tools.entCRUD, RPCGoTool: p.tools.rpc,
+				LogicRoot: "backend/account/internal/logic", EntGenerateTool: p.tools.entGenerate, EntCRUDTool: p.tools.entCRUD, RPCGoTool: p.tools.rpc,
 			},
 		},
 	}, nil
@@ -114,7 +114,7 @@ func verifyNoProvider(repository string) {
 		panic(err)
 	}
 	cli := newHost(buildPlugin)
-	args := []string{"generation", "crud-proto", "plan", "--repo-root", repository, "--provider", providerID, "--service", "account"}
+	args := []string{"generation", "crud", "plan", "--repo-root", repository, "--provider", providerID, "--service", "account"}
 	first, second := invoke(cli, args...), invoke(cli, args...)
 	for _, result := range []commandResult{first, second} {
 		if result.exit == 0 || result.envelope.OK || result.envelope.Error == nil || result.envelope.Error.Code != "capability_unavailable" || result.envelope.Error.Domain != "nexactl.generation" || result.envelope.Error.Category != protocol.CategoryUnavailable {
@@ -166,29 +166,28 @@ func verifyFullGeneration(repository string, tools projectTools) {
 	}
 	cli := newHost(buildPlugin)
 	requireOK(invoke(cli, "gen", "ent", "--repo-root", repository, "--provider", providerID, "--service", "account"))
+	tidyGeneratedModule(repository)
 
-	checks := map[string]commandResult{}
 	crudFlags := []string{"--repo-root", repository, "--provider", providerID, "--service", "account"}
-	crudPlan := requireOK(invoke(cli, append([]string{"generation", "crud-proto", "plan"}, crudFlags...)...))
+	crudPlan := requireOK(invoke(cli, append([]string{"generation", "crud", "plan"}, crudFlags...)...))
 	crud := decodeView(crudPlan.result)
 	if len(crud.ControlSources) != 1 || crud.ControlSources[0].AfterDigest == "" {
 		panic("CRUD plan omitted its compatibility decision")
 	}
-	requireOK(invoke(cli, append([]string{"generation", "crud-proto", "write"}, append(crudFlags, "--plan-digest", crud.PlanDigest, "--lock-digest", crud.ControlSources[0].AfterDigest)...)...))
-	checks["crud"] = requireClean(invoke(cli, append([]string{"generation", "crud-proto", "check"}, crudFlags...)...))
+	requireOK(invoke(cli, append([]string{"generation", "crud", "write"}, append(crudFlags, "--plan-digest", crud.PlanDigest, "--lock-digest", crud.ControlSources[0].AfterDigest)...)...))
 
 	rpcFlags := []string{"--repo-root", repository, "--provider", providerID, "--service", "account"}
-	checks["rpc"] = planWriteCheck(cli, []string{"generation", "rpc"}, rpcFlags)
-	verifyGeneratedProto(repository)
+	planWrite(cli, []string{"generation", "rpc"}, rpcFlags)
 	apiFlags := []string{"--repo-root", repository, "--provider", providerID, "--core-service", "core"}
-	checks["api"] = planWriteCheck(cli, []string{"generation", "api"}, apiFlags)
-	verifyGeneratedAPI(repository, []string{"account.get", "health.get"})
+	planWrite(cli, []string{"generation", "api"}, apiFlags)
 
 	manifestFlags := []string{"--repo-root", repository, "--provider", providerID, "--service", "account"}
 	manifestBefore := requireOK(invoke(cli, append([]string{"generation", "service-manifest", "check"}, manifestFlags...)...))
 	manifestPlan := decodeView(manifestBefore.result)
 	requireOK(invoke(cli, append([]string{"generation", "service-manifest", "write"}, append(manifestFlags, "--plan-digest", manifestPlan.PlanDigest)...)...))
-	checks["service"] = requireClean(invoke(cli, append([]string{"generation", "service-manifest", "check"}, manifestFlags...)...))
+
+	verifyGeneratedProto(repository)
+	verifyGeneratedAPI(repository, []string{"account.get", "health.get"})
 	verifyServiceManifest(repository)
 
 	paths := []string{
@@ -203,14 +202,18 @@ func verifyFullGeneration(repository string, tools projectTools) {
 		"backend/account/generated/service-manifest.json",
 	}
 	before := snapshot(repository, paths)
-	repeated := map[string]commandResult{
-		"crud":    requireClean(invoke(cli, append([]string{"generation", "crud-proto", "check"}, crudFlags...)...)),
-		"rpc":     requireClean(invoke(cli, append([]string{"generation", "rpc", "check"}, rpcFlags...)...)),
-		"api":     requireClean(invoke(cli, append([]string{"generation", "api", "check"}, apiFlags...)...)),
-		"service": requireClean(invoke(cli, append([]string{"generation", "service-manifest", "check"}, manifestFlags...)...)),
+	runChecks := func() map[string]commandResult {
+		return map[string]commandResult{
+			"crud":    requireClean(invoke(cli, append([]string{"generation", "crud", "check"}, crudFlags...)...)),
+			"rpc":     requireClean(invoke(cli, append([]string{"generation", "rpc", "check"}, rpcFlags...)...)),
+			"api":     requireClean(invoke(cli, append([]string{"generation", "api", "check"}, apiFlags...)...)),
+			"service": requireClean(invoke(cli, append([]string{"generation", "service-manifest", "check"}, manifestFlags...)...)),
+		}
 	}
-	for id, first := range checks {
-		if !bytes.Equal(first.result, repeated[id].result) {
+	first := runChecks()
+	second := runChecks()
+	for id, result := range first {
+		if !bytes.Equal(result.result, second[id].result) {
 			panic("generation check result drifted: " + id)
 		}
 	}
@@ -219,11 +222,19 @@ func verifyFullGeneration(repository string, tools projectTools) {
 	}
 }
 
-func planWriteCheck(cli *host.Host, base, flags []string) commandResult {
+func tidyGeneratedModule(repository string) {
+	command := exec.Command("go", "mod", "tidy")
+	command.Dir = repository
+	command.Env = os.Environ()
+	if output, err := command.CombinedOutput(); err != nil {
+		panic(fmt.Sprintf("go mod tidy failed: %v\n%s", err, output))
+	}
+}
+
+func planWrite(cli *host.Host, base, flags []string) {
 	plan := requireOK(invoke(cli, commandArgs(base, "plan", flags)...))
 	view := decodeView(plan.result)
 	requireOK(invoke(cli, commandArgs(base, "write", append(flags, "--plan-digest", view.PlanDigest))...))
-	return requireClean(invoke(cli, commandArgs(base, "check", flags)...))
 }
 
 func commandArgs(base []string, action string, flags []string) []string {
