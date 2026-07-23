@@ -13,6 +13,8 @@ import (
 type presignAPI interface {
 	PresignPutObject(context.Context, *awss3.PutObjectInput, ...func(*awss3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
 	PresignGetObject(context.Context, *awss3.GetObjectInput, ...func(*awss3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+	PresignHeadObject(context.Context, *awss3.HeadObjectInput, ...func(*awss3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
+	PresignDeleteObject(context.Context, *awss3.DeleteObjectInput, ...func(*awss3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
 }
 
 func (c *Client) PresignUpload(ctx context.Context, request cores3.PresignUploadRequest) (cores3.PresignResult, error) {
@@ -67,6 +69,58 @@ func (c *Client) PresignDownload(ctx context.Context, request cores3.PresignDown
 			return cores3.PresignResult{}, cores3.ProjectPresignFailure("presign_download_canceled", contextError)
 		}
 		return cores3.PresignResult{}, cores3.ProjectPresignFailure("presign_download_failed", nil)
+	}
+	return projectPresignResult(output)
+}
+
+func (c *Client) PresignHead(ctx context.Context, request cores3.PresignHeadRequest) (cores3.PresignResult, error) {
+	if nilValue(ctx) {
+		return cores3.PresignResult{}, cores3.ProjectValidation("context_nil", "/context")
+	}
+	if !request.Valid() {
+		return cores3.PresignResult{}, cores3.ProjectValidation("request_invalid", "/request")
+	}
+	if err := validatePresignExpires(request.Expires()); err != nil {
+		return cores3.PresignResult{}, err
+	}
+	if c == nil || nilValue(c.presign) {
+		return cores3.PresignResult{}, cores3.ProjectValidation("client_invalid", "/client")
+	}
+	ref := request.Ref()
+	output, err := c.presign.PresignHeadObject(ctx, &awss3.HeadObjectInput{Bucket: sdkaws.String(ref.Bucket()), Key: sdkaws.String(ref.Key())}, func(options *awss3.PresignOptions) {
+		options.Expires = request.Expires()
+	})
+	if err != nil {
+		if contextError := projectedContext(ctx, err); contextError != nil {
+			return cores3.PresignResult{}, cores3.ProjectPresignFailure("presign_head_canceled", contextError)
+		}
+		return cores3.PresignResult{}, cores3.ProjectPresignFailure("presign_head_failed", nil)
+	}
+	return projectPresignResult(output)
+}
+
+func (c *Client) PresignDelete(ctx context.Context, request cores3.PresignDeleteRequest) (cores3.PresignResult, error) {
+	if nilValue(ctx) {
+		return cores3.PresignResult{}, cores3.ProjectValidation("context_nil", "/context")
+	}
+	if !request.Valid() {
+		return cores3.PresignResult{}, cores3.ProjectValidation("request_invalid", "/request")
+	}
+	if err := validatePresignExpires(request.Expires()); err != nil {
+		return cores3.PresignResult{}, err
+	}
+	if c == nil || nilValue(c.presign) {
+		return cores3.PresignResult{}, cores3.ProjectValidation("client_invalid", "/client")
+	}
+	ref := request.Ref()
+	output, err := c.presign.PresignDeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: sdkaws.String(ref.Bucket()), Key: sdkaws.String(ref.Key())}, func(options *awss3.PresignOptions) {
+		options.Expires = request.Expires()
+	})
+	if err != nil {
+		if contextError := projectedContext(ctx, err); contextError != nil {
+			return cores3.PresignResult{}, cores3.ProjectPresignFailure("presign_delete_canceled", contextError)
+		}
+		return cores3.PresignResult{}, cores3.ProjectPresignFailure("presign_delete_failed", nil)
 	}
 	return projectPresignResult(output)
 }

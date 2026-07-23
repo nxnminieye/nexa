@@ -34,6 +34,8 @@ type ClientOptions struct {
 type s3API interface {
 	GetObject(context.Context, *awss3.GetObjectInput, ...func(*awss3.Options)) (*awss3.GetObjectOutput, error)
 	PutObject(context.Context, *awss3.PutObjectInput, ...func(*awss3.Options)) (*awss3.PutObjectOutput, error)
+	HeadObject(context.Context, *awss3.HeadObjectInput, ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error)
+	DeleteObject(context.Context, *awss3.DeleteObjectInput, ...func(*awss3.Options)) (*awss3.DeleteObjectOutput, error)
 }
 
 // Client adapts the official AWS SDK for Go v2 to the transport-neutral ports.
@@ -341,6 +343,63 @@ func (c *Client) Put(ctx context.Context, request cores3.PutRequest) (cores3.Wri
 		return cores3.WriteResult{}, cores3.ProjectWriteFailure("response_nil", nil)
 	}
 	return cores3.NewWriteResult(cores3.WriteResultSpec{ETag: sdkaws.ToString(output.ETag), VersionID: sdkaws.ToString(output.VersionId)}), nil
+}
+
+func (c *Client) Head(ctx context.Context, ref cores3.ObjectRef) (cores3.ObjectInfo, error) {
+	if nilValue(ctx) {
+		return cores3.ObjectInfo{}, cores3.ProjectValidation("context_nil", "/context")
+	}
+	if !ref.Valid() {
+		return cores3.ObjectInfo{}, cores3.ProjectValidation("object_ref_invalid", "/ref")
+	}
+	if c == nil || nilValue(c.api) {
+		return cores3.ObjectInfo{}, cores3.ProjectValidation("client_invalid", "/client")
+	}
+	output, err := c.api.HeadObject(ctx, &awss3.HeadObjectInput{Bucket: sdkaws.String(ref.Bucket()), Key: sdkaws.String(ref.Key())})
+	if err != nil {
+		if contextError := projectedContext(ctx, err); contextError != nil {
+			return cores3.ObjectInfo{}, cores3.ProjectReadFailure("head_canceled", contextError)
+		}
+		if isNotFound(err) {
+			return cores3.ObjectInfo{}, cores3.ProjectNotFound()
+		}
+		return cores3.ObjectInfo{}, cores3.ProjectReadFailure("head_failed", nil)
+	}
+	if output == nil {
+		return cores3.ObjectInfo{}, cores3.ProjectReadFailure("response_nil", nil)
+	}
+	info, infoErr := cores3.NewObjectInfo(cores3.ObjectInfoSpec{
+		ContentType:   sdkaws.ToString(output.ContentType),
+		ContentLength: sdkaws.ToInt64(output.ContentLength),
+		ETag:          sdkaws.ToString(output.ETag),
+		VersionID:     sdkaws.ToString(output.VersionId),
+		LastModified:  sdkaws.ToTime(output.LastModified),
+		Metadata:      output.Metadata,
+	})
+	if infoErr != nil {
+		return cores3.ObjectInfo{}, cores3.ProjectReadFailure("response_invalid", nil)
+	}
+	return info, nil
+}
+
+func (c *Client) Delete(ctx context.Context, ref cores3.ObjectRef) error {
+	if nilValue(ctx) {
+		return cores3.ProjectValidation("context_nil", "/context")
+	}
+	if !ref.Valid() {
+		return cores3.ProjectValidation("object_ref_invalid", "/ref")
+	}
+	if c == nil || nilValue(c.api) {
+		return cores3.ProjectValidation("client_invalid", "/client")
+	}
+	_, err := c.api.DeleteObject(ctx, &awss3.DeleteObjectInput{Bucket: sdkaws.String(ref.Bucket()), Key: sdkaws.String(ref.Key())})
+	if err == nil {
+		return nil
+	}
+	if contextError := projectedContext(ctx, err); contextError != nil {
+		return cores3.ProjectWriteFailure("delete_canceled", contextError)
+	}
+	return cores3.ProjectWriteFailure("delete_failed", nil)
 }
 
 func projectedContext(ctx context.Context, err error) error {

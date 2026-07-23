@@ -15,9 +15,19 @@ type Writer interface {
 	Put(context.Context, PutRequest) (WriteResult, error)
 }
 
+type Inspector interface {
+	Head(context.Context, ObjectRef) (ObjectInfo, error)
+}
+
+type Deleter interface {
+	Delete(context.Context, ObjectRef) error
+}
+
 type Store interface {
 	Reader
 	Writer
+	Inspector
+	Deleter
 }
 
 type PutRequestSpec struct {
@@ -99,6 +109,42 @@ func (r ReadResult) ETag() (string, bool)            { return r.etag, r.etag != 
 func (r ReadResult) VersionID() (string, bool)       { return r.versionID, r.versionID != "" }
 func (r ReadResult) LastModified() (time.Time, bool) { return r.lastModified, !r.lastModified.IsZero() }
 func (r ReadResult) Valid() bool                     { return !nilInterface(r.body) && r.contentLength >= 0 }
+
+type ObjectInfoSpec struct {
+	ContentType   string
+	ContentLength int64
+	ETag          string
+	VersionID     string
+	LastModified  time.Time
+	Metadata      map[string]string
+}
+
+type ObjectInfo struct {
+	contentType   string
+	contentLength int64
+	etag          string
+	versionID     string
+	lastModified  time.Time
+	metadata      map[string]string
+}
+
+func NewObjectInfo(spec ObjectInfoSpec) (ObjectInfo, error) {
+	if spec.ContentLength < 0 {
+		return ObjectInfo{}, validationError("content_length_invalid", "/contentLength")
+	}
+	metadata, err := copyMetadata(spec.Metadata, "/metadata")
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	return ObjectInfo{contentType: spec.ContentType, contentLength: spec.ContentLength, etag: spec.ETag, versionID: spec.VersionID, lastModified: spec.LastModified, metadata: metadata}, nil
+}
+
+func (i ObjectInfo) ContentLength() int64            { return i.contentLength }
+func (i ObjectInfo) Metadata() map[string]string     { return cloneMap(i.metadata) }
+func (i ObjectInfo) ContentType() (string, bool)     { return i.contentType, i.contentType != "" }
+func (i ObjectInfo) ETag() (string, bool)            { return i.etag, i.etag != "" }
+func (i ObjectInfo) VersionID() (string, bool)       { return i.versionID, i.versionID != "" }
+func (i ObjectInfo) LastModified() (time.Time, bool) { return i.lastModified, !i.lastModified.IsZero() }
 
 type WriteResultSpec struct {
 	ETag      string

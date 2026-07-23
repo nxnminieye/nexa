@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/nxnminieye/nexa/runtime/s3"
 )
@@ -78,6 +79,63 @@ func TestResultCopiesAndOptionalZeroValues(t *testing.T) {
 	if _, ok := write.ETag(); ok {
 		t.Fatal("empty ETag is present")
 	}
+}
+
+func TestObjectInfoCopiesMetadataAndExposesOptionalValues(t *testing.T) {
+	metadata := map[string]string{"owner": "caller"}
+	lastModified := time.Date(2026, time.July, 23, 10, 0, 0, 0, time.UTC)
+	info, err := s3.NewObjectInfo(s3.ObjectInfoSpec{
+		ContentLength: 7,
+		ContentType:   "text/plain",
+		ETag:          "etag",
+		VersionID:     "version",
+		LastModified:  lastModified,
+		Metadata:      metadata,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata["owner"] = "mutated"
+	copyOne := info.Metadata()
+	copyOne["owner"] = "again"
+	if info.ContentLength() != 7 || info.Metadata()["owner"] != "caller" {
+		t.Fatalf("object info = %#v", info)
+	}
+	if value, ok := info.ContentType(); !ok || value != "text/plain" {
+		t.Fatalf("content type = %q,%t", value, ok)
+	}
+	if value, ok := info.ETag(); !ok || value != "etag" {
+		t.Fatalf("ETag = %q,%t", value, ok)
+	}
+	if value, ok := info.VersionID(); !ok || value != "version" {
+		t.Fatalf("version ID = %q,%t", value, ok)
+	}
+	if value, ok := info.LastModified(); !ok || !value.Equal(lastModified) {
+		t.Fatalf("last modified = %v,%t", value, ok)
+	}
+}
+
+func TestObjectInfoValidationAndOptionalZeroValues(t *testing.T) {
+	info, err := s3.NewObjectInfo(s3.ObjectInfoSpec{})
+	if err != nil || info.ContentLength() != 0 || info.Metadata() != nil {
+		t.Fatalf("zero object info = %#v, %v", info, err)
+	}
+	if _, ok := info.ContentType(); ok {
+		t.Fatal("empty content type is present")
+	}
+	if _, ok := info.ETag(); ok {
+		t.Fatal("empty ETag is present")
+	}
+	if _, ok := info.VersionID(); ok {
+		t.Fatal("empty version ID is present")
+	}
+	if _, ok := info.LastModified(); ok {
+		t.Fatal("zero last modified is present")
+	}
+	_, err = s3.NewObjectInfo(s3.ObjectInfoSpec{ContentLength: -1})
+	assertTypedError(t, err, s3.ErrValidation, "validation_failed", "content_length_invalid", "/contentLength")
+	_, err = s3.NewObjectInfo(s3.ObjectInfoSpec{Metadata: map[string]string{"": "invalid"}})
+	assertTypedError(t, err, s3.ErrValidation, "validation_failed", "metadata_invalid", "/metadata")
 }
 
 func assertTypedError(t *testing.T, err, sentinel error, code, reason, pointer string) {

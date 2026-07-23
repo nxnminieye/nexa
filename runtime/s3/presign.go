@@ -7,11 +7,13 @@ import (
 	"unicode/utf8"
 )
 
-// Presigner creates time-limited upload and download URLs without exposing a
-// provider-specific request or result type.
+// Presigner creates time-limited upload, download, metadata, and delete URLs
+// without exposing a provider-specific request or result type.
 type Presigner interface {
 	PresignUpload(context.Context, PresignUploadRequest) (PresignResult, error)
 	PresignDownload(context.Context, PresignDownloadRequest) (PresignResult, error)
+	PresignHead(context.Context, PresignHeadRequest) (PresignResult, error)
+	PresignDelete(context.Context, PresignDeleteRequest) (PresignResult, error)
 }
 
 type PresignUploadRequestSpec struct {
@@ -67,6 +69,54 @@ func NewPresignDownloadRequest(spec PresignDownloadRequestSpec) (PresignDownload
 func (r PresignDownloadRequest) Ref() ObjectRef         { return r.ref }
 func (r PresignDownloadRequest) Expires() time.Duration { return r.expires }
 func (r PresignDownloadRequest) Valid() bool            { return r.ref.Valid() && r.expires > 0 }
+
+type PresignHeadRequestSpec struct {
+	Ref     ObjectRef
+	Expires time.Duration
+}
+
+type PresignHeadRequest struct {
+	ref     ObjectRef
+	expires time.Duration
+}
+
+func NewPresignHeadRequest(spec PresignHeadRequestSpec) (PresignHeadRequest, error) {
+	if !spec.Ref.Valid() {
+		return PresignHeadRequest{}, validationError("object_ref_invalid", "/ref")
+	}
+	if spec.Expires <= 0 {
+		return PresignHeadRequest{}, validationError("expires_invalid", "/expires")
+	}
+	return PresignHeadRequest{ref: spec.Ref, expires: spec.Expires}, nil
+}
+
+func (r PresignHeadRequest) Ref() ObjectRef         { return r.ref }
+func (r PresignHeadRequest) Expires() time.Duration { return r.expires }
+func (r PresignHeadRequest) Valid() bool            { return r.ref.Valid() && r.expires > 0 }
+
+type PresignDeleteRequestSpec struct {
+	Ref     ObjectRef
+	Expires time.Duration
+}
+
+type PresignDeleteRequest struct {
+	ref     ObjectRef
+	expires time.Duration
+}
+
+func NewPresignDeleteRequest(spec PresignDeleteRequestSpec) (PresignDeleteRequest, error) {
+	if !spec.Ref.Valid() {
+		return PresignDeleteRequest{}, validationError("object_ref_invalid", "/ref")
+	}
+	if spec.Expires <= 0 {
+		return PresignDeleteRequest{}, validationError("expires_invalid", "/expires")
+	}
+	return PresignDeleteRequest{ref: spec.Ref, expires: spec.Expires}, nil
+}
+
+func (r PresignDeleteRequest) Ref() ObjectRef         { return r.ref }
+func (r PresignDeleteRequest) Expires() time.Duration { return r.expires }
+func (r PresignDeleteRequest) Valid() bool            { return r.ref.Valid() && r.expires > 0 }
 
 type PresignResult struct {
 	url     string

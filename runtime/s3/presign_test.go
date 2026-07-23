@@ -21,17 +21,29 @@ func TestPresignRequestsValidateAndFreezeValues(t *testing.T) {
 	if err != nil || !download.Valid() || download.Ref() != ref || download.Expires() != time.Minute {
 		t.Fatalf("download = %#v, %v", download, err)
 	}
+	head, err := s3.NewPresignHeadRequest(s3.PresignHeadRequestSpec{Ref: ref, Expires: 2 * time.Minute})
+	if err != nil || !head.Valid() || head.Ref() != ref || head.Expires() != 2*time.Minute {
+		t.Fatalf("head = %#v, %v", head, err)
+	}
+	deleteRequest, err := s3.NewPresignDeleteRequest(s3.PresignDeleteRequestSpec{Ref: ref, Expires: 3 * time.Minute})
+	if err != nil || !deleteRequest.Valid() || deleteRequest.Ref() != ref || deleteRequest.Expires() != 3*time.Minute {
+		t.Fatalf("delete = %#v, %v", deleteRequest, err)
+	}
 	for _, err := range []error{
 		presignUploadError(s3.PresignUploadRequestSpec{Ref: ref}),
 		presignUploadError(s3.PresignUploadRequestSpec{Ref: ref, ContentType: " invalid", Expires: time.Second}),
 		presignDownloadError(s3.PresignDownloadRequestSpec{Ref: ref, Expires: -time.Second}),
 		presignDownloadError(s3.PresignDownloadRequestSpec{Expires: time.Second}),
+		presignHeadError(s3.PresignHeadRequestSpec{Ref: ref}),
+		presignHeadError(s3.PresignHeadRequestSpec{Expires: time.Second}),
+		presignDeleteError(s3.PresignDeleteRequestSpec{Ref: ref, Expires: -time.Second}),
+		presignDeleteError(s3.PresignDeleteRequestSpec{Expires: time.Second}),
 	} {
 		if !errors.Is(err, s3.ErrValidation) {
 			t.Fatalf("validation error = %v", err)
 		}
 	}
-	if (s3.PresignUploadRequest{}).Valid() || (s3.PresignDownloadRequest{}).Valid() {
+	if (s3.PresignUploadRequest{}).Valid() || (s3.PresignDownloadRequest{}).Valid() || (s3.PresignHeadRequest{}).Valid() || (s3.PresignDeleteRequest{}).Valid() {
 		t.Fatal("zero presign request is valid")
 	}
 }
@@ -68,5 +80,15 @@ func presignUploadError(spec s3.PresignUploadRequestSpec) error {
 
 func presignDownloadError(spec s3.PresignDownloadRequestSpec) error {
 	_, err := s3.NewPresignDownloadRequest(spec)
+	return err
+}
+
+func presignHeadError(spec s3.PresignHeadRequestSpec) error {
+	_, err := s3.NewPresignHeadRequest(spec)
+	return err
+}
+
+func presignDeleteError(spec s3.PresignDeleteRequestSpec) error {
+	_, err := s3.NewPresignDeleteRequest(spec)
 	return err
 }

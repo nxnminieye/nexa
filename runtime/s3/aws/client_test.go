@@ -19,12 +19,17 @@ import (
 )
 
 type fakeAPI struct {
-	getInput  *awss3.GetObjectInput
-	getOutput *awss3.GetObjectOutput
-	getErr    error
-	putInput  *awss3.PutObjectInput
-	putOutput *awss3.PutObjectOutput
-	putErr    error
+	getInput    *awss3.GetObjectInput
+	getOutput   *awss3.GetObjectOutput
+	getErr      error
+	putInput    *awss3.PutObjectInput
+	putOutput   *awss3.PutObjectOutput
+	putErr      error
+	headInput   *awss3.HeadObjectInput
+	headOutput  *awss3.HeadObjectOutput
+	headErr     error
+	deleteInput *awss3.DeleteObjectInput
+	deleteErr   error
 }
 
 func (f *fakeAPI) GetObject(_ context.Context, input *awss3.GetObjectInput, _ ...func(*awss3.Options)) (*awss3.GetObjectOutput, error) {
@@ -34,6 +39,14 @@ func (f *fakeAPI) GetObject(_ context.Context, input *awss3.GetObjectInput, _ ..
 func (f *fakeAPI) PutObject(_ context.Context, input *awss3.PutObjectInput, _ ...func(*awss3.Options)) (*awss3.PutObjectOutput, error) {
 	f.putInput = input
 	return f.putOutput, f.putErr
+}
+func (f *fakeAPI) HeadObject(_ context.Context, input *awss3.HeadObjectInput, _ ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error) {
+	f.headInput = input
+	return f.headOutput, f.headErr
+}
+func (f *fakeAPI) DeleteObject(_ context.Context, input *awss3.DeleteObjectInput, _ ...func(*awss3.Options)) (*awss3.DeleteObjectOutput, error) {
+	f.deleteInput = input
+	return nil, f.deleteErr
 }
 
 type trackingBody struct {
@@ -466,6 +479,104 @@ func TestPutForwardsRequestAndPreservesBodyOwnership(t *testing.T) {
 	}
 }
 
+func TestHeadMapsObjectInfoAndCopiesMetadata(t *testing.T) {
+	lastModified := time.Date(2026, time.July, 23, 10, 0, 0, 0, time.UTC)
+	api := &fakeAPI{headOutput: &awss3.HeadObjectOutput{
+		ContentLength: sdkaws.Int64(7),
+		ContentType:   sdkaws.String("text/plain"),
+		ETag:          sdkaws.String("etag"),
+		VersionId:     sdkaws.String("version"),
+		LastModified:  sdkaws.Time(lastModified),
+		Metadata:      map[string]string{"a": "b"},
+	}}
+	client := &Client{api: api}
+	ref, _ := cores3.NewObjectRef("bucket", "key")
+	info, err := client.Head(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sdkaws.ToString(api.headInput.Bucket) != "bucket" || sdkaws.ToString(api.headInput.Key) != "key" {
+		t.Fatalf("head input = %#v", api.headInput)
+	}
+	api.headOutput.Metadata["a"] = "mutated"
+	copyOne := info.Metadata()
+	copyOne["a"] = "again"
+	if info.ContentLength() != 7 || info.Metadata()["a"] != "b" {
+		t.Fatalf("object info = %#v", info)
+	}
+	if contentType, ok := info.ContentType(); !ok || contentType != "text/plain" {
+		t.Fatalf("content type = %q,%t", contentType, ok)
+	}
+	if etag, ok := info.ETag(); !ok || etag != "etag" {
+		t.Fatalf("ETag = %q,%t", etag, ok)
+	}
+	if versionID, ok := info.VersionID(); !ok || versionID != "version" {
+		t.Fatalf("version ID = %q,%t", versionID, ok)
+	}
+	if value, ok := info.LastModified(); !ok || !value.Equal(lastModified) {
+		t.Fatalf("last modified = %v,%t", value, ok)
+	}
+}
+
+func TestHeadMapsNotFoundProviderAndContextFailures(t *testing.T) {
+	ref, _ := cores3.NewObjectRef("bucket", "key")
+	for _, test := range []struct {
+		name     string
+		err      error
+		sentinel error
+	}{
+		{"http 404", &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 404}}}, cores3.ErrNotFound},
+		{"provider", errors.New("secret credential failure"), cores3.ErrReadFailed},
+		{"context", context.Canceled, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &Client{api: &fakeAPI{headErr: test.err}}
+			_, err := client.Head(context.Background(), ref)
+			if !errors.Is(err, test.sentinel) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error = %v", err)
+			}
+			if test.name == "provider" && !errors.Is(err, cores3.ErrReadFailed) {
+				t.Fatalf("provider error = %v", err)
+			}
+		})
+	}
+}
+
+func TestDeleteMapsReferenceAndTreatsNilOutputAsSuccess(t *testing.T) {
+	api := &fakeAPI{}
+	client := &Client{api: api}
+	ref, _ := cores3.NewObjectRef("bucket", "key")
+	if err := client.Delete(context.Background(), ref); err != nil {
+		t.Fatal(err)
+	}
+	if sdkaws.ToString(api.deleteInput.Bucket) != "bucket" || sdkaws.ToString(api.deleteInput.Key) != "key" {
+		t.Fatalf("delete input = %#v", api.deleteInput)
+	}
+}
+
+func TestDeleteMapsProviderAndContextFailures(t *testing.T) {
+	ref, _ := cores3.NewObjectRef("bucket", "key")
+	for _, test := range []struct {
+		name     string
+		err      error
+		sentinel error
+	}{
+		{"provider", errors.New("secret credential failure"), cores3.ErrWriteFailed},
+		{"context", context.DeadlineExceeded, context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &Client{api: &fakeAPI{deleteErr: test.err}}
+			err := client.Delete(context.Background(), ref)
+			if !errors.Is(err, test.sentinel) || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("error = %v", err)
+			}
+			if test.name == "provider" && !errors.Is(err, cores3.ErrWriteFailed) {
+				t.Fatalf("provider error = %v", err)
+			}
+		})
+	}
+}
+
 func TestContextIdentityAndBodyErrorProjection(t *testing.T) {
 	ref, _ := cores3.NewObjectRef("bucket", "key")
 	client := &Client{api: &fakeAPI{getErr: context.Canceled}}
@@ -499,11 +610,29 @@ func TestNilAndZeroInputsFailDeterministically(t *testing.T) {
 	if _, err := client.Put(context.Background(), request); !errors.Is(err, cores3.ErrValidation) {
 		t.Fatalf("nil client Put error = %v", err)
 	}
+	if _, err := client.Head(context.Background(), ref); !errors.Is(err, cores3.ErrValidation) {
+		t.Fatalf("nil client Head error = %v", err)
+	}
+	if err := client.Delete(context.Background(), ref); !errors.Is(err, cores3.ErrValidation) {
+		t.Fatalf("nil client Delete error = %v", err)
+	}
 	validClient := &Client{api: &fakeAPI{}}
 	if _, err := validClient.Get(nil, ref); !errors.Is(err, cores3.ErrValidation) {
 		t.Fatalf("nil context Get error = %v", err)
 	}
 	if _, err := validClient.Put(context.Background(), cores3.PutRequest{}); !errors.Is(err, cores3.ErrValidation) {
 		t.Fatalf("zero request Put error = %v", err)
+	}
+	if _, err := validClient.Head(nil, ref); !errors.Is(err, cores3.ErrValidation) {
+		t.Fatalf("nil context Head error = %v", err)
+	}
+	if err := validClient.Delete(nil, ref); !errors.Is(err, cores3.ErrValidation) {
+		t.Fatalf("nil context Delete error = %v", err)
+	}
+	if _, err := validClient.Head(context.Background(), cores3.ObjectRef{}); !errors.Is(err, cores3.ErrValidation) {
+		t.Fatalf("zero ref Head error = %v", err)
+	}
+	if err := validClient.Delete(context.Background(), cores3.ObjectRef{}); !errors.Is(err, cores3.ErrValidation) {
+		t.Fatalf("zero ref Delete error = %v", err)
 	}
 }
