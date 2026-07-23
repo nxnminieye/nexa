@@ -33,7 +33,7 @@ flowchart LR
 - [业务事实契约](contracts/business-facts.md)：强类型 Ent metadata、服务关系与 authoring ownership。
 - [受控生成](contracts/controlled-generation.md)：从事实到 IR、staging、普通源码和 manifest。
 - [标准服务 starter](starters/standard-services.md)：可由 consumer 接管和继续修改的标准源码。
-- [Runtime packages](contracts/runtime-packages.md)：按 Go import 和 constructor 显式选择的公共运行契约。
+- [Runtime packages](contracts/runtime-packages.md)：按 Go import 和 constructor 显式选择的公共运行契约，包括 `runtime/s3` 与可选 AWS SDK v2 adapter。
 - [Nexactl Build Plugin](plugins/nexactl-build-plugin.md)：显式组合工程期能力，不是运行时插件系统。
 - [Service Source Plugin](plugins/service-source-plugin.md)：选择和交付标准服务源码的工程期入口。
 

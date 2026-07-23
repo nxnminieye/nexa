@@ -54,9 +54,12 @@ func runRuntimeOptionalCompositionProof(t *testing.T) {
 	for _, forbidden := range []string{
 		"github.com/nxnminieye/nexa/runtime/crud",
 		"github.com/nxnminieye/nexa/runtime/kafka",
+		"github.com/nxnminieye/nexa/runtime/s3",
 		"github.com/nxnminieye/nexa/runtime/observability/logging",
 		"github.com/nxnminieye/nexa/runtime/observability/rpcaccess",
 		"github.com/twmb/franz-go",
+		"github.com/aws/aws-sdk-go-v2",
+		"github.com/aws/smithy-go",
 		"google.golang.org/grpc",
 		"go.opentelemetry.io/otel",
 		"github.com/zeromicro/go-zero",

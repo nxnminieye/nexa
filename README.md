@@ -50,6 +50,7 @@ GOWORK=off go run github.com/nxnminieye/nexa/cmd/nexactl@<version> inspect --jso
 - 已验证的 generation package 把 consumer-owned facts 投影为 versioned IR、普通源码和可重建 manifest。
 - Service Source Provider 可以交付标准服务源码；源码物化后由 consumer 修改、构建和运行。
 - `runtime/*` package 按 import 和 constructor 显式选择，不构成运行时插件系统。
+- S3 公共入口为 `runtime/s3`，AWS SDK v2 adapter 为可选的 `runtime/s3/aws`；完整边界见 [Runtime packages](docs/contracts/runtime-packages.md)。
 - 可发布的 Python SDK/wheel、runtime `nexa` CLI、动态插件、远程控制和产品私有规则不属于本 alpha 支持面；
   reference CLI 中的 `sdk-python-assets` 工程命令不等于 Python SDK 已发布。
 

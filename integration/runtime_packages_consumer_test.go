@@ -28,6 +28,8 @@ func runRuntimeExternalConsumerMatrix(t *testing.T) {
 		{name: "crud", source: runtimeCRUDConsumerProgram},
 		{name: "kafka", source: runtimeKafkaConsumerProgram},
 		{name: "franz", source: runtimeFranzConsumerProgram},
+		{name: "s3", source: runtimeS3ConsumerProgram},
+		{name: "s3aws", source: runtimeS3AWSConsumerProgram},
 		{name: "logging", source: runtimeLoggingConsumerProgram},
 		{name: "rpcaccess", source: runtimeRPCAccessConsumerProgram},
 		{name: "otel", source: runtimeOTelConsumerProgram},
@@ -175,6 +177,54 @@ func main() {
 	if !errors.As(failure, &typed) { panic("missing typed failure") }
 	json.NewEncoder(os.Stdout).Encode(map[string]any{
 		"name": "franz", "positive": factory != nil && dials == 0, "failure": typed.Reason(),
+	})
+}
+`
+
+const runtimeS3ConsumerProgram = `package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+
+	"github.com/nxnminieye/nexa/runtime/s3"
+)
+
+func main() {
+	ref, err := s3.NewObjectRef("objects", "reports/current.json")
+	if err != nil { panic(err) }
+	request, err := s3.NewPutRequest(s3.PutRequestSpec{Ref: ref, Body: bytes.NewReader([]byte("{}")), Metadata: map[string]string{"owner": "consumer"}})
+	if err != nil { panic(err) }
+	_, failure := s3.NewObjectRef("", "key")
+	var typed *s3.Error
+	if !errors.As(failure, &typed) { panic("missing typed failure") }
+	json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"name": "s3", "positive": request.Valid() && request.Ref() == ref && request.Metadata()["owner"] == "consumer",
+		"failure": typed.Reason(),
+	})
+}
+`
+
+const runtimeS3AWSConsumerProgram = `package main
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+
+	sdkaws "github.com/aws/aws-sdk-go-v2/aws"
+	cores3 "github.com/nxnminieye/nexa/runtime/s3"
+	s3aws "github.com/nxnminieye/nexa/runtime/s3/aws"
+)
+
+func main() {
+	client, err := s3aws.NewClient(s3aws.ClientOptions{Config: sdkaws.Config{Region: "us-east-1"}, Endpoint: "https://objects.example.test", UsePathStyle: true})
+	if err != nil { panic(err) }
+	_, failure := s3aws.NewClient(s3aws.ClientOptions{Config: sdkaws.Config{Region: "us-east-1"}, Endpoint: "http://objects.example.test"})
+	json.NewEncoder(os.Stdout).Encode(map[string]any{
+		"name": "s3aws", "positive": client != nil && errors.Is(failure, cores3.ErrValidation),
 	})
 }
 `
