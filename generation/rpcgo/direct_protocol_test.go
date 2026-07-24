@@ -68,6 +68,24 @@ func TestRPCGoV2RejectsUnknownFieldsAndScopeEscape(t *testing.T) {
 	if _, err := rpcgo.CanonicalRPCGoRequest(request); err == nil {
 		t.Fatal("accepted denied scope")
 	}
+	request = rpcgo.RPCGoRequest{APIVersion: rpcgo.RPCGoRequestAPIVersion, Kind: rpcgo.RPCGoRequestKind, ServiceID: "other", ModulePath: "example.com/consumer", ProtocolIR: rpcProtocolSnapshot(t), OutputScopes: []directwrite.OutputScope{{Path: "backend/other/generated", Mode: directwrite.OutputModeReplaceTree}}}
+	if _, err := rpcgo.CanonicalRPCGoRequest(request); err == nil {
+		t.Fatal("accepted mismatched outer and nested service identity")
+	}
+}
+
+func TestRunDirectRPCGoRejectsFixedToolArgsBeforeInvocation(t *testing.T) {
+	request := rpcgo.RPCGoRequest{APIVersion: rpcgo.RPCGoRequestAPIVersion, Kind: rpcgo.RPCGoRequestKind, ServiceID: "account", ModulePath: "example.com/consumer", ProtocolIR: rpcProtocolSnapshot(t), OutputScopes: []directwrite.OutputScope{{Path: "backend/account/generated", Mode: directwrite.OutputModeReplaceTree}}}
+	called := false
+	runner := toolchain.DirectRunnerFunc(func(context.Context, toolchain.DirectRequest) (toolchain.Result, error) {
+		called = true
+		return toolchain.Result{}, nil
+	})
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	_, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "rpc", Version: "v2", Args: []string{"wrapper"}, WriteScopes: []string{"backend/account/generated"}}, Runner: runner, OutputScopes: request.OutputScopes})
+	if err == nil || called {
+		t.Fatalf("fixed args rejection = %v, called = %v", err, called)
+	}
 }
 
 func rpcProtocolSnapshot(t *testing.T) protocol.Snapshot {

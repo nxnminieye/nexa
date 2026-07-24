@@ -198,6 +198,7 @@ func ParseAPIGoResult(data []byte) (APIGoResult, error) {
 func normalizeStaticInputs(input []StaticInput) ([]StaticInput, error) {
 	result := append([]StaticInput(nil), input...)
 	ids, paths := make(map[string]struct{}, len(result)), make(map[string]struct{}, len(result))
+	pathScopes := make([]directwrite.OutputScope, 0, len(result))
 	for _, item := range result {
 		if !staticInputIDPattern.MatchString(item.ID) || toolchain.ValidateRepositoryPath(item.Path) != nil {
 			return nil, errors.New("API Go request static input is invalid")
@@ -212,6 +213,13 @@ func normalizeStaticInputs(input []StaticInput) ([]StaticInput, error) {
 			return nil, errors.New("API Go request static inputs are duplicated")
 		}
 		ids[item.ID], paths[item.Path] = struct{}{}, struct{}{}
+		pathScopes = append(pathScopes, directwrite.OutputScope{Path: item.Path, Mode: directwrite.OutputModeFileSet})
+	}
+	if len(pathScopes) == 0 {
+		return nil, errors.New("API Go request requires at least one static input")
+	}
+	if _, err := toolchain.NormalizeOutputScopes(pathScopes); err != nil {
+		return nil, errors.New("API Go request static input paths collide or overlap")
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].ID == result[j].ID {

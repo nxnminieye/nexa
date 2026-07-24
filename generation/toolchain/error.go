@@ -14,6 +14,7 @@ type Error struct {
 	code, reason, stage, pointer, source, toolID, message string
 	diagnostic                                            string
 	exitCode                                              int
+	started, mayHaveWritten                               bool
 	sentinel                                              error
 }
 
@@ -23,7 +24,9 @@ func projectEntExecError(err error) error {
 	}
 	var internal *entexec.Error
 	if errors.As(err, &internal) {
-		return newDiagnosticError(internal.Code(), internal.Stage(), internal.Reason(), internal.Pointer(), "", internal.ToolID(), internal.ExitCode(), internal.Diagnostic())
+		projected := newDiagnosticError(internal.Code(), internal.Stage(), internal.Reason(), internal.Pointer(), "", internal.ToolID(), internal.ExitCode(), internal.Diagnostic())
+		projected.started, projected.mayHaveWritten = internal.Started(), internal.MayHaveWritten()
+		return projected
 	}
 	return newError("scratch_projection_invalid", "project", "location_state_invalid", "/location", "", "", 0)
 }
@@ -112,6 +115,12 @@ func (e *Error) Diagnostic() string {
 	}
 	return e.diagnostic
 }
+
+// Started reports whether the delegated main process was successfully started.
+func (e *Error) Started() bool { return e != nil && e.started }
+
+// MayHaveWritten reports whether a direct tool may have changed the consumer tree.
+func (e *Error) MayHaveWritten() bool { return e != nil && e.mayHaveWritten }
 
 var errorSentinels sync.Map
 

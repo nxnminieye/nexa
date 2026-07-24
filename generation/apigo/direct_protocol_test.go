@@ -85,6 +85,48 @@ func TestAPIGoV2RejectsUnknownFieldsUnsortedInputsAndScopeEscape(t *testing.T) {
 	if bytes.Index(canonical, []byte(`"id":"a"`)) > bytes.Index(canonical, []byte(`"id":"z"`)) {
 		t.Fatal("static inputs are not canonical")
 	}
+	request = validDirectAPIRequest(t)
+	request.StaticInputs = append(request.StaticInputs, apigo.StaticInput{ID: "folded", Path: "backend/core/API/generate\u0301d.api", Digest: provenance.SHA256(nil)})
+	request.StaticInputs[0].Path = "backend/core/api/generat\u00e9d.api"
+	request.APIEntry = request.StaticInputs[0].Path
+	if _, err := apigo.CanonicalAPIGoRequest(request); err == nil {
+		t.Fatal("accepted NFC/case-fold colliding static inputs")
+	}
+	request = validDirectAPIRequest(t)
+	request.StaticInputs = append(request.StaticInputs, apigo.StaticInput{ID: "child", Path: request.StaticInputs[0].Path + "/child.api", Digest: provenance.SHA256(nil)})
+	if _, err := apigo.CanonicalAPIGoRequest(request); err == nil {
+		t.Fatal("accepted ancestor/descendant static input topology")
+	}
+}
+
+func TestRunDirectAPIGoRejectsFixedArgsAndStaticSymlink(t *testing.T) {
+	request := validDirectAPIRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	entry := filepath.Join(repository, filepath.FromSlash(request.APIEntry))
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(repository, "target.api")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, entry); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	runner := toolchain.DirectRunnerFunc(func(context.Context, toolchain.DirectRequest) (toolchain.Result, error) {
+		called = true
+		return toolchain.Result{}, nil
+	})
+	options := apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", WriteScopes: []string{"backend/core/generated"}}, Runner: runner, OutputScopes: request.OutputScopes}
+	options.Tool.Args = []string{"wrapper"}
+	if _, err := apigo.RunDirectAPIGo(context.Background(), request, options); err == nil || called {
+		t.Fatalf("fixed args rejection = %v, called = %v", err, called)
+	}
+	options.Tool.Args = nil
+	if _, err := apigo.RunDirectAPIGo(context.Background(), request, options); err == nil || called {
+		t.Fatalf("symlink rejection = %v, called = %v", err, called)
+	}
 }
 
 func validDirectAPIRequest(t *testing.T) apigo.APIGoRequest {

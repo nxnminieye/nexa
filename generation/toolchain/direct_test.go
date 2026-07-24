@@ -3,6 +3,7 @@ package toolchain_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,6 +49,17 @@ func TestDirectScopeValidationReusesDirectWriteRules(t *testing.T) {
 	}
 	if err := toolchain.ValidateRepositoryPath("backend/.GIT/config"); err == nil {
 		t.Fatal("accepted .git case-fold alias")
+	}
+}
+
+func TestExecDirectRunnerProjectsPostStartWriteEvidence(t *testing.T) {
+	repository := canonicalTestDirectory(t, t.TempDir())
+	executable, _ := filepath.Abs(os.Args[0])
+	tool := toolchain.Tool{ID: "direct-helper", Version: "v2", Executable: executable, Args: directHelperArgs(), Environment: []toolchain.EnvironmentRule{{Name: "NEXA_DIRECT_HELPER", Source: toolchain.EnvironmentFixed, FixedValue: "1"}}, Probe: toolchain.ExecutableProbe{Args: directHelperArgs("version"), ExpectedVersion: "direct-v2"}}
+	_, err := toolchain.NewExecDirectRunner().RunDirect(context.Background(), toolchain.DirectRequest{RepositoryRoot: repository, Tool: tool, Args: []string{"fail"}, Environment: []toolchain.EnvVar{{Name: "NEXA_DIRECT_HELPER", Value: "1"}}})
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || !typed.Started() || !typed.MayHaveWritten() {
+		t.Fatalf("direct error = %#v", err)
 	}
 }
 

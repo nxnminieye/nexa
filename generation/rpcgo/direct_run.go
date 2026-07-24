@@ -23,6 +23,9 @@ func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOpt
 	if ctx == nil || options.Runner == nil {
 		return RPCGoResult{}, errors.New("RPC Go direct invocation is invalid")
 	}
+	if len(options.Tool.Args) != 0 {
+		return RPCGoResult{}, errors.New("RPC Go tool fixed args must be empty")
+	}
 	root, err := toolchain.CanonicalRepositoryRoot(options.RepositoryRoot)
 	if err != nil {
 		return RPCGoResult{}, err

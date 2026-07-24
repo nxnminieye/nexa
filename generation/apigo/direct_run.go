@@ -3,9 +3,11 @@ package apigo
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/nxnminieye/nexa/generation/directwrite"
 	"github.com/nxnminieye/nexa/generation/toolchain"
@@ -24,6 +26,9 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 	if ctx == nil || options.Runner == nil {
 		return APIGoResult{}, errors.New("API Go direct invocation is invalid")
 	}
+	if len(options.Tool.Args) != 0 {
+		return APIGoResult{}, errors.New("API Go tool fixed args must be empty")
+	}
 	root, err := toolchain.CanonicalRepositoryRoot(options.RepositoryRoot)
 	if err != nil {
 		return APIGoResult{}, err
@@ -41,7 +46,7 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 		return APIGoResult{}, err
 	}
 	for _, input := range request.StaticInputs {
-		content, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(input.Path)))
+		content, readErr := readStaticInput(root, input.Path)
 		if readErr != nil || provenance.SHA256(content) != input.Digest {
 			return APIGoResult{}, errors.New("API Go static input does not match its declared digest")
 		}
@@ -61,6 +66,35 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 		return APIGoResult{}, errors.New("API Go tool result does not acknowledge the exact request")
 	}
 	return result, nil
+}
+
+func readStaticInput(root, relative string) ([]byte, error) {
+	if toolchain.ValidateRepositoryPath(relative) != nil {
+		return nil, os.ErrInvalid
+	}
+	handle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	components := strings.Split(relative, "/")
+	for index := range components {
+		name := filepath.Join(components[:index+1]...)
+		info, err := handle.Lstat(name)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return nil, os.ErrInvalid
+		}
+	}
+	info, err := handle.Lstat(filepath.FromSlash(relative))
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, os.ErrInvalid
+	}
+	file, err := handle.Open(filepath.FromSlash(relative))
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
 }
 func apiScopePaths(scopes []directwrite.OutputScope) []string {
 	result := make([]string, len(scopes))
