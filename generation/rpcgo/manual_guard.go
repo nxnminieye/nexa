@@ -15,11 +15,11 @@ import (
 	"github.com/nxnminieye/nexa/generation/directwrite"
 )
 
-func snapshotManualScopeFiles(repository string, scopes []directwrite.OutputScope) (map[string][]byte, error) {
-	return snapshotManualFiles(repository, scopes, "RPC")
+func snapshotManualScopeFiles(repository string, scopes []directwrite.OutputScope, serviceID string) (map[string][]byte, error) {
+	return snapshotManualFiles(repository, scopes, "RPC", serviceID)
 }
 
-func snapshotManualFiles(repository string, scopes []directwrite.OutputScope, family string) (map[string][]byte, error) {
+func snapshotManualFiles(repository string, scopes []directwrite.OutputScope, family, serviceID string) (map[string][]byte, error) {
 	root, err := os.OpenRoot(repository)
 	if err != nil {
 		return nil, err
@@ -47,7 +47,7 @@ func snapshotManualFiles(repository string, scopes []directwrite.OutputScope, fa
 			if readErr != nil || closeErr != nil {
 				return errors.Join(readErr, closeErr)
 			}
-			if !hasGeneratedMarker(name, content) {
+			if !hasGeneratedMarker(name, content, serviceID) {
 				result[name] = content
 			}
 			return nil
@@ -59,7 +59,10 @@ func snapshotManualFiles(repository string, scopes []directwrite.OutputScope, fa
 	return result, nil
 }
 
-func hasGeneratedMarker(name string, content []byte) bool {
+func hasGeneratedMarker(name string, content []byte, serviceID string) bool {
+	if path.Ext(name) == ".proto" {
+		return path.Base(name) == serviceID+".proto"
+	}
 	if path.Ext(name) == ".go" {
 		parsed, err := parser.ParseFile(token.NewFileSet(), name, content, parser.ParseComments)
 		return err == nil && ast.IsGenerated(parsed)
@@ -91,7 +94,7 @@ func verifyManualScopeFiles(repository string, before map[string][]byte) error {
 	return nil
 }
 
-func rejectNewUnmarkedFiles(repository string, scopes []directwrite.OutputScope, before map[string][]byte) error {
+func rejectNewUnmarkedFiles(repository string, scopes []directwrite.OutputScope, before map[string][]byte, serviceID string) error {
 	root, err := os.OpenRoot(repository)
 	if err != nil {
 		return err
@@ -121,10 +124,7 @@ func rejectNewUnmarkedFiles(repository string, scopes []directwrite.OutputScope,
 			if readErr != nil {
 				return readErr
 			}
-			if path.Ext(name) == ".proto" {
-				return nil
-			}
-			if !hasGeneratedMarker(name, content) {
+			if !hasGeneratedMarker(name, content, serviceID) {
 				return errors.New("tool created unmarked manual output")
 			}
 			return nil

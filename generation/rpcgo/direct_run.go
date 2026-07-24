@@ -45,7 +45,7 @@ func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOpt
 	if err != nil {
 		return RPCGoResult{}, directFailure("validate-input", "request_invalid", options, err, false)
 	}
-	manual, err := snapshotManualScopeFiles(root, requestScopes)
+	manual, err := snapshotManualScopeFiles(root, requestScopes, request.ServiceID)
 	if err != nil {
 		return RPCGoResult{}, directFailure("validate-input", "repository_invalid", options, err, false)
 	}
@@ -56,7 +56,7 @@ func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOpt
 	if err := verifyManualScopeFiles(root, manual); err != nil {
 		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
 	}
-	if err := rejectNewUnmarkedFiles(root, requestScopes, manual); err != nil {
+	if err := rejectNewUnmarkedFiles(root, requestScopes, manual, request.ServiceID); err != nil {
 		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
 	}
 	if processResult.ToolID != options.Tool.ID || processResult.Version != options.Tool.Version || processResult.ExecutableVersion != options.Tool.Probe.ExpectedVersion || processResult.ExitCode != 0 {

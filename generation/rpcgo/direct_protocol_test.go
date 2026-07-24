@@ -95,6 +95,9 @@ func TestRunDirectRPCGoAllowsGeneratedProtoOutput(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(generated), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(generated, []byte("syntax = \"proto3\"; package account.v1; message Previous {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
 		if err := os.WriteFile(generated, []byte("syntax = \"proto3\"; package account.v1; message Account {}\n"), 0o644); err != nil {
 			t.Fatal(err)
