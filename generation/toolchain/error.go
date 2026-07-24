@@ -142,6 +142,18 @@ func newDiagnosticError(code, stage, reason, pointer, source, toolID string, exi
 	}
 }
 
+// DirectPostInvocationError projects protocol validation failures after a direct
+// runner has returned success. The original cause remains available to errors.Is/As.
+func DirectPostInvocationError(toolID, reason, pointer string, cause error) error {
+	projected := newError("tool_output_invalid", "result", reason, pointer, "", toolID, 0)
+	projected.started = true
+	projected.mayHaveWritten = true
+	if cause != nil {
+		projected.sentinel = errors.Join(projected.sentinel, cause)
+	}
+	return projected
+}
+
 func projectBuildInputError(err error, toolID string, exitCode int) error {
 	if err == nil {
 		return nil

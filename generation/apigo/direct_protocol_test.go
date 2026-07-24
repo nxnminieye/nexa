@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -58,6 +59,72 @@ func TestAPIGoV2ProtocolAndDirectRunner(t *testing.T) {
 	})
 	if _, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", WriteScopes: []string{scopes[0].Path}, Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}, Runner: invalidRunner, OutputScopes: scopes}); err == nil {
 		t.Fatal("accepted result digest that does not match exact stdin")
+	}
+}
+
+func TestRunDirectAPIGoProjectsEveryPostInvocationFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		wantReason  string
+		wantPointer string
+		mutate      func(*testing.T, toolchain.DirectRequest, *toolchain.Result)
+	}{
+		{name: "invalid identity", wantReason: "process_identity_invalid", wantPointer: "/process", mutate: func(_ *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) { result.ToolID = "other" }},
+		{name: "invalid result JSON", wantReason: "result_invalid", wantPointer: "/stdout", mutate: func(_ *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) { result.Stdout = []byte("{") }},
+		{name: "noncanonical result", wantReason: "result_invalid", wantPointer: "/stdout", mutate: func(_ *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) {
+			result.Stdout = append(result.Stdout, '\n')
+		}},
+		{name: "wrong digest acknowledgement", wantReason: "result_acknowledgement_invalid", wantPointer: "/result", mutate: func(t *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) {
+			result.Stdout = canonicalAPIDirectResult(t, provenance.SHA256([]byte("wrong")), validDirectAPIRequest(t).OutputScopes)
+		}},
+		{name: "wrong scope acknowledgement", wantReason: "result_acknowledgement_invalid", wantPointer: "/result", mutate: func(t *testing.T, call toolchain.DirectRequest, result *toolchain.Result) {
+			wrong := []directwrite.OutputScope{{Path: "backend/core/manual", Mode: directwrite.OutputModeFileSet}}
+			result.Stdout = canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), wrong)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validDirectAPIRequest(t)
+			repository, _ := filepath.EvalSymlinks(t.TempDir())
+			entry := filepath.Join(repository, filepath.FromSlash(request.APIEntry))
+			if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(entry, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+				calls++
+				result := toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}
+				test.mutate(t, call, &result)
+				return result, nil
+			})
+			tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+			_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
+			if calls != 1 {
+				t.Fatalf("runner calls = %d", calls)
+			}
+			assertAPIPostInvocationEvidence(t, err, test.wantReason, test.wantPointer)
+		})
+	}
+}
+
+func TestRunDirectAPIGoPreservesRunnerNotStartedEvidence(t *testing.T) {
+	request := validDirectAPIRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	entry := filepath.Join(repository, filepath.FromSlash(request.APIEntry))
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := toolchain.Tool{ID: "api", Version: "v2", Executable: filepath.Join(repository, "missing"), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{Args: []string{"--version"}, ExpectedVersion: "api-v2"}}
+	_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: toolchain.NewExecDirectRunner(), OutputScopes: request.OutputScopes})
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || typed.Stage() != "probe" || typed.Started() || typed.MayHaveWritten() {
+		t.Fatalf("runner not-started error = %#v", err)
 	}
 }
 
@@ -122,10 +189,14 @@ func TestRunDirectAPIGoRejectsFixedArgsAndStaticSymlink(t *testing.T) {
 	options.Tool.Args = []string{"wrapper"}
 	if _, err := apigo.RunDirectAPIGo(context.Background(), request, options); err == nil || called {
 		t.Fatalf("fixed args rejection = %v, called = %v", err, called)
+	} else {
+		assertAPIPreInvocationError(t, err)
 	}
 	options.Tool.Args = nil
 	if _, err := apigo.RunDirectAPIGo(context.Background(), request, options); err == nil || called {
 		t.Fatalf("symlink rejection = %v, called = %v", err, called)
+	} else {
+		assertAPIPreInvocationError(t, err)
 	}
 }
 
@@ -171,6 +242,40 @@ func TestAPIGoV2RejectsStaticInputOutputScopeTopology(t *testing.T) {
 func validDirectAPIRequest(t *testing.T) apigo.APIGoRequest {
 	return apigo.APIGoRequest{APIVersion: apigo.APIGoRequestAPIVersion, Kind: apigo.APIGoRequestKind, CoreServiceID: "core", ModulePath: "example.com/consumer", HTTPAPIIR: apiSnapshot(t), APIEntry: "backend/core/api/generated.api", StaticInputs: []apigo.StaticInput{{ID: "entry", Path: "backend/core/api/generated.api", Digest: provenance.SHA256(nil)}}, OutputScopes: []directwrite.OutputScope{{Path: "backend/core/generated", Mode: directwrite.OutputModeReplaceTree}}}
 }
+
+func canonicalAPIDirectResult(t *testing.T, digest provenance.Digest, scopes []directwrite.OutputScope) []byte {
+	t.Helper()
+	encoded, err := apigo.CanonicalAPIGoResult(apigo.APIGoResult{APIVersion: apigo.APIGoResultAPIVersion, Kind: apigo.APIGoResultKind, Status: apigo.APIGoResultGenerated, CoreServiceID: "core", InputDigest: digest, OutputScopes: scopes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func apiTestScopePaths(scopes []directwrite.OutputScope) []string {
+	paths := make([]string, len(scopes))
+	for index, scope := range scopes {
+		paths[index] = scope.Path
+	}
+	return paths
+}
+
+func assertAPIPostInvocationEvidence(t *testing.T, err error, reason, pointer string) {
+	t.Helper()
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || typed.Code() != "tool_output_invalid" || typed.Stage() != "result" || typed.Reason() != reason || typed.Pointer() != pointer || typed.Source() != "" || typed.ToolID() != "api" || typed.ExitCode() != 0 || !typed.Started() || !typed.MayHaveWritten() {
+		t.Fatalf("post-invocation error = %#v", err)
+	}
+}
+
+func assertAPIPreInvocationError(t *testing.T, err error) {
+	t.Helper()
+	var typed *toolchain.Error
+	if errors.As(err, &typed) && (typed.Started() || typed.MayHaveWritten()) {
+		t.Fatalf("pre-invocation error has write evidence: %#v", err)
+	}
+}
+
 func apiSnapshot(t *testing.T) httpapi.Snapshot {
 	t.Helper()
 	document, _, _ := compositionFixture(t)

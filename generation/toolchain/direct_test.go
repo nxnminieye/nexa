@@ -74,6 +74,27 @@ func TestExecDirectRunnerProjectsProbeStartWriteEvidence(t *testing.T) {
 	}
 }
 
+func TestDirectPostInvocationErrorPreservesCauseAndStableEvidence(t *testing.T) {
+	cause := &json.SyntaxError{Offset: 7}
+	err := toolchain.DirectPostInvocationError("api", "result_invalid", "/stdout", cause)
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || typed.Code() != "tool_output_invalid" || typed.Stage() != "result" || typed.Reason() != "result_invalid" || typed.Pointer() != "/stdout" || typed.Source() != "" || typed.ToolID() != "api" || typed.ExitCode() != 0 || !typed.Started() || !typed.MayHaveWritten() {
+		t.Fatalf("post-invocation error = %#v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("post-invocation error hid its original cause")
+	}
+	var found *json.SyntaxError
+	if !errors.As(err, &found) || found != cause {
+		t.Fatal("post-invocation error hid its original cause type")
+	}
+	second := toolchain.DirectPostInvocationError("api", "result_invalid", "/stdout", nil)
+	var secondTyped *toolchain.Error
+	if !errors.As(second, &secondTyped) || secondTyped == typed || errors.Is(second, cause) {
+		t.Fatal("post-invocation errors share mutable typed state")
+	}
+}
+
 func canonicalTestDirectory(t *testing.T, value string) string {
 	t.Helper()
 	result, err := filepath.EvalSymlinks(value)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -54,6 +55,58 @@ func TestRPCGoV2ProtocolAndDirectRunner(t *testing.T) {
 	}
 }
 
+func TestRunDirectRPCGoProjectsEveryPostInvocationFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		wantReason  string
+		wantPointer string
+		mutate      func(*testing.T, toolchain.DirectRequest, *toolchain.Result)
+	}{
+		{name: "invalid identity", wantReason: "process_identity_invalid", wantPointer: "/process", mutate: func(_ *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) { result.ToolID = "other" }},
+		{name: "invalid result JSON", wantReason: "result_invalid", wantPointer: "/stdout", mutate: func(_ *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) { result.Stdout = []byte("{") }},
+		{name: "noncanonical result", wantReason: "result_invalid", wantPointer: "/stdout", mutate: func(_ *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) {
+			result.Stdout = append(result.Stdout, '\n')
+		}},
+		{name: "wrong digest acknowledgement", wantReason: "result_acknowledgement_invalid", wantPointer: "/result", mutate: func(t *testing.T, _ toolchain.DirectRequest, result *toolchain.Result) {
+			result.Stdout = canonicalRPCDirectResult(t, provenance.SHA256([]byte("wrong")), validDirectRPCRequest(t).OutputScopes)
+		}},
+		{name: "wrong scope acknowledgement", wantReason: "result_acknowledgement_invalid", wantPointer: "/result", mutate: func(t *testing.T, call toolchain.DirectRequest, result *toolchain.Result) {
+			wrong := []directwrite.OutputScope{{Path: "backend/account/manual", Mode: directwrite.OutputModeFileSet}}
+			result.Stdout = canonicalRPCDirectResult(t, provenance.SHA256(call.Stdin), wrong)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validDirectRPCRequest(t)
+			repository, _ := filepath.EvalSymlinks(t.TempDir())
+			calls := 0
+			runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+				calls++
+				result := toolchain.Result{ToolID: "rpc", Version: "v2", ExecutableVersion: "rpc-v2", Stdout: canonicalRPCDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}
+				test.mutate(t, call, &result)
+				return result, nil
+			})
+			tool := toolchain.Tool{ID: "rpc", Version: "v2", WriteScopes: rpcTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "rpc-v2"}}
+			_, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
+			if calls != 1 {
+				t.Fatalf("runner calls = %d", calls)
+			}
+			assertRPCPostInvocationEvidence(t, err, test.wantReason, test.wantPointer)
+		})
+	}
+}
+
+func TestRunDirectRPCGoPreservesRunnerNotStartedEvidence(t *testing.T) {
+	request := validDirectRPCRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	tool := toolchain.Tool{ID: "rpc", Version: "v2", Executable: filepath.Join(repository, "missing"), WriteScopes: rpcTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{Args: []string{"--version"}, ExpectedVersion: "rpc-v2"}}
+	_, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: toolchain.NewExecDirectRunner(), OutputScopes: request.OutputScopes})
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || typed.Stage() != "probe" || typed.Started() || typed.MayHaveWritten() {
+		t.Fatalf("runner not-started error = %#v", err)
+	}
+}
+
 func TestRPCGoV2RejectsUnknownFieldsAndScopeEscape(t *testing.T) {
 	request := rpcgo.RPCGoRequest{APIVersion: rpcgo.RPCGoRequestAPIVersion, Kind: rpcgo.RPCGoRequestKind, ServiceID: "account", ModulePath: "example.com/consumer", ProtocolIR: rpcProtocolSnapshot(t), OutputScopes: []directwrite.OutputScope{{Path: "backend/account/generated", Mode: directwrite.OutputModeReplaceTree}}}
 	canonical, _ := rpcgo.CanonicalRPCGoRequest(request)
@@ -85,6 +138,40 @@ func TestRunDirectRPCGoRejectsFixedToolArgsBeforeInvocation(t *testing.T) {
 	_, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "rpc", Version: "v2", Args: []string{"wrapper"}, WriteScopes: []string{"backend/account/generated"}}, Runner: runner, OutputScopes: request.OutputScopes})
 	if err == nil || called {
 		t.Fatalf("fixed args rejection = %v, called = %v", err, called)
+	}
+	var typed *toolchain.Error
+	if errors.As(err, &typed) && (typed.Started() || typed.MayHaveWritten()) {
+		t.Fatalf("pre-invocation error has write evidence: %#v", err)
+	}
+}
+
+func validDirectRPCRequest(t *testing.T) rpcgo.RPCGoRequest {
+	t.Helper()
+	return rpcgo.RPCGoRequest{APIVersion: rpcgo.RPCGoRequestAPIVersion, Kind: rpcgo.RPCGoRequestKind, ServiceID: "account", ModulePath: "example.com/consumer", ProtocolIR: rpcProtocolSnapshot(t), OutputScopes: []directwrite.OutputScope{{Path: "backend/account/generated", Mode: directwrite.OutputModeReplaceTree}}}
+}
+
+func canonicalRPCDirectResult(t *testing.T, digest provenance.Digest, scopes []directwrite.OutputScope) []byte {
+	t.Helper()
+	encoded, err := rpcgo.CanonicalRPCGoResult(rpcgo.RPCGoResult{APIVersion: rpcgo.RPCGoResultAPIVersion, Kind: rpcgo.RPCGoResultKind, Status: rpcgo.RPCGoResultGenerated, ServiceID: "account", InputDigest: digest, OutputScopes: scopes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func rpcTestScopePaths(scopes []directwrite.OutputScope) []string {
+	paths := make([]string, len(scopes))
+	for index, scope := range scopes {
+		paths[index] = scope.Path
+	}
+	return paths
+}
+
+func assertRPCPostInvocationEvidence(t *testing.T, err error, reason, pointer string) {
+	t.Helper()
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || typed.Code() != "tool_output_invalid" || typed.Stage() != "result" || typed.Reason() != reason || typed.Pointer() != pointer || typed.Source() != "" || typed.ToolID() != "rpc" || typed.ExitCode() != 0 || !typed.Started() || !typed.MayHaveWritten() {
+		t.Fatalf("post-invocation error = %#v", err)
 	}
 }
 
