@@ -76,7 +76,7 @@ func TestExecDirectRunnerProjectsProbeStartWriteEvidence(t *testing.T) {
 
 func TestDirectPostInvocationErrorPreservesCauseAndStableEvidence(t *testing.T) {
 	cause := &json.SyntaxError{Offset: 7}
-	err := toolchain.DirectPostInvocationError("api", "result_invalid", "/stdout", cause)
+	err := toolchain.DirectPostInvocationError("api", toolchain.DirectPostInvocationResultInvalid, cause)
 	var typed *toolchain.Error
 	if !errors.As(err, &typed) || typed.Code() != "tool_output_invalid" || typed.Stage() != "result" || typed.Reason() != "result_invalid" || typed.Pointer() != "/stdout" || typed.Source() != "" || typed.ToolID() != "api" || typed.ExitCode() != 0 || !typed.Started() || !typed.MayHaveWritten() {
 		t.Fatalf("post-invocation error = %#v", err)
@@ -88,10 +88,58 @@ func TestDirectPostInvocationErrorPreservesCauseAndStableEvidence(t *testing.T) 
 	if !errors.As(err, &found) || found != cause {
 		t.Fatal("post-invocation error hid its original cause type")
 	}
-	second := toolchain.DirectPostInvocationError("api", "result_invalid", "/stdout", nil)
+	multi, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		t.Fatal("post-invocation error does not expose the immutable dual relation")
+	}
+	children := multi.Unwrap()
+	if len(children) != 2 {
+		t.Fatalf("unwrap children = %#v", children)
+	}
+	children[0], children[1] = nil, nil
+	if !errors.Is(err, cause) || !errors.As(err, &typed) || !typed.Started() || !typed.MayHaveWritten() {
+		t.Fatal("mutating an unwrap result changed post-invocation evidence")
+	}
+	second := toolchain.DirectPostInvocationError("api", toolchain.DirectPostInvocationResultInvalid, nil)
 	var secondTyped *toolchain.Error
 	if !errors.As(second, &secondTyped) || secondTyped == typed || errors.Is(second, cause) {
 		t.Fatal("post-invocation errors share mutable typed state")
+	}
+}
+
+func TestDirectPostInvocationFailureMappingsAreClosed(t *testing.T) {
+	tests := []struct {
+		failure toolchain.DirectPostInvocationFailure
+		reason  string
+		pointer string
+	}{
+		{toolchain.DirectPostInvocationProcessIdentityInvalid, "process_identity_invalid", "/process"},
+		{toolchain.DirectPostInvocationResultInvalid, "result_invalid", "/stdout"},
+		{toolchain.DirectPostInvocationAcknowledgementInvalid, "result_acknowledgement_invalid", "/result"},
+	}
+	for _, test := range tests {
+		err := toolchain.DirectPostInvocationError("rpc", test.failure, nil)
+		var typed *toolchain.Error
+		if !errors.As(err, &typed) || typed.Code() != "tool_output_invalid" || typed.Stage() != "result" || typed.Reason() != test.reason || typed.Pointer() != test.pointer || typed.Source() != "" || typed.ToolID() != "rpc" || !typed.Started() || !typed.MayHaveWritten() {
+			t.Fatalf("failure %d = %#v", test.failure, err)
+		}
+	}
+}
+
+func TestDirectPostInvocationInvalidFailureUsesFixedBoundedFallback(t *testing.T) {
+	first := toolchain.DirectPostInvocationError("api", toolchain.DirectPostInvocationFailure(200), nil)
+	second := toolchain.DirectPostInvocationError("api", toolchain.DirectPostInvocationFailure(201), nil)
+	var firstTyped, secondTyped *toolchain.Error
+	if !errors.As(first, &firstTyped) || !errors.As(second, &secondTyped) {
+		t.Fatalf("invalid failure errors = %#v, %#v", first, second)
+	}
+	for _, typed := range []*toolchain.Error{firstTyped, secondTyped} {
+		if typed.Code() != "tool_output_invalid" || typed.Stage() != "result" || typed.Reason() != "post_invocation_failure_invalid" || typed.Pointer() != "/failure" || typed.Source() != "" || !typed.Started() || !typed.MayHaveWritten() {
+			t.Fatalf("invalid failure projection = %#v", typed)
+		}
+	}
+	if firstTyped == secondTyped || !errors.Is(second, firstTyped.Unwrap()) {
+		t.Fatal("invalid failure values did not share the fixed bounded sentinel contract")
 	}
 }
 

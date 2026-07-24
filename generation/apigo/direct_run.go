@@ -60,15 +60,15 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 	}
 	if processResult.ToolID != options.Tool.ID || processResult.Version != options.Tool.Version || processResult.ExecutableVersion != options.Tool.Probe.ExpectedVersion || processResult.ExitCode != 0 {
 		cause := errors.New("API Go tool process identity is invalid")
-		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, "process_identity_invalid", "/process", cause)
+		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationProcessIdentityInvalid, cause)
 	}
 	result, err := ParseAPIGoResult(processResult.Stdout)
 	if err != nil {
-		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, "result_invalid", "/stdout", err)
+		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationResultInvalid, err)
 	}
 	if result.CoreServiceID != request.CoreServiceID || result.InputDigest != provenance.SHA256(stdin) || !reflect.DeepEqual(result.OutputScopes, requestScopes) {
 		cause := errors.New("API Go tool result does not acknowledge the exact request")
-		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, "result_acknowledgement_invalid", "/result", cause)
+		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, cause)
 	}
 	return result, nil
 }

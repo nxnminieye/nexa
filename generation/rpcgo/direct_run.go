@@ -48,15 +48,15 @@ func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOpt
 	}
 	if processResult.ToolID != options.Tool.ID || processResult.Version != options.Tool.Version || processResult.ExecutableVersion != options.Tool.Probe.ExpectedVersion || processResult.ExitCode != 0 {
 		cause := errors.New("RPC Go tool process identity is invalid")
-		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, "process_identity_invalid", "/process", cause)
+		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationProcessIdentityInvalid, cause)
 	}
 	result, err := ParseRPCGoResult(processResult.Stdout)
 	if err != nil {
-		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, "result_invalid", "/stdout", err)
+		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationResultInvalid, err)
 	}
 	if result.ServiceID != request.ServiceID || result.InputDigest != provenance.SHA256(stdin) || !reflect.DeepEqual(result.OutputScopes, requestScopes) {
 		cause := errors.New("RPC Go tool result does not acknowledge the exact request")
-		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, "result_acknowledgement_invalid", "/result", cause)
+		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, cause)
 	}
 	return result, nil
 }

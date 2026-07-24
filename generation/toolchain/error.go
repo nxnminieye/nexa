@@ -142,16 +142,60 @@ func newDiagnosticError(code, stage, reason, pointer, source, toolID string, exi
 	}
 }
 
-// DirectPostInvocationError projects protocol validation failures after a direct
+// DirectPostInvocationFailure is the closed set of protocol failures that can
+// occur after a direct runner has returned success.
+type DirectPostInvocationFailure uint8
+
+const (
+	DirectPostInvocationProcessIdentityInvalid DirectPostInvocationFailure = iota + 1
+	DirectPostInvocationResultInvalid
+	DirectPostInvocationAcknowledgementInvalid
+)
+
+type directPostInvocationError struct {
+	projected *Error
+	cause     error
+}
+
+func (e *directPostInvocationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.projected.Error()
+}
+
+// Unwrap returns a fresh slice so callers cannot mutate the wrapper's relation.
+func (e *directPostInvocationError) Unwrap() []error {
+	if e == nil {
+		return nil
+	}
+	if e.cause == nil {
+		return []error{e.projected}
+	}
+	return []error{e.projected, e.cause}
+}
+
+func directPostInvocationLocation(failure DirectPostInvocationFailure) (reason, pointer string) {
+	switch failure {
+	case DirectPostInvocationProcessIdentityInvalid:
+		return "process_identity_invalid", "/process"
+	case DirectPostInvocationResultInvalid:
+		return "result_invalid", "/stdout"
+	case DirectPostInvocationAcknowledgementInvalid:
+		return "result_acknowledgement_invalid", "/result"
+	default:
+		return "post_invocation_failure_invalid", "/failure"
+	}
+}
+
+// DirectPostInvocationError projects a closed protocol failure after a direct
 // runner has returned success. The original cause remains available to errors.Is/As.
-func DirectPostInvocationError(toolID, reason, pointer string, cause error) error {
+func DirectPostInvocationError(toolID string, failure DirectPostInvocationFailure, cause error) error {
+	reason, pointer := directPostInvocationLocation(failure)
 	projected := newError("tool_output_invalid", "result", reason, pointer, "", toolID, 0)
 	projected.started = true
 	projected.mayHaveWritten = true
-	if cause != nil {
-		projected.sentinel = errors.Join(projected.sentinel, cause)
-	}
-	return projected
+	return &directPostInvocationError{projected: projected, cause: cause}
 }
 
 func projectBuildInputError(err error, toolID string, exitCode int) error {
