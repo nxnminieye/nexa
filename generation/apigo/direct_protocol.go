@@ -17,6 +17,8 @@ import (
 	"github.com/nxnminieye/nexa/generation/toolchain"
 	"github.com/nxnminieye/nexa/provenance"
 	"golang.org/x/mod/module"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -201,6 +203,7 @@ func ParseAPIGoResult(data []byte) (APIGoResult, error) {
 func normalizeStaticInputs(input []StaticInput) ([]StaticInput, error) {
 	result := append([]StaticInput(nil), input...)
 	ids, paths := make(map[string]struct{}, len(result)), make(map[string]struct{}, len(result))
+	fold := cases.Fold()
 	pathScopes := make([]directwrite.OutputScope, 0, len(result))
 	for _, item := range result {
 		if !staticInputIDPattern.MatchString(item.ID) || toolchain.ValidateRepositoryPath(item.Path) != nil {
@@ -209,13 +212,14 @@ func normalizeStaticInputs(input []StaticInput) ([]StaticInput, error) {
 		if _, err := provenance.ParseDigest(item.Digest.String()); err != nil {
 			return nil, errors.New("API Go request static input digest is invalid")
 		}
-		if _, duplicate := ids[item.ID]; duplicate {
+		idKey := fold.String(norm.NFC.String(item.ID))
+		if _, duplicate := ids[idKey]; duplicate {
 			return nil, errors.New("API Go request static inputs are duplicated")
 		}
 		if _, duplicate := paths[item.Path]; duplicate {
 			return nil, errors.New("API Go request static inputs are duplicated")
 		}
-		ids[item.ID], paths[item.Path] = struct{}{}, struct{}{}
+		ids[idKey], paths[item.Path] = struct{}{}, struct{}{}
 		pathScopes = append(pathScopes, directwrite.OutputScope{Path: item.Path, Mode: directwrite.OutputModeFileSet})
 	}
 	if len(pathScopes) == 0 {

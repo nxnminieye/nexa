@@ -64,11 +64,7 @@ func hasGeneratedMarker(name string, content []byte) bool {
 		parsed, err := parser.ParseFile(token.NewFileSet(), name, content, parser.ParseComments)
 		return err == nil && ast.IsGenerated(parsed)
 	}
-	window := content
-	if len(window) > 4096 {
-		window = window[:4096]
-	}
-	return bytes.Contains(window, []byte("Code generated")) && bytes.Contains(window, []byte("DO NOT EDIT"))
+	return false
 }
 
 func verifyManualScopeFiles(repository string, before map[string][]byte) error {

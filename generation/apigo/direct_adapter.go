@@ -113,7 +113,7 @@ func WriteDirect(ctx context.Context, spec DirectSpec, options DirectOptions) (A
 	if _, err := CanonicalAPIGoRequest(request); err != nil {
 		return APIGoResult{}, apiDirectFailure("validate-input", "request_invalid", options, err, false)
 	}
-	manual, err := snapshotManualScopeFiles(root, toolScopes)
+	manual, err := snapshotManualScopeFiles(root, commandScopes)
 	if err != nil {
 		return APIGoResult{}, apiDirectFailure("validate-input", "repository_invalid", options, err, false)
 	}

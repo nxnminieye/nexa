@@ -21,30 +21,33 @@ type DirectOptions struct {
 // RunDirectRPCGo invokes the v2 RPC tool only after the complete scope relation is valid.
 func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOptions) (RPCGoResult, error) {
 	if ctx == nil || options.Runner == nil {
-		return RPCGoResult{}, errors.New("RPC Go direct invocation is invalid")
+		return RPCGoResult{}, directFailure("validate-input", "request_invalid", options, errors.New("RPC Go direct invocation is invalid"), false)
 	}
 	if len(options.Tool.Args) != 0 {
-		return RPCGoResult{}, errors.New("RPC Go tool fixed args must be empty")
+		return RPCGoResult{}, directFailure("validate-input", "tool_scope_invalid", options, errors.New("RPC Go tool fixed args must be empty"), false)
 	}
 	root, err := toolchain.CanonicalRepositoryRoot(options.RepositoryRoot)
 	if err != nil {
-		return RPCGoResult{}, err
+		return RPCGoResult{}, directFailure("validate-input", "repository_invalid", options, err, false)
 	}
 	requestScopes, _, err := toolchain.OutputScopesSubset(request.OutputScopes, options.OutputScopes)
 	if err != nil {
-		return RPCGoResult{}, err
+		return RPCGoResult{}, directFailure("validate-input", "tool_scope_invalid", options, err, false)
 	}
 	if !reflect.DeepEqual(scopePaths(requestScopes), options.Tool.WriteScopes) {
-		return RPCGoResult{}, errors.New("RPC Go tool write scopes do not match request scopes")
+		return RPCGoResult{}, directFailure("validate-input", "tool_scope_invalid", options, errors.New("RPC Go tool write scopes do not match request scopes"), false)
+	}
+	if len(options.Tool.InputScopes) != 0 {
+		return RPCGoResult{}, directFailure("validate-input", "tool_scope_invalid", options, errors.New("RPC Go tool input scopes must be empty"), false)
 	}
 	request.OutputScopes = requestScopes
 	stdin, err := CanonicalRPCGoRequest(request)
 	if err != nil {
-		return RPCGoResult{}, err
+		return RPCGoResult{}, directFailure("validate-input", "request_invalid", options, err, false)
 	}
 	manual, err := snapshotManualScopeFiles(root, requestScopes)
 	if err != nil {
-		return RPCGoResult{}, err
+		return RPCGoResult{}, directFailure("validate-input", "repository_invalid", options, err, false)
 	}
 	processResult, err := options.Runner.RunDirect(ctx, toolchain.DirectRequest{RepositoryRoot: root, Tool: options.Tool, Args: []string{"generate", "--service", request.ServiceID}, Environment: append([]toolchain.EnvVar(nil), options.Environment...), Stdin: stdin})
 	if err != nil {

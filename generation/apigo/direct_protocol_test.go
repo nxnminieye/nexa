@@ -49,7 +49,7 @@ func TestAPIGoV2ProtocolAndDirectRunner(t *testing.T) {
 		resultBytes, resultErr := apigo.CanonicalAPIGoResult(apigo.APIGoResult{APIVersion: apigo.APIGoResultAPIVersion, Kind: apigo.APIGoResultKind, Status: apigo.APIGoResultGenerated, CoreServiceID: "core", InputDigest: provenance.SHA256(call.Stdin), OutputScopes: scopes})
 		return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: resultBytes}, resultErr
 	})
-	result, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", WriteScopes: []string{scopes[0].Path}, Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}, Runner: runner, OutputScopes: scopes})
+	result, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", InputScopes: []string{static[0].Path}, WriteScopes: []string{scopes[0].Path}, Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}, Runner: runner, OutputScopes: scopes})
 	if err != nil || result.InputDigest != provenance.SHA256(stdin) {
 		t.Fatalf("RunDirectAPIGo = %#v, %v", result, err)
 	}
@@ -57,7 +57,7 @@ func TestAPIGoV2ProtocolAndDirectRunner(t *testing.T) {
 		encoded, resultErr := apigo.CanonicalAPIGoResult(apigo.APIGoResult{APIVersion: apigo.APIGoResultAPIVersion, Kind: apigo.APIGoResultKind, Status: apigo.APIGoResultGenerated, CoreServiceID: "core", InputDigest: provenance.SHA256([]byte("different stdin")), OutputScopes: scopes})
 		return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: encoded}, resultErr
 	})
-	if _, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", WriteScopes: []string{scopes[0].Path}, Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}, Runner: invalidRunner, OutputScopes: scopes}); err == nil {
+	if _, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", InputScopes: []string{static[0].Path}, WriteScopes: []string{scopes[0].Path}, Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}, Runner: invalidRunner, OutputScopes: scopes}); err == nil {
 		t.Fatal("accepted result digest that does not match exact stdin")
 	}
 }
@@ -78,7 +78,7 @@ func TestRunDirectAPIGoRejectsPostToolStaticInputMutation(t *testing.T) {
 		}
 		return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
 	})
-	tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+	tool := toolchain.Tool{ID: "api", Version: "v2", InputScopes: apiTestInputPaths(request.StaticInputs), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
 	_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
 	assertAPIPostInvocationEvidence(t, err, "result_acknowledgement_invalid", "/result")
 }
@@ -103,7 +103,7 @@ func TestRunDirectAPIGoRejectsPostToolStaticInputIdentityReplacement(t *testing.
 		}
 		return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
 	})
-	tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+	tool := toolchain.Tool{ID: "api", Version: "v2", InputScopes: apiTestInputPaths(request.StaticInputs), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
 	_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
 	assertAPIPostInvocationEvidence(t, err, "result_acknowledgement_invalid", "/result")
 }
@@ -138,7 +138,7 @@ func TestRunDirectAPIGoPreservesEveryNonGoManualFile(t *testing.T) {
 					}
 					return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
 				})
-				tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+				tool := toolchain.Tool{ID: "api", Version: "v2", InputScopes: apiTestInputPaths(request.StaticInputs), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
 				if _, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes}); err == nil {
 					t.Fatal("accepted changed manual file")
 				}
@@ -252,7 +252,7 @@ func TestRunDirectAPIGoProjectsEveryPostInvocationFailure(t *testing.T) {
 				test.mutate(t, call, &result)
 				return result, nil
 			})
-			tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+			tool := toolchain.Tool{ID: "api", Version: "v2", InputScopes: apiTestInputPaths(request.StaticInputs), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
 			_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
 			if calls != 1 {
 				t.Fatalf("runner calls = %d", calls)
@@ -272,7 +272,7 @@ func TestRunDirectAPIGoPreservesRunnerNotStartedEvidence(t *testing.T) {
 	if err := os.WriteFile(entry, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tool := toolchain.Tool{ID: "api", Version: "v2", Executable: filepath.Join(repository, "missing"), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{Args: []string{"--version"}, ExpectedVersion: "api-v2"}}
+	tool := toolchain.Tool{ID: "api", Version: "v2", Executable: filepath.Join(repository, "missing"), InputScopes: apiTestInputPaths(request.StaticInputs), WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{Args: []string{"--version"}, ExpectedVersion: "api-v2"}}
 	_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: toolchain.NewExecDirectRunner(), OutputScopes: request.OutputScopes})
 	var typed *toolchain.Error
 	if !errors.As(err, &typed) || typed.Stage() != "probe" || typed.Started() || typed.MayHaveWritten() {
@@ -337,7 +337,7 @@ func TestRunDirectAPIGoRejectsFixedArgsAndStaticSymlink(t *testing.T) {
 		called = true
 		return toolchain.Result{}, nil
 	})
-	options := apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", WriteScopes: []string{"backend/core/generated"}}, Runner: runner, OutputScopes: request.OutputScopes}
+	options := apigo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "api", Version: "v2", InputScopes: apiTestInputPaths(request.StaticInputs), WriteScopes: []string{"backend/core/generated"}}, Runner: runner, OutputScopes: request.OutputScopes}
 	options.Tool.Args = []string{"wrapper"}
 	if _, err := apigo.RunDirectAPIGo(context.Background(), request, options); err == nil || called {
 		t.Fatalf("fixed args rejection = %v, called = %v", err, called)
@@ -408,6 +408,14 @@ func apiTestScopePaths(scopes []directwrite.OutputScope) []string {
 	paths := make([]string, len(scopes))
 	for index, scope := range scopes {
 		paths[index] = scope.Path
+	}
+	return paths
+}
+
+func apiTestInputPaths(inputs []apigo.StaticInput) []string {
+	paths := make([]string, len(inputs))
+	for index, input := range inputs {
+		paths[index] = input.Path
 	}
 	return paths
 }

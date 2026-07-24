@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/nxnminieye/nexa/generation/directwrite"
@@ -40,6 +41,13 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 	}
 	if !reflect.DeepEqual(apiScopePaths(requestScopes), options.Tool.WriteScopes) {
 		return APIGoResult{}, errors.New("API Go tool write scopes do not match request scopes")
+	}
+	expectedInputs := staticInputPaths(request.StaticInputs)
+	sort.Strings(expectedInputs)
+	actualInputs := append([]string(nil), options.Tool.InputScopes...)
+	sort.Strings(actualInputs)
+	if !reflect.DeepEqual(expectedInputs, actualInputs) {
+		return APIGoResult{}, errors.New("API Go tool input scopes do not match request static inputs")
 	}
 	if err := toolchain.ValidatePathSetsDisjoint(staticInputPaths(request.StaticInputs), requestScopes); err != nil {
 		return APIGoResult{}, errors.New("API Go static inputs and output scopes overlap")

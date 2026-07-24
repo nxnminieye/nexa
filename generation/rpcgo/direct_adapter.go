@@ -42,6 +42,10 @@ func WriteDirect(ctx context.Context, request DirectRequest, options DirectOptio
 	if err == nil {
 		return result, nil
 	}
+	var directErr *Error
+	if errors.As(err, &directErr) {
+		return DirectResult{}, err
+	}
 	postLaunch := false
 	var toolError *toolchain.Error
 	if errors.As(err, &toolError) {
