@@ -416,6 +416,11 @@ func executeProcessWithLimits(ctx context.Context, executable string, args, envi
 	if !configureProcessTree(command) {
 		return processOutcome{startErr: errors.New("process tree unsupported")}
 	}
+	// This is the launch linearization point: cancellation observed here means
+	// the process was never started and no process pipe was allocated.
+	if contextErr := ctx.Err(); contextErr != nil {
+		return processOutcome{contextErr: contextErr}
+	}
 	stdout := newBoundedProcessOutput(stdoutLimit, "stdout-overflow", hook)
 	stderr := newBoundedProcessOutput(stderrLimit, "stderr-overflow", hook)
 	stdinPipe, err := command.StdinPipe()

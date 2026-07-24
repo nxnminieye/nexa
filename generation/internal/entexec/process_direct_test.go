@@ -107,6 +107,18 @@ func TestDirectProcessErrorStartedState(t *testing.T) {
 		cancel()
 		assertDirectInvoked(t, <-done)
 	})
+	t.Run("probe canceled before start", func(t *testing.T) {
+		spec := validDirectProcessSpec(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		spec.processHook = func(event processEvent) {
+			if event.Name == "start" {
+				cancel()
+			}
+		}
+		_, err := RunProcess(ctx, spec)
+		assertProcessError(t, err, "tool_canceled", "wait", "context_canceled", "/context", "ent-direct", 0)
+		assertNotStarted(t, err)
+	})
 	t.Run("main start failure", func(t *testing.T) {
 		spec := validDirectProcessSpec(t)
 		prepared, err := prepareProcess(context.Background(), spec)
@@ -130,20 +142,30 @@ func TestDirectProcessErrorStartedState(t *testing.T) {
 			t.Fatalf("error = %#v", err)
 		}
 	})
-	t.Run("canceled after probe before main", func(t *testing.T) {
+	t.Run("main canceled at launch after probe", func(t *testing.T) {
 		spec := validDirectProcessSpec(t)
-		prepared, err := prepareProcess(context.Background(), spec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer prepared.release()
-		if _, err := probePreparedProcess(context.Background(), &prepared); err != nil {
-			t.Fatal(err)
-		}
 		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		_, err = runPreparedProcess(ctx, preparedExecution{process: &prepared})
+		marker := filepath.Join(spec.RepositoryRoot, "main-ran")
+		spec.Args = []string{"mark", marker}
+		starts := 0
+		spec.processHook = func(event processEvent) {
+			if event.Name != "start" {
+				return
+			}
+			starts++
+			if len(event.Args) > 0 && event.Args[len(event.Args)-1] == marker {
+				cancel()
+			}
+		}
+		_, err := RunProcess(ctx, spec)
+		assertProcessError(t, err, "tool_canceled", "wait", "context_canceled", "/context", "ent-direct", 0)
 		assertDirectInvoked(t, err)
+		if starts != 2 {
+			t.Fatalf("start events = %d, want probe and main", starts)
+		}
+		if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("main process started: %v", statErr)
+		}
 	})
 }
 
