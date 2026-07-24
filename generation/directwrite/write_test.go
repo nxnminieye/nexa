@@ -302,6 +302,20 @@ func TestWriteCancellationIsTyped(t *testing.T) {
 	assertAbsent(t, root, "gen/a.go")
 }
 
+func TestWritePreCanceledRequestSkipsNormalization(t *testing.T) {
+	root := canonicalTempDir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	report, err := Write(ctx, root, MutationSet{})
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind() != ErrorCanceled || typed.ChangeEvidence() != ChangeEvidenceComplete || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %#v", err)
+	}
+	if len(report.CompletedWrites) != 0 || len(report.CompletedDeletes) != 0 || !reflect.DeepEqual(typed.Report(), report) {
+		t.Fatalf("report = %#v, typed = %#v", report, typed.Report())
+	}
+}
+
 func TestWriteCancellationAfterCompletedMutationPreservesReport(t *testing.T) {
 	root := canonicalTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())

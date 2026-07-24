@@ -1,6 +1,7 @@
 package directwrite
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -15,21 +16,73 @@ import (
 var unicodeFold = cases.Fold()
 
 type normalizedMutationSet struct {
-	scopes  []OutputScope
-	writes  []OutputFile
-	deletes []string
+	scopes          []OutputScope
+	writes          []OutputFile
+	deletes         []string
+	scopePaths      []canonicalPath
+	writeScopeModes []OutputMode
+	scopeModeByKey  map[string]OutputMode
+}
+
+type canonicalPath struct{ components []string }
+type pathTrieNode struct {
+	children map[string]*pathTrieNode
+	terminal bool
+}
+
+func newPathTrie() *pathTrieNode { return &pathTrieNode{children: map[string]*pathTrieNode{}} }
+
+func (n *pathTrieNode) insert(p canonicalPath) (equal, related bool) {
+	cur := n
+	for i, part := range p.components {
+		if cur.terminal {
+			return false, true
+		}
+		next := cur.children[part]
+		if next == nil {
+			next = newPathTrie()
+			cur.children[part] = next
+		}
+		cur = next
+		if i == len(p.components)-1 {
+			equal = cur.terminal
+			related = equal || len(cur.children) > 0
+			cur.terminal = true
+		}
+	}
+	return
 }
 
 func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
+	return normalizeMutationsContext(context.Background(), input)
+}
+
+func normalizeMutationsContext(ctx context.Context, input MutationSet) (normalizedMutationSet, error) {
+	if err := contextErr(ctx); err != nil {
+		return normalizedMutationSet{}, err
+	}
 	result := normalizedMutationSet{
 		scopes:  make([]OutputScope, len(input.Scopes)),
 		writes:  make([]OutputFile, len(input.Writes)),
 		deletes: make([]string, len(input.Deletes)),
 	}
-	copy(result.scopes, input.Scopes)
-	copy(result.deletes, input.Deletes)
+	for index, item := range input.Scopes {
+		if err := contextErr(ctx); err != nil {
+			return normalizedMutationSet{}, err
+		}
+		result.scopes[index] = item
+	}
 	for index, item := range input.Writes {
+		if err := contextErr(ctx); err != nil {
+			return normalizedMutationSet{}, err
+		}
 		result.writes[index] = OutputFile{Path: item.Path, Content: append([]byte(nil), item.Content...)}
+	}
+	for index, item := range input.Deletes {
+		if err := contextErr(ctx); err != nil {
+			return normalizedMutationSet{}, err
+		}
+		result.deletes[index] = item
 	}
 	if len(result.scopes) == 0 {
 		return normalizedMutationSet{}, directError(ErrorInvalidScope, "", "at least one output scope is required", WriteReport{}, nil)
@@ -40,6 +93,9 @@ func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
 			return normalizedMutationSet{}, directError(ErrorInvalidScope, result.scopes[index].Path, err.Error(), WriteReport{}, err)
 		}
 		result.scopes[index].Path = clean
+		if err := contextErr(ctx); err != nil {
+			return normalizedMutationSet{}, err
+		}
 		if result.scopes[index].Mode != OutputModeReplaceTree && result.scopes[index].Mode != OutputModeFileSet {
 			return normalizedMutationSet{}, directError(ErrorInvalidScope, clean, "output mode is invalid", WriteReport{}, nil)
 		}
@@ -50,6 +106,9 @@ func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
 			return normalizedMutationSet{}, directError(ErrorInvalidMutation, result.writes[index].Path, err.Error(), WriteReport{}, err)
 		}
 		result.writes[index].Path = clean
+		if err := contextErr(ctx); err != nil {
+			return normalizedMutationSet{}, err
+		}
 	}
 	for index := range result.deletes {
 		clean, err := cleanRelativePath(result.deletes[index])
@@ -57,6 +116,9 @@ func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
 			return normalizedMutationSet{}, directError(ErrorInvalidMutation, result.deletes[index], err.Error(), WriteReport{}, err)
 		}
 		result.deletes[index] = clean
+		if err := contextErr(ctx); err != nil {
+			return normalizedMutationSet{}, err
+		}
 	}
 	sort.Slice(result.scopes, func(i, j int) bool {
 		if result.scopes[i].Path == result.scopes[j].Path {
@@ -66,7 +128,15 @@ func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
 	})
 	sort.Slice(result.writes, func(i, j int) bool { return result.writes[i].Path < result.writes[j].Path })
 	sort.Strings(result.deletes)
-	if err := validateTopology(result); err != nil {
+	result.scopePaths = make([]canonicalPath, len(result.scopes))
+	for i := range result.scopes {
+		p, err := canonicalizePath(ctx, result.scopes[i].Path)
+		if err != nil {
+			return normalizedMutationSet{}, err
+		}
+		result.scopePaths[i] = p
+	}
+	if err := validateTopology(ctx, &result); err != nil {
 		return normalizedMutationSet{}, err
 	}
 	return result, nil
@@ -98,36 +168,37 @@ func foldedComponent(value string) string {
 	return unicodeFold.String(norm.NFC.String(value))
 }
 
-func foldedPath(value string) []string {
+func canonicalizePath(ctx context.Context, value string) (canonicalPath, error) {
 	parts := strings.Split(value, "/")
-	for index := range parts {
-		parts[index] = foldedComponent(parts[index])
-	}
-	return parts
-}
-
-func compareTopology(left, right string) (equal, related bool) {
-	a, b := foldedPath(left), foldedPath(right)
-	limit := len(a)
-	if len(b) < limit {
-		limit = len(b)
-	}
-	for index := 0; index < limit; index++ {
-		if a[index] != b[index] {
-			return false, false
+	out := canonicalPath{components: make([]string, len(parts))}
+	for i, part := range parts {
+		if err := contextErr(ctx); err != nil {
+			return canonicalPath{}, err
 		}
+		out.components[i] = foldedComponent(part)
 	}
-	return len(a) == len(b), true
+	return out, nil
 }
 
-func validateTopology(set normalizedMutationSet) error {
+func contextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return directErrorWithEvidence(ErrorCanceled, "", "direct write was canceled", WriteReport{}, err, ChangeEvidenceComplete)
+	}
+	return nil
+}
+
+func validateTopology(ctx context.Context, set *normalizedMutationSet) error {
+	trie := newPathTrie()
+	set.scopeModeByKey = make(map[string]OutputMode, len(set.scopes))
 	for index := range set.scopes {
-		for other := 0; other < index; other++ {
-			equal, related := compareTopology(set.scopes[other].Path, set.scopes[index].Path)
-			if equal || related {
-				return directError(ErrorInvalidScope, set.scopes[index].Path, "output scopes collide or overlap", WriteReport{}, nil)
-			}
+		if err := contextErr(ctx); err != nil {
+			return err
 		}
+		equal, related := trie.insert(set.scopePaths[index])
+		if equal || related {
+			return directError(ErrorInvalidScope, set.scopes[index].Path, "output scopes collide or overlap", WriteReport{}, nil)
+		}
+		set.scopeModeByKey[strings.Join(set.scopePaths[index].components, "/")] = set.scopes[index].Mode
 	}
 	type action struct {
 		path   string
@@ -140,28 +211,35 @@ func validateTopology(set normalizedMutationSet) error {
 	for _, item := range set.deletes {
 		actions = append(actions, action{path: item, delete: true})
 	}
+	actionTrie := newPathTrie()
+	set.writeScopeModes = make([]OutputMode, len(set.writes))
 	for index, item := range actions {
-		scopeIndex := -1
-		for candidate, scope := range set.scopes {
-			equal, related := compareTopology(scope.Path, item.path)
-			if related && !equal && len(foldedPath(scope.Path)) < len(foldedPath(item.path)) {
-				if scopeIndex >= 0 {
-					return directError(ErrorInvalidMutation, item.path, "action belongs to more than one output scope", WriteReport{}, nil)
-				}
-				scopeIndex = candidate
+		if err := contextErr(ctx); err != nil {
+			return err
+		}
+		p, err := canonicalizePath(ctx, item.path)
+		if err != nil {
+			return err
+		}
+		scopeMode, scopeFound := OutputMode(""), false
+		for end := len(p.components) - 1; end > 0; end-- {
+			if mode, ok := set.scopeModeByKey[strings.Join(p.components[:end], "/")]; ok {
+				scopeMode, scopeFound = mode, true
+				break
 			}
 		}
-		if scopeIndex < 0 {
+		if !scopeFound {
 			return directError(ErrorInvalidMutation, item.path, "action is not strictly inside an output scope", WriteReport{}, nil)
 		}
-		if item.delete && set.scopes[scopeIndex].Mode != OutputModeFileSet {
+		if item.delete && scopeMode != OutputModeFileSet {
 			return directError(ErrorInvalidMutation, item.path, "explicit deletes are allowed only in file-set scopes", WriteReport{}, nil)
 		}
-		for other := 0; other < index; other++ {
-			equal, related := compareTopology(actions[other].path, item.path)
-			if equal || related {
-				return directError(ErrorInvalidMutation, item.path, "action paths collide or have ancestor/descendant topology", WriteReport{}, nil)
-			}
+		equal, related := actionTrie.insert(p)
+		if equal || related {
+			return directError(ErrorInvalidMutation, item.path, "action paths collide or have ancestor/descendant topology", WriteReport{}, nil)
+		}
+		if index < len(set.writes) {
+			set.writeScopeModes[index] = scopeMode
 		}
 	}
 	return nil

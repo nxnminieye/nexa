@@ -3,6 +3,7 @@ package directwrite
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,19 +33,29 @@ func (osFileSystem) WriteExclusive(name string, content []byte, mode fs.FileMode
 	if err != nil {
 		return err
 	}
-	if err = file.Chmod(mode); err != nil {
-		_ = file.Close()
-		return err
+	return finishExclusiveWrite(file, content, mode)
+}
+
+type exclusiveFile interface {
+	Chmod(fs.FileMode) error
+	Write([]byte) (int, error)
+	Close() error
+}
+
+func finishExclusiveWrite(file exclusiveFile, content []byte, mode fs.FileMode) error {
+	chmodErr := file.Chmod(mode)
+	if chmodErr == nil {
+		n, writeErr := file.Write(content)
+		if writeErr == nil && n != len(content) {
+			writeErr = io.ErrShortWrite
+		}
+		return errors.Join(writeErr, file.Close())
 	}
-	if _, err = file.Write(content); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
+	return errors.Join(chmodErr, file.Close())
 }
 
 func write(ctx context.Context, repositoryRoot string, mutations MutationSet, files fileSystem) (WriteReport, error) {
-	set, err := normalizeMutations(mutations)
+	set, err := normalizeMutationsContext(ctx, mutations)
 	if err != nil {
 		return WriteReport{}, err
 	}
@@ -52,7 +63,7 @@ func write(ctx context.Context, repositoryRoot string, mutations MutationSet, fi
 	if err != nil {
 		return WriteReport{}, err
 	}
-	if err := preflightFileSystem(root, set, files); err != nil {
+	if err := preflightFileSystem(ctx, root, set, files); err != nil {
 		return WriteReport{}, err
 	}
 	report := WriteReport{CompletedWrites: []string{}, CompletedDeletes: []string{}}
@@ -146,14 +157,20 @@ func validateRepositoryRoot(root string, files fileSystem) (string, error) {
 	return root, nil
 }
 
-func preflightFileSystem(root string, set normalizedMutationSet, files fileSystem) error {
+func preflightFileSystem(ctx context.Context, root string, set normalizedMutationSet, files fileSystem) error {
 	for _, scope := range set.scopes {
+		if err := canceled(ctx, WriteReport{}, ChangeEvidenceComplete); err != nil {
+			return err
+		}
 		if err := verifyScopeAncestors(root, scope.Path, files); err != nil {
 			return directError(ErrorPathDenied, scope.Path, "output scope is denied by the current repository tree", WriteReport{}, err)
 		}
 	}
-	for _, output := range set.writes {
-		if scopeForPath(set.scopes, output.Path).Mode == OutputModeReplaceTree {
+	for index, output := range set.writes {
+		if err := canceled(ctx, WriteReport{}, ChangeEvidenceComplete); err != nil {
+			return err
+		}
+		if set.writeScopeModes[index] == OutputModeReplaceTree {
 			continue
 		}
 		if err := verifyActionPath(root, output.Path, true, files); err != nil {
@@ -161,6 +178,9 @@ func preflightFileSystem(root string, set normalizedMutationSet, files fileSyste
 		}
 	}
 	for _, target := range set.deletes {
+		if err := canceled(ctx, WriteReport{}, ChangeEvidenceComplete); err != nil {
+			return err
+		}
 		if err := verifyActionPath(root, target, true, files); err != nil {
 			return directError(ErrorPathDenied, target, "delete path is denied by the current repository tree", WriteReport{}, err)
 		}
@@ -274,16 +294,6 @@ func partialFailure(path, message string, report WriteReport, cause error, evide
 
 func uncertainPartialFailure(path, message string, report WriteReport, cause error) error {
 	return directErrorWithEvidence(ErrorPartialWrite, path, message, report, cause, ChangeEvidenceHostOnly)
-}
-
-func scopeForPath(scopes []OutputScope, target string) OutputScope {
-	for _, scope := range scopes {
-		equal, related := compareTopology(scope.Path, target)
-		if related && !equal && len(foldedPath(scope.Path)) < len(foldedPath(target)) {
-			return scope
-		}
-	}
-	return OutputScope{}
 }
 
 func addCanonicalPath(paths []string, value string) []string {
