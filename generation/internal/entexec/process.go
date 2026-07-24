@@ -32,6 +32,7 @@ type preparedProcess struct {
 	processHook                          func(processEvent)
 	release                              func()
 	probed                               bool
+	probeStarted                         bool
 	executableVersion                    string
 	redactions                           diagnosticRedactions
 	direct                               bool
@@ -67,7 +68,11 @@ func runPreparedProcessWithStdoutLimit(ctx context.Context, execution preparedEx
 	}
 	prepared := execution.process
 	if contextErr := ctx.Err(); contextErr != nil {
-		return ProcessResult{}, contextProcessError(contextErr, prepared.toolID)
+		err := contextProcessError(contextErr, prepared.toolID)
+		if prepared.direct && prepared.probeStarted {
+			err = markProcessStarted(err, true)
+		}
+		return ProcessResult{}, err
 	}
 	if !processTreeSupported() {
 		return ProcessResult{}, newProcessError("tool_platform_unsupported", "platform", "process_tree_unsupported", "", prepared.toolID, 0)
@@ -80,7 +85,7 @@ func runPreparedProcessWithStdoutLimit(ctx context.Context, execution preparedEx
 
 	main := executeProcessWithLimits(ctx, prepared.executable, prepared.toolArgs, prepared.environment, prepared.stdin, prepared.workDir, stdoutLimit, MaxStderrBytes, prepared.processHook)
 	failMain := func(err error) (ProcessResult, error) {
-		if main.started {
+		if main.started || prepared.direct && prepared.probeStarted {
 			err = markProcessStarted(err, prepared.direct)
 		}
 		return ProcessResult{}, err
@@ -117,8 +122,15 @@ func probePreparedProcess(ctx context.Context, prepared *preparedProcess) (strin
 		return prepared.executableVersion, nil
 	}
 	probe := executeProcess(ctx, prepared.executable, prepared.probeArgs, prepared.environment, nil, prepared.workDir, prepared.processHook)
+	prepared.probeStarted = probe.started
+	failProbe := func(err error) (string, error) {
+		if prepared.direct && probe.started {
+			err = markProcessStarted(err, true)
+		}
+		return "", err
+	}
 	if probe.contextErr != nil {
-		return "", contextProcessError(probe.contextErr, prepared.toolID)
+		return failProbe(contextProcessError(probe.contextErr, prepared.toolID))
 	}
 	if probe.startErr != nil {
 		reason := "version_probe_start_failed"
@@ -126,20 +138,20 @@ func probePreparedProcess(ctx context.Context, prepared *preparedProcess) (strin
 		if errors.Is(probe.startErr, exec.ErrNotFound) || errors.Is(probe.startErr, os.ErrNotExist) {
 			reason, pointer = "executable_missing", "/tool/executable"
 		}
-		return "", newProcessError("tool_unavailable", "probe", reason, pointer, prepared.toolID, 0)
+		return failProbe(newProcessError("tool_unavailable", "probe", reason, pointer, prepared.toolID, 0))
 	}
 	if probe.exitCode != 0 {
-		return "", newProcessDiagnosticError("tool_unavailable", "probe", "version_probe_nonzero", "/tool/probe", prepared.toolID, probe.exitCode, safeDiagnostic(probe.stderr, prepared.redactions))
+		return failProbe(newProcessDiagnosticError("tool_unavailable", "probe", "version_probe_nonzero", "/tool/probe", prepared.toolID, probe.exitCode, safeDiagnostic(probe.stderr, prepared.redactions)))
 	}
 	if probe.stdoutOverflow || probe.stderrOverflow || probe.stdinErr != nil || probe.waitErr != nil || !utf8.Valid(probe.stdout) {
-		return "", newProcessError("tool_unavailable", "probe", "version_probe_output_invalid", "/tool/probe", prepared.toolID, 0)
+		return failProbe(newProcessError("tool_unavailable", "probe", "version_probe_output_invalid", "/tool/probe", prepared.toolID, 0))
 	}
 	executableVersion := strings.TrimSpace(string(probe.stdout))
 	if executableVersion == "" {
-		return "", newProcessError("tool_unavailable", "probe", "version_probe_output_invalid", "/tool/probe", prepared.toolID, 0)
+		return failProbe(newProcessError("tool_unavailable", "probe", "version_probe_output_invalid", "/tool/probe", prepared.toolID, 0))
 	}
 	if executableVersion != prepared.expectedVersion {
-		return "", newProcessError("tool_version_mismatch", "probe", "executable_version_mismatch", "/tool/probe/expectedVersion", prepared.toolID, 0)
+		return failProbe(newProcessError("tool_version_mismatch", "probe", "executable_version_mismatch", "/tool/probe/expectedVersion", prepared.toolID, 0))
 	}
 	prepared.probed = true
 	prepared.executableVersion = executableVersion

@@ -129,6 +129,45 @@ func TestRunDirectAPIGoRejectsFixedArgsAndStaticSymlink(t *testing.T) {
 	}
 }
 
+func TestAPIGoV2RejectsStaticInputOutputScopeTopology(t *testing.T) {
+	tests := []struct {
+		name       string
+		staticPath string
+		scopePath  string
+	}{
+		{name: "exact", staticPath: "backend/core/generated", scopePath: "backend/core/generated"},
+		{name: "static ancestor", staticPath: "backend/core/generated", scopePath: "backend/core/generated/output"},
+		{name: "scope ancestor", staticPath: "backend/core/generated/input.api", scopePath: "backend/core/generated"},
+		{name: "casefold", staticPath: "backend/core/Generated/input.api", scopePath: "backend/core/generated"},
+		{name: "NFC", staticPath: "backend/core/ge\u0301nerated/input.api", scopePath: "backend/core/g\u00e9nerated"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validDirectAPIRequest(t)
+			request.StaticInputs = append(request.StaticInputs, apigo.StaticInput{ID: "collision", Path: test.staticPath, Digest: provenance.SHA256(nil)})
+			request.OutputScopes[0].Path = test.scopePath
+			if _, err := apigo.CanonicalAPIGoRequest(request); err == nil {
+				t.Fatal("accepted static input/output scope topology overlap")
+			}
+
+			called := false
+			runner := toolchain.DirectRunnerFunc(func(context.Context, toolchain.DirectRequest) (toolchain.Result, error) {
+				called = true
+				return toolchain.Result{}, nil
+			})
+			options := apigo.DirectOptions{
+				RepositoryRoot: t.TempDir(),
+				Tool:           toolchain.Tool{ID: "api", Version: "v2", WriteScopes: []string{test.scopePath}},
+				Runner:         runner,
+				OutputScopes:   request.OutputScopes,
+			}
+			if _, err := apigo.RunDirectAPIGo(context.Background(), request, options); err == nil || called {
+				t.Fatalf("RunDirectAPIGo overlap rejection = %v, called = %v", err, called)
+			}
+		})
+	}
+}
+
 func validDirectAPIRequest(t *testing.T) apigo.APIGoRequest {
 	return apigo.APIGoRequest{APIVersion: apigo.APIGoRequestAPIVersion, Kind: apigo.APIGoRequestKind, CoreServiceID: "core", ModulePath: "example.com/consumer", HTTPAPIIR: apiSnapshot(t), APIEntry: "backend/core/api/generated.api", StaticInputs: []apigo.StaticInput{{ID: "entry", Path: "backend/core/api/generated.api", Digest: provenance.SHA256(nil)}}, OutputScopes: []directwrite.OutputScope{{Path: "backend/core/generated", Mode: directwrite.OutputModeReplaceTree}}}
 }

@@ -108,6 +108,9 @@ func CanonicalAPIGoRequest(input APIGoRequest) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("API Go request output scopes are invalid: %w", err)
 	}
+	if err := toolchain.ValidatePathSetsDisjoint(staticInputPaths(staticInputs), scopes); err != nil {
+		return nil, fmt.Errorf("API Go request static inputs and output scopes overlap: %w", err)
+	}
 	wireInputs := make([]staticInputWire, len(staticInputs))
 	for index, item := range staticInputs {
 		wireInputs[index] = staticInputWire{ID: item.ID, Path: item.Path, Digest: item.Digest.String()}
@@ -228,6 +231,14 @@ func normalizeStaticInputs(input []StaticInput) ([]StaticInput, error) {
 		return result[i].ID < result[j].ID
 	})
 	return result, nil
+}
+
+func staticInputPaths(inputs []StaticInput) []string {
+	paths := make([]string, len(inputs))
+	for index, input := range inputs {
+		paths[index] = input.Path
+	}
+	return paths
 }
 
 func strictAPIJSON(data []byte, target any) error {

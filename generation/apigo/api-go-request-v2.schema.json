@@ -3,7 +3,7 @@
   "$id": "https://nexa.dev/schemas/generation/apigo/api-go-request-v2.schema.json",
   "$comment": "The Go owner enforces Unicode NFC case-fold uniqueness, static-input and scope topology, API-entry membership, canonical ordering, and complete Go module-path syntax.",
   "x-nexa-unicode-casefold-uniqueness": {"normalization": "NFC", "caseFold": "Unicode default case folding", "enforcedBy": "generation/apigo Go parser"},
-  "x-nexa-path-topology": {"rule": "static input paths and output scopes independently must not duplicate or overlap under component-wise Unicode case-fold comparison", "enforcedBy": "generation/apigo Go parser"},
+  "x-nexa-path-topology": {"rule": "static input paths and output scopes must be disjoint both within and across sets under exact, ancestor, descendant, NFC, and component-wise Unicode case-fold comparison", "enforcedBy": "generation/apigo Go parser"},
   "x-nexa-canonical-order": {"staticInputs": "id then path", "outputScopes": "path then mode", "enforcedBy": "generation/apigo Go parser"},
   "type": "object",
   "additionalProperties": false,

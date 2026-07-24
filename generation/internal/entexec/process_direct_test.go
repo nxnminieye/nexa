@@ -78,11 +78,34 @@ func TestPrepareProcessDirectRejectsScratchInputs(t *testing.T) {
 }
 
 func TestDirectProcessErrorStartedState(t *testing.T) {
-	t.Run("probe failure", func(t *testing.T) {
+	t.Run("probe start failure", func(t *testing.T) {
+		spec := validDirectProcessSpec(t)
+		spec.Tool.Executable = filepath.Join(spec.RepositoryRoot, "missing")
+		_, err := RunProcess(context.Background(), spec)
+		assertNotStarted(t, err)
+	})
+	t.Run("probe nonzero", func(t *testing.T) {
 		spec := validDirectProcessSpec(t)
 		spec.Tool.Probe.Args = helperArgs("exit", "23")
 		_, err := RunProcess(context.Background(), spec)
-		assertNotStarted(t, err)
+		assertDirectInvoked(t, err)
+	})
+	t.Run("probe output invalid", func(t *testing.T) {
+		spec := validDirectProcessSpec(t)
+		spec.Tool.Probe.Args = helperArgs("stdout", strconv.Itoa(MaxStdoutBytes+1))
+		_, err := RunProcess(context.Background(), spec)
+		assertDirectInvoked(t, err)
+	})
+	t.Run("probe context after start", func(t *testing.T) {
+		spec := validDirectProcessSpec(t)
+		ready := filepath.Join(spec.RepositoryRoot, "probe-ready")
+		spec.Tool.Probe.Args = helperArgs("block", ready)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { _, err := RunProcess(ctx, spec); done <- err }()
+		waitForFile(t, ready)
+		cancel()
+		assertDirectInvoked(t, <-done)
 	})
 	t.Run("main start failure", func(t *testing.T) {
 		spec := validDirectProcessSpec(t)
@@ -91,10 +114,12 @@ func TestDirectProcessErrorStartedState(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer prepared.release()
-		prepared.probed, prepared.executableVersion = true, prepared.expectedVersion
+		if _, err := probePreparedProcess(context.Background(), &prepared); err != nil {
+			t.Fatal(err)
+		}
 		prepared.executable = filepath.Join(spec.RepositoryRoot, "missing")
 		_, err = runPreparedProcess(context.Background(), preparedExecution{process: &prepared})
-		assertNotStarted(t, err)
+		assertDirectInvoked(t, err)
 	})
 	t.Run("main nonzero", func(t *testing.T) {
 		spec := validDirectProcessSpec(t)
@@ -118,7 +143,25 @@ func TestDirectProcessErrorStartedState(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		_, err = runPreparedProcess(ctx, preparedExecution{process: &prepared})
+		assertDirectInvoked(t, err)
+	})
+}
+
+func TestStagedProcessErrorStartedStateIsUnchanged(t *testing.T) {
+	t.Run("probe nonzero", func(t *testing.T) {
+		spec := validProcessSpec(t)
+		spec.Tool.Probe.Args = helperArgs("exit", "23")
+		_, err := RunProcess(context.Background(), spec)
 		assertNotStarted(t, err)
+	})
+	t.Run("main nonzero", func(t *testing.T) {
+		spec := validProcessSpec(t)
+		spec.Args = []string{"exit", "17"}
+		_, err := RunProcess(context.Background(), spec)
+		var typed *Error
+		if !errors.As(err, &typed) || !typed.Started() || typed.MayHaveWritten() {
+			t.Fatalf("error = %#v", err)
+		}
 	})
 }
 
@@ -190,6 +233,14 @@ func assertNotStarted(t *testing.T, err error) {
 	t.Helper()
 	var typed *Error
 	if !errors.As(err, &typed) || typed.Started() || typed.MayHaveWritten() {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
+func assertDirectInvoked(t *testing.T, err error) {
+	t.Helper()
+	var typed *Error
+	if !errors.As(err, &typed) || !typed.Started() || !typed.MayHaveWritten() {
 		t.Fatalf("error = %#v", err)
 	}
 }

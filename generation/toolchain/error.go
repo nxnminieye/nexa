@@ -116,7 +116,7 @@ func (e *Error) Diagnostic() string {
 	return e.diagnostic
 }
 
-// Started reports whether the delegated main process was successfully started.
+// Started reports whether a delegated probe or main process was successfully started.
 func (e *Error) Started() bool { return e != nil && e.started }
 
 // MayHaveWritten reports whether a direct tool may have changed the consumer tree.

@@ -40,6 +40,9 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 	if !reflect.DeepEqual(apiScopePaths(requestScopes), options.Tool.WriteScopes) {
 		return APIGoResult{}, errors.New("API Go tool write scopes do not match request scopes")
 	}
+	if err := toolchain.ValidatePathSetsDisjoint(staticInputPaths(request.StaticInputs), requestScopes); err != nil {
+		return APIGoResult{}, errors.New("API Go static inputs and output scopes overlap")
+	}
 	request.OutputScopes = requestScopes
 	stdin, err := CanonicalAPIGoRequest(request)
 	if err != nil {

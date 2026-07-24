@@ -60,6 +60,18 @@ func ValidateRepositoryPath(value string) error {
 	return err
 }
 
+// ValidatePathSetsDisjoint rejects exact, ancestor, or descendant relations across
+// input paths and output scopes under component-wise NFC and Unicode case folding.
+func ValidatePathSetsDisjoint(inputPaths []string, outputScopes []directwrite.OutputScope) error {
+	combined := make([]directwrite.OutputScope, 0, len(inputPaths)+len(outputScopes))
+	for _, inputPath := range inputPaths {
+		combined = append(combined, directwrite.OutputScope{Path: inputPath, Mode: directwrite.OutputModeFileSet})
+	}
+	combined = append(combined, outputScopes...)
+	_, err := NormalizeOutputScopes(combined)
+	return err
+}
+
 // OutputScopesSubset reports whether subset is a duplicate-free normalized subset.
 func OutputScopesSubset(subset, complete []directwrite.OutputScope) ([]directwrite.OutputScope, []directwrite.OutputScope, error) {
 	subset, err := NormalizeOutputScopes(subset)

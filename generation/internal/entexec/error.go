@@ -74,10 +74,10 @@ func (e *Error) Diagnostic() string {
 	return e.diagnostic
 }
 
-// Started reports whether the main tool process was successfully started.
+// Started reports whether a delegated probe or main process was successfully started.
 func (e *Error) Started() bool { return e != nil && e.started }
 
-// MayHaveWritten reports whether the main tool may have changed its working tree.
+// MayHaveWritten reports whether a started direct process may have changed the consumer tree.
 func (e *Error) MayHaveWritten() bool { return e != nil && e.mayHaveWritten }
 
 func markProcessStarted(err error, mayHaveWritten bool) error {

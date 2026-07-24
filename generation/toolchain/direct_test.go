@@ -63,6 +63,17 @@ func TestExecDirectRunnerProjectsPostStartWriteEvidence(t *testing.T) {
 	}
 }
 
+func TestExecDirectRunnerProjectsProbeStartWriteEvidence(t *testing.T) {
+	repository := canonicalTestDirectory(t, t.TempDir())
+	executable, _ := filepath.Abs(os.Args[0])
+	tool := toolchain.Tool{ID: "direct-helper", Version: "v2", Executable: executable, Environment: []toolchain.EnvironmentRule{{Name: "NEXA_DIRECT_HELPER", Source: toolchain.EnvironmentFixed, FixedValue: "1"}}, Probe: toolchain.ExecutableProbe{Args: directHelperArgs("fail"), ExpectedVersion: "direct-v2"}}
+	_, err := toolchain.NewExecDirectRunner().RunDirect(context.Background(), toolchain.DirectRequest{RepositoryRoot: repository, Tool: tool, Environment: []toolchain.EnvVar{{Name: "NEXA_DIRECT_HELPER", Value: "1"}}})
+	var typed *toolchain.Error
+	if !errors.As(err, &typed) || typed.Stage() != "probe" || !typed.Started() || !typed.MayHaveWritten() {
+		t.Fatalf("direct probe error = %#v", err)
+	}
+}
+
 func canonicalTestDirectory(t *testing.T, value string) string {
 	t.Helper()
 	result, err := filepath.EvalSymlinks(value)
