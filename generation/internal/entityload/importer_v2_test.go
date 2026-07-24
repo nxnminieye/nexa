@@ -73,6 +73,14 @@ func TestImporterV2RealReadonlyOverlayProjectsEntityIR(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := append(invocation.Environment(), "NEXA_ENT_GO_EXECUTABLE="+goExecutable, "NEXA_ENT_GO_VERSION="+strings.TrimSpace(string(versionBytes)), "PATH=/malicious/does-not-exist")
+	_, identityEnvironment, err := validateV2GoIdentity(context.Background(), goExecutable, strings.TrimSpace(string(versionBytes)), append(invocation.Environment(), "PATH="+os.Getenv("PATH")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityPath := envValueV2(identityEnvironment, "PATH")
+	if !strings.HasPrefix(identityPath, filepath.Dir(goExecutable)+string(os.PathListSeparator)) || !strings.Contains(identityPath, os.Getenv("PATH")) {
+		t.Fatalf("exact Go PATH ordering/tool visibility = %q", identityPath)
+	}
 	spec := V2Spec{RepositoryRoot: repository, ModuleDir: ".", ModulePath: "example.com/entityfixture", SchemaDir: "schema", BuildTags: []string{}, Environment: environment, GoExecutable: goExecutable, GoVersion: strings.TrimSpace(string(versionBytes))}
 	first, err := DiscoverV2(context.Background(), spec)
 	if err != nil {
@@ -119,6 +127,16 @@ func TestImporterV2RealReadonlyOverlayProjectsEntityIR(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(repository, "zz_nexa_ent_importer.go")); !os.IsNotExist(err) {
 		t.Fatalf("virtual importer became visible: %v", err)
 	}
+}
+
+func envValueV2(environment []string, name string) string {
+	value := ""
+	for _, item := range environment {
+		if strings.HasPrefix(item, name+"=") {
+			value = strings.TrimPrefix(item, name+"=")
+		}
+	}
+	return value
 }
 
 func TestImporterV2RejectsCaseFoldVirtualCollision(t *testing.T) {

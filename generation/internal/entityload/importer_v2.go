@@ -193,7 +193,17 @@ func validateV2GoIdentity(ctx context.Context, executable, expectedVersion strin
 		return "", nil, fmt.Errorf("go identity")
 	}
 	values := append([]string(nil), environment...)
-	values = replaceV2Environment(values, "PATH", filepath.Dir(canonical))
+	pathValue := filepath.Dir(canonical)
+	for index := len(values) - 1; index >= 0; index-- {
+		if strings.HasPrefix(values[index], "PATH=") {
+			ambientPath := strings.TrimPrefix(values[index], "PATH=")
+			if ambientPath != "" && ambientPath != pathValue {
+				pathValue += string(os.PathListSeparator) + ambientPath
+			}
+			break
+		}
+	}
+	values = replaceV2Environment(values, "PATH", pathValue)
 	return canonical, values, nil
 }
 
