@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nxnminieye/nexa/generation/internal/entexec"
 	"github.com/nxnminieye/nexa/generation/internal/entipc"
 	"github.com/nxnminieye/nexa/provenance"
 )
@@ -70,7 +71,7 @@ func TestTypedFixtureHelperProducesDeterministicPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeModule := fmt.Sprintf("module github.com/nxnminieye/nexa/generation/enthelperexec\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", consumer, frameworkRoot)
+	runtimeModule := fmt.Sprintf("module %s\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", entexec.ScratchModulePath, consumer, frameworkRoot)
 	if err := os.WriteFile(filepath.Join(runtimeRoot, "go.mod"), []byte(runtimeModule), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func helperRepositoryRoot(t *testing.T) string {
 func buildFixtureRequest(t *testing.T, frameworkRoot, consumer, repository, schemaDir string) []byte {
 	t.Helper()
 	root := t.TempDir()
-	module := fmt.Sprintf("module github.com/nxnminieye/nexa/generation/enthelperexec\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", consumer, frameworkRoot)
+	module := fmt.Sprintf("module %s\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", entexec.ScratchModulePath, consumer, frameworkRoot)
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600); err != nil {
 		t.Fatal(err)
 	}
