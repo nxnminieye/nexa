@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -53,6 +54,104 @@ func TestRPCGoV2ProtocolAndDirectRunner(t *testing.T) {
 	if _, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: toolchain.Tool{ID: "rpc", Version: "v2", WriteScopes: []string{scopes[0].Path}, Probe: toolchain.ExecutableProbe{ExpectedVersion: "rpc-v2"}}, Runner: invalidRunner, OutputScopes: scopes}); err == nil {
 		t.Fatal("accepted result scopes that do not match the request")
 	}
+}
+
+func TestRunDirectRPCGoPreservesEveryNonGoManualFile(t *testing.T) {
+	for _, extension := range []string{".proto", ".api", ".json", ".yaml"} {
+		for _, action := range []string{"mutate", "delete", "create"} {
+			t.Run(extension+"/"+action, func(t *testing.T) {
+				request := validDirectRPCRequest(t)
+				repository, _ := filepath.EvalSymlinks(t.TempDir())
+				manual := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "manual"+extension)
+				if err := os.MkdirAll(filepath.Dir(manual), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manual, []byte("manual"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+					if action == "create" {
+						_ = os.WriteFile(filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "new"+extension), nil, 0o644)
+					} else if action == "delete" {
+						_ = os.Remove(manual)
+					} else {
+						_ = os.WriteFile(manual, []byte("changed"), 0o644)
+					}
+					return toolchain.Result{ToolID: "rpc", Version: "v2", ExecutableVersion: "rpc-v2", Stdout: canonicalRPCDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
+				})
+				tool := toolchain.Tool{ID: "rpc", Version: "v2", WriteScopes: rpcTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "rpc-v2"}}
+				if _, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes}); err == nil {
+					t.Fatal("accepted changed manual file")
+				}
+			})
+		}
+	}
+}
+
+func TestRPCGoV2SchemasRejectEveryRepositoryPathEscapeAndOpenNestedIR(t *testing.T) {
+	request := validDirectRPCRequest(t)
+	canonical, err := rpcgo.CanonicalRPCGoRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"/absolute", `backend\\escape`, ".", "..", "backend/../escape", "backend/.git/output"} {
+		t.Run(invalid, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(canonical, &document); err != nil {
+				t.Fatal(err)
+			}
+			document["outputScopes"].([]any)[0].(map[string]any)["path"] = invalid
+			encoded, _ := json.Marshal(document)
+			if _, err := rpcgo.ParseRPCGoRequest(encoded); err == nil {
+				t.Fatal("accepted invalid repository path")
+			}
+		})
+	}
+	var open map[string]any
+	_ = json.Unmarshal(canonical, &open)
+	open["protocolIR"].(map[string]any)["unknown"] = true
+	encoded, _ := json.Marshal(open)
+	if _, err := rpcgo.ParseRPCGoRequest(encoded); err == nil {
+		t.Fatal("accepted open nested ProtocolIR")
+	}
+}
+
+func TestRPCGoV2SchemasReuseDG0RepositoryPath(t *testing.T) {
+	want := rpcSchemaDefinition(t, directwrite.GenerationResultSchema(), "repositoryPath")
+	for _, schema := range [][]byte{rpcgo.RPCGoRequestSchema(), rpcgo.RPCGoResultSchema()} {
+		if got := rpcSchemaDefinition(t, schema, "repositoryPath"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("repositoryPath drift: got %#v want %#v", got, want)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(schema, &document); err != nil {
+			t.Fatal(err)
+		}
+		for _, annotation := range []string{"x-nexa-unicode-casefold-uniqueness", "x-nexa-path-topology", "x-nexa-canonical-order"} {
+			if _, ok := document[annotation]; !ok {
+				t.Fatalf("schema missing %s", annotation)
+			}
+		}
+	}
+	result, err := rpcgo.CanonicalRPCGoResult(rpcgo.RPCGoResult{APIVersion: rpcgo.RPCGoResultAPIVersion, Kind: rpcgo.RPCGoResultKind, Status: rpcgo.RPCGoResultGenerated, ServiceID: "account", InputDigest: provenance.SHA256(nil), OutputScopes: []directwrite.OutputScope{{Path: "backend/account/generated", Mode: directwrite.OutputModeReplaceTree}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resultDocument map[string]any
+	_ = json.Unmarshal(result, &resultDocument)
+	resultDocument["outputScopes"].([]any)[0].(map[string]any)["path"] = "../escape"
+	result, _ = json.Marshal(resultDocument)
+	if _, err := rpcgo.ParseRPCGoResult(result); err == nil {
+		t.Fatal("accepted invalid result repository path")
+	}
+}
+
+func rpcSchemaDefinition(t *testing.T, schema []byte, name string) any {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(schema, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document["$defs"].(map[string]any)[name]
 }
 
 func TestRunDirectRPCGoProjectsEveryPostInvocationFailure(t *testing.T) {

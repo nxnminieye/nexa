@@ -42,9 +42,19 @@ func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOpt
 	if err != nil {
 		return RPCGoResult{}, err
 	}
+	manual, err := snapshotManualScopeFiles(root, requestScopes)
+	if err != nil {
+		return RPCGoResult{}, err
+	}
 	processResult, err := options.Runner.RunDirect(ctx, toolchain.DirectRequest{RepositoryRoot: root, Tool: options.Tool, Args: []string{"generate", "--service", request.ServiceID}, Environment: append([]toolchain.EnvVar(nil), options.Environment...), Stdin: stdin})
 	if err != nil {
 		return RPCGoResult{}, err
+	}
+	if err := verifyManualScopeFiles(root, manual); err != nil {
+		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
+	}
+	if err := rejectNewUnmarkedFiles(root, requestScopes, manual); err != nil {
+		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
 	}
 	if processResult.ToolID != options.Tool.ID || processResult.Version != options.Tool.Version || processResult.ExecutableVersion != options.Tool.Probe.ExpectedVersion || processResult.ExitCode != 0 {
 		cause := errors.New("RPC Go tool process identity is invalid")

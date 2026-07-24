@@ -62,6 +62,158 @@ func TestAPIGoV2ProtocolAndDirectRunner(t *testing.T) {
 	}
 }
 
+func TestRunDirectAPIGoRejectsPostToolStaticInputMutation(t *testing.T) {
+	request := validDirectAPIRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	entry := filepath.Join(repository, filepath.FromSlash(request.APIEntry))
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+		if err := os.WriteFile(entry, []byte("mutated"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
+	})
+	tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+	_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
+	assertAPIPostInvocationEvidence(t, err, "result_acknowledgement_invalid", "/result")
+}
+
+func TestRunDirectAPIGoRejectsPostToolStaticInputIdentityReplacement(t *testing.T) {
+	request := validDirectAPIRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	entry := filepath.Join(repository, filepath.FromSlash(request.APIEntry))
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+		replacement := entry + ".replacement"
+		if err := os.WriteFile(replacement, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(replacement, entry); err != nil {
+			t.Fatal(err)
+		}
+		return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
+	})
+	tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+	_, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes})
+	assertAPIPostInvocationEvidence(t, err, "result_acknowledgement_invalid", "/result")
+}
+
+func TestRunDirectAPIGoPreservesEveryNonGoManualFile(t *testing.T) {
+	for _, extension := range []string{".proto", ".api", ".json", ".yaml"} {
+		for _, action := range []string{"mutate", "delete", "create"} {
+			t.Run(extension+"/"+action, func(t *testing.T) {
+				request := validDirectAPIRequest(t)
+				repository, _ := filepath.EvalSymlinks(t.TempDir())
+				entry := filepath.Join(repository, filepath.FromSlash(request.APIEntry))
+				manual := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "manual"+extension)
+				if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(manual), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(entry, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manual, []byte("manual"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+					if action == "create" {
+						_ = os.WriteFile(filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "new"+extension), nil, 0o644)
+					} else if action == "delete" {
+						_ = os.Remove(manual)
+					} else {
+						_ = os.WriteFile(manual, []byte("changed"), 0o644)
+					}
+					return toolchain.Result{ToolID: "api", Version: "v2", ExecutableVersion: "api-v2", Stdout: canonicalAPIDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
+				})
+				tool := toolchain.Tool{ID: "api", Version: "v2", WriteScopes: apiTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "api-v2"}}
+				if _, err := apigo.RunDirectAPIGo(context.Background(), request, apigo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes}); err == nil {
+					t.Fatal("accepted changed manual file")
+				}
+			})
+		}
+	}
+}
+
+func TestAPIGoV2SchemasRejectEveryRepositoryPathEscapeAndOpenNestedIR(t *testing.T) {
+	request := validDirectAPIRequest(t)
+	canonical, err := apigo.CanonicalAPIGoRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"/absolute", `backend\\escape`, ".", "..", "backend/../escape", "backend/.git/output"} {
+		t.Run(invalid, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal(canonical, &document); err != nil {
+				t.Fatal(err)
+			}
+			document["apiEntry"] = invalid
+			document["staticInputs"].([]any)[0].(map[string]any)["path"] = invalid
+			encoded, _ := json.Marshal(document)
+			if _, err := apigo.ParseAPIGoRequest(encoded); err == nil {
+				t.Fatal("accepted invalid repository path")
+			}
+		})
+	}
+	var open map[string]any
+	_ = json.Unmarshal(canonical, &open)
+	open["httpAPIIR"].(map[string]any)["unknown"] = true
+	encoded, _ := json.Marshal(open)
+	if _, err := apigo.ParseAPIGoRequest(encoded); err == nil {
+		t.Fatal("accepted open nested HTTPAPIIR")
+	}
+}
+
+func TestAPIGoV2SchemasReuseDG0RepositoryPath(t *testing.T) {
+	want := schemaDefinition(t, directwrite.GenerationResultSchema(), "repositoryPath")
+	for _, schema := range [][]byte{apigo.APIGoRequestSchema(), apigo.APIGoResultSchema()} {
+		if got := schemaDefinition(t, schema, "repositoryPath"); !reflect.DeepEqual(got, want) {
+			t.Fatalf("repositoryPath drift: got %#v want %#v", got, want)
+		}
+		var document map[string]any
+		if err := json.Unmarshal(schema, &document); err != nil {
+			t.Fatal(err)
+		}
+		for _, annotation := range []string{"x-nexa-unicode-casefold-uniqueness", "x-nexa-path-topology", "x-nexa-canonical-order"} {
+			if _, ok := document[annotation]; !ok {
+				t.Fatalf("schema missing %s", annotation)
+			}
+		}
+	}
+	result, err := apigo.CanonicalAPIGoResult(apigo.APIGoResult{APIVersion: apigo.APIGoResultAPIVersion, Kind: apigo.APIGoResultKind, Status: apigo.APIGoResultGenerated, CoreServiceID: "core", InputDigest: provenance.SHA256(nil), OutputScopes: []directwrite.OutputScope{{Path: "backend/core/generated", Mode: directwrite.OutputModeReplaceTree}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resultDocument map[string]any
+	_ = json.Unmarshal(result, &resultDocument)
+	resultDocument["outputScopes"].([]any)[0].(map[string]any)["path"] = "../escape"
+	result, _ = json.Marshal(resultDocument)
+	if _, err := apigo.ParseAPIGoResult(result); err == nil {
+		t.Fatal("accepted invalid result repository path")
+	}
+}
+
+func schemaDefinition(t *testing.T, schema []byte, name string) any {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(schema, &document); err != nil {
+		t.Fatal(err)
+	}
+	return document["$defs"].(map[string]any)[name]
+}
+
 func TestRunDirectAPIGoProjectsEveryPostInvocationFailure(t *testing.T) {
 	tests := []struct {
 		name        string

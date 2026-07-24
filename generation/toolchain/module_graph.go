@@ -45,6 +45,15 @@ type ModuleGraph struct {
 	snapshot buildinput.GraphSnapshot
 }
 
+// ParseModuleGraphSnapshot parses a canonical typed consumer module graph.
+func ParseModuleGraphSnapshot(source provenance.DomainSource, data []byte) (ModuleGraph, error) {
+	value, err := buildinput.ParseGraph(source, append([]byte(nil), data...))
+	if err != nil {
+		return ModuleGraph{}, projectBuildInputError(err, "", 0)
+	}
+	return ModuleGraph{snapshot: value}, nil
+}
+
 func (g ModuleGraph) ConsumerModule() (ModuleRequirement, error) {
 	value, err := g.snapshot.ConsumerModule()
 	return ModuleRequirement{Path: value.Path, Version: value.Version}, projectBuildInputError(err, "", 0)

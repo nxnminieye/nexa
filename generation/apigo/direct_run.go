@@ -20,6 +20,7 @@ type DirectOptions struct {
 	Runner         toolchain.DirectRunner
 	Environment    []toolchain.EnvVar
 	OutputScopes   []directwrite.OutputScope
+	Sources        []provenance.Source
 }
 
 func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOptions) (APIGoResult, error) {
@@ -48,15 +49,37 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 	if err != nil {
 		return APIGoResult{}, err
 	}
+	manual, err := snapshotManualScopeFiles(root, requestScopes)
+	if err != nil {
+		return APIGoResult{}, err
+	}
+	staticIdentities := make(map[string]os.FileInfo, len(request.StaticInputs))
 	for _, input := range request.StaticInputs {
-		content, readErr := readStaticInput(root, input.Path)
+		content, identity, readErr := readStaticInputIdentity(root, input.Path)
 		if readErr != nil || provenance.SHA256(content) != input.Digest {
 			return APIGoResult{}, errors.New("API Go static input does not match its declared digest")
 		}
+		staticIdentities[input.Path] = identity
 	}
 	processResult, err := options.Runner.RunDirect(ctx, toolchain.DirectRequest{RepositoryRoot: root, Tool: options.Tool, Args: []string{"generate", "--core-service", request.CoreServiceID}, Environment: append([]toolchain.EnvVar(nil), options.Environment...), Stdin: stdin})
 	if err != nil {
 		return APIGoResult{}, err
+	}
+	// The trusted tool receives static inputs by path. Re-read their identity
+	// after it exits as well as before launch; a runner that mutates an input
+	// must never be able to return a successful acknowledgement.
+	for _, input := range request.StaticInputs {
+		content, identity, readErr := readStaticInputIdentity(root, input.Path)
+		if readErr != nil || provenance.SHA256(content) != input.Digest || !os.SameFile(staticIdentities[input.Path], identity) {
+			cause := errors.New("API Go static input changed during tool invocation")
+			return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, cause)
+		}
+	}
+	if err := verifyManualScopeFiles(root, manual); err != nil {
+		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
+	}
+	if err := rejectNewUnmarkedFiles(root, requestScopes, manual); err != nil {
+		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
 	}
 	if processResult.ToolID != options.Tool.ID || processResult.Version != options.Tool.Version || processResult.ExecutableVersion != options.Tool.Probe.ExpectedVersion || processResult.ExitCode != 0 {
 		cause := errors.New("API Go tool process identity is invalid")
@@ -74,12 +97,17 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 }
 
 func readStaticInput(root, relative string) ([]byte, error) {
+	content, _, err := readStaticInputIdentity(root, relative)
+	return content, err
+}
+
+func readStaticInputIdentity(root, relative string) ([]byte, os.FileInfo, error) {
 	if toolchain.ValidateRepositoryPath(relative) != nil {
-		return nil, os.ErrInvalid
+		return nil, nil, os.ErrInvalid
 	}
 	handle, err := os.OpenRoot(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer handle.Close()
 	components := strings.Split(relative, "/")
@@ -87,19 +115,20 @@ func readStaticInput(root, relative string) ([]byte, error) {
 		name := filepath.Join(components[:index+1]...)
 		info, err := handle.Lstat(name)
 		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			return nil, os.ErrInvalid
+			return nil, nil, os.ErrInvalid
 		}
 	}
 	info, err := handle.Lstat(filepath.FromSlash(relative))
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, os.ErrInvalid
+		return nil, nil, os.ErrInvalid
 	}
 	file, err := handle.Open(filepath.FromSlash(relative))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
-	return io.ReadAll(file)
+	content, err := io.ReadAll(file)
+	return content, info, err
 }
 func apiScopePaths(scopes []directwrite.OutputScope) []string {
 	result := make([]string, len(scopes))
