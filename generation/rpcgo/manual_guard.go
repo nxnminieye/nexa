@@ -61,7 +61,8 @@ func snapshotManualFiles(repository string, scopes []directwrite.OutputScope, fa
 
 func hasGeneratedMarker(name string, content []byte, serviceID string) bool {
 	if path.Ext(name) == ".proto" {
-		return path.Base(name) == serviceID+".proto"
+		base := path.Base(name)
+		return base == serviceID+".proto" || base == serviceID+".crud.generated.proto"
 	}
 	if path.Ext(name) == ".go" {
 		parsed, err := parser.ParseFile(token.NewFileSet(), name, content, parser.ParseComments)

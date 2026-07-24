@@ -91,7 +91,7 @@ func TestRunDirectRPCGoPreservesEveryNonGoManualFile(t *testing.T) {
 func TestRunDirectRPCGoAllowsGeneratedProtoOutput(t *testing.T) {
 	request := validDirectRPCRequest(t)
 	repository, _ := filepath.EvalSymlinks(t.TempDir())
-	generated := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "account.proto")
+	generated := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "account.crud.generated.proto")
 	if err := os.MkdirAll(filepath.Dir(generated), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestRunDirectRPCGoAllowsGeneratedProtoOutput(t *testing.T) {
 func TestRunDirectRPCGoRejectsInvalidGeneratedProto(t *testing.T) {
 	request := validDirectRPCRequest(t)
 	repository, _ := filepath.EvalSymlinks(t.TempDir())
-	generated := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "account.proto")
+	generated := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "account.crud.generated.proto")
 	if err := os.MkdirAll(filepath.Dir(generated), 0o755); err != nil {
 		t.Fatal(err)
 	}
