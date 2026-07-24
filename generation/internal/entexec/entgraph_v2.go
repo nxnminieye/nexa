@@ -10,22 +10,73 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/nxnminieye/nexa/generation/internal/entipc"
 )
 
 type EntGraphProcessSpec struct {
-	RepositoryRoot, ModuleDir     string
-	GoExecutable, ExpectedVersion string
-	Request                       []byte
-	BuildTags                     []string
-	GOCACHE, GOMODCACHE, TempBase string
-	BaseEnvironment               []string
-	cleanupHook                   func(string) error
+	RepositoryRoot, ModuleDir, ModulePath, SchemaDir string
+	GoExecutable, ExpectedVersion                    string
+	Request                                          []byte
+	BuildTags                                        []string
+	GOCACHE, GOMODCACHE, TempBase                    string
+	BaseEnvironment                                  []string
+	cleanupHook                                      func(string) error
+	processHook                                      func(processEvent)
 }
+
+type EntGraphError struct{ code, reason, pointer, source string }
+
+func (e *EntGraphError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return "Ent graph projection failed"
+}
+func (e *EntGraphError) Owner() string { return "entityload" }
+func (e *EntGraphError) Code() string {
+	if e == nil {
+		return ""
+	}
+	return e.code
+}
+func (e *EntGraphError) Reason() string {
+	if e == nil {
+		return ""
+	}
+	return e.reason
+}
+func (e *EntGraphError) Pointer() string {
+	if e == nil {
+		return ""
+	}
+	return e.pointer
+}
+func (e *EntGraphError) Source() string {
+	if e == nil {
+		return ""
+	}
+	return e.source
+}
+
+func entGraphInputError(reason, pointer string) error {
+	return &EntGraphError{code: "entity_input_invalid", reason: reason, pointer: pointer}
+}
+func entGraphLoadError(reason, source string) error {
+	return &EntGraphError{code: "entity_graph_load_failed", reason: reason, source: source}
+}
+
+const (
+	entGraphGoExecutableEnvironment = "NEXA_ENT_GO_EXECUTABLE"
+	entGraphGoVersionEnvironment    = "NEXA_ENT_GO_VERSION"
+)
 
 type InvocationV2 struct {
 	root, importer, overlay, toolchainTmp string
 	environment                           []string
 	owner                                 *ownedScratchRoot
+	cleanupMu                             sync.Mutex
 }
 
 var entGraphBuildTagPattern = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
@@ -34,24 +85,37 @@ func RunEntGraphV2(ctx context.Context, spec EntGraphProcessSpec) (result Proces
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return ProcessResult{}, newProcessError("tool_platform_unsupported", "platform", "process_tree_unsupported", "", "go", 0)
 	}
+	request, err := entipc.ParseRequestV2(entipc.HelperRequestV2Source(), spec.Request)
+	if err != nil {
+		return ProcessResult{}, err
+	}
+	if request.ModuleDir() != spec.ModuleDir || request.ModulePath() != spec.ModulePath || request.SchemaDir() != spec.SchemaDir || !equalStringSlices(request.BuildTags(), spec.BuildTags) {
+		return ProcessResult{}, entGraphInputError("module_path_mismatch", "/modulePath")
+	}
+	canonicalExecutable, err := filepath.EvalSymlinks(spec.GoExecutable)
+	if err != nil || canonicalExecutable != spec.GoExecutable {
+		return ProcessResult{}, entGraphLoadError("helper_prepare_failed", spec.SchemaDir)
+	}
 	moduleRoot, tags, err := validateEntGraphCoordinatesV2(spec.RepositoryRoot, spec.ModuleDir, spec.BuildTags)
 	if err != nil {
 		return ProcessResult{}, err
 	}
 	invocation, err := PrepareInvocationV2(spec.RepositoryRoot, spec.GOCACHE, spec.GOMODCACHE, spec.TempBase, spec.BaseEnvironment)
 	if err != nil {
-		return ProcessResult{}, err
+		return ProcessResult{}, entGraphLoadError("helper_prepare_failed", spec.SchemaDir)
 	}
+	invocation.environment = replaceEnvironmentV2(invocation.environment, entGraphGoExecutableEnvironment, canonicalExecutable)
+	invocation.environment = replaceEnvironmentV2(invocation.environment, entGraphGoVersionEnvironment, spec.ExpectedVersion)
 	defer func() {
 		cleanupErr := invocation.Cleanup()
 		if spec.cleanupHook != nil {
 			if hookErr := spec.cleanupHook(invocation.root); hookErr != nil {
-				cleanupErr = hookErr
+				cleanupErr = entGraphLoadError("helper_cleanup_failed", spec.SchemaDir)
 			}
 		}
 		if cleanupErr != nil {
 			result = ProcessResult{}
-			resultErr = cleanupErr
+			resultErr = entGraphLoadError("helper_cleanup_failed", spec.SchemaDir)
 		}
 	}()
 	args := []string{"-C", moduleRoot, "run", "-mod=readonly"}
@@ -67,7 +131,11 @@ func RunEntGraphV2(ctx context.Context, spec EntGraphProcessSpec) (result Proces
 		environment[i] = ProcessEnvironment{Name: name, Value: value}
 	}
 	tool := ProcessTool{ID: "go", Version: "go", Executable: spec.GoExecutable, Args: nil, InputScopes: []string{"repository"}, WriteScopes: []string{}, Environment: rules, Probe: ProcessProbe{Args: []string{"version"}, ExpectedVersion: spec.ExpectedVersion}}
-	return RunProcess(ctx, ProcessSpec{RepositoryRoot: spec.RepositoryRoot, Direct: true, Tool: tool, Args: args, Environment: environment, Stdin: append([]byte(nil), spec.Request...)})
+	result, err = RunProcess(ctx, ProcessSpec{RepositoryRoot: spec.RepositoryRoot, Direct: true, Tool: tool, Args: args, Environment: environment, Stdin: append([]byte(nil), spec.Request...), processHook: spec.processHook})
+	if err != nil {
+		return ProcessResult{}, entGraphLoadError("helper_execution_failed", spec.SchemaDir)
+	}
+	return result, nil
 }
 
 func validateEntGraphCoordinatesV2(repository, moduleDir string, buildTags []string) (string, []string, error) {
@@ -179,6 +247,10 @@ func (i *InvocationV2) Root() string {
 	return i.root
 }
 func (i *InvocationV2) Cleanup() error {
+	if i != nil {
+		i.cleanupMu.Lock()
+		defer i.cleanupMu.Unlock()
+	}
 	if i == nil || i.owner == nil {
 		return nil
 	}
@@ -189,35 +261,50 @@ func (i *InvocationV2) Cleanup() error {
 	return nil
 }
 
-func RunImporterV2(ctx context.Context, moduleRoot string, source []byte, tags []string, environment []string) ([]byte, error) {
+func RunImporterV2(ctx context.Context, moduleRoot, virtualDir, schemaDir, executable, expectedVersion string, source []byte, tags []string, environment []string) ([]byte, error) {
 	moduleRoot, err := canonicalExistingDirectory(moduleRoot)
 	if err != nil {
-		return nil, newProcessError("tool_input_invalid", "input", "repository_root_invalid", "/moduleDir", "go", 0)
+		return nil, entGraphInputError("module_root_invalid", "/moduleDir")
 	}
 	values := envMapV2(environment)
 	tmp := values["GOTMPDIR"]
 	invocationRoot := filepath.Dir(tmp)
 	if tmp == "" || filepath.Base(tmp) != "toolchain-tmp" || filepath.Dir(values["HOME"]) != invocationRoot || filepath.Dir(values["XDG_CONFIG_HOME"]) != invocationRoot || filepath.Dir(values["TEST_TELEMETRY_DIR"]) != invocationRoot {
-		return nil, newProcessError("tool_input_invalid", "input", "environment_policy_invalid", "/environment", "go", 0)
+		return nil, entGraphLoadError("helper_prepare_failed", schemaDir)
 	}
 	invocationRoot, err = canonicalExistingDirectory(invocationRoot)
 	if err != nil || pathsOverlap(moduleRoot, invocationRoot) {
-		return nil, newProcessError("tool_input_invalid", "input", "environment_policy_invalid", "/environment", "go", 0)
+		return nil, entGraphLoadError("helper_prepare_failed", schemaDir)
+	}
+	canonicalExecutable, err := filepath.EvalSymlinks(executable)
+	if err != nil || canonicalExecutable != executable || values[entGraphGoExecutableEnvironment] != executable || values[entGraphGoVersionEnvironment] != expectedVersion {
+		return nil, entGraphLoadError("helper_prepare_failed", schemaDir)
+	}
+	virtualDir, err = canonicalExistingDirectory(virtualDir)
+	if err != nil || !pathContainedBy(virtualDir, moduleRoot) {
+		return nil, entGraphInputError("importer_visibility_invalid", "/schemaDir")
 	}
 	importer := filepath.Join(invocationRoot, "importer.go")
 	overlay := filepath.Join(invocationRoot, "overlay.json")
-	virtual := filepath.Join(moduleRoot, "zz_nexa_ent_importer.go")
-	if err := rejectVirtualCollisionV2(moduleRoot, filepath.Base(virtual)); err != nil {
+	virtual := filepath.Join(virtualDir, "zz_nexa_ent_importer.go")
+	if err := rejectVirtualCollisionV2(virtualDir, filepath.Base(virtual), schemaDir); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(importer, source, 0o600); err != nil {
-		return nil, newProcessError("tool_failed", "prepare", "helper_prepare_failed", "", "go", 0)
+		return nil, entGraphLoadError("helper_prepare_failed", schemaDir)
 	}
 	overlayBytes, _ := json.Marshal(struct {
 		Replace map[string]string `json:"Replace"`
 	}{map[string]string{virtual: importer}})
 	if err := os.WriteFile(overlay, overlayBytes, 0o600); err != nil {
-		return nil, newProcessError("tool_failed", "prepare", "helper_prepare_failed", "", "go", 0)
+		return nil, entGraphLoadError("helper_prepare_failed", schemaDir)
+	}
+	if err := rejectVirtualCollisionV2(virtualDir, filepath.Base(virtual), schemaDir); err != nil {
+		return nil, err
+	}
+	probe := executeProcessWithLimits(ctx, executable, []string{"version"}, environment, nil, moduleRoot, MaxStdoutBytes, MaxStderrBytes, nil)
+	if probe.contextErr != nil || probe.startErr != nil || probe.stdinErr != nil || probe.waitErr != nil || probe.exitCode != 0 || probe.stdoutOverflow || probe.stderrOverflow || strings.TrimSpace(string(probe.stdout)) != expectedVersion {
+		return nil, entGraphLoadError("helper_execution_failed", schemaDir)
 	}
 	args := []string{"run", "-mod=readonly", "-overlay=" + overlay}
 	sorted := append([]string(nil), tags...)
@@ -226,28 +313,39 @@ func RunImporterV2(ctx context.Context, moduleRoot string, source []byte, tags [
 		args = append(args, "-tags="+strings.Join(sorted, ","))
 	}
 	args = append(args, virtual)
-	outcome := executeProcessWithLimits(ctx, "go", args, environment, nil, moduleRoot, MaxStdoutBytes, MaxStderrBytes, nil)
+	outcome := executeProcessWithLimits(ctx, executable, args, environment, nil, moduleRoot, MaxStdoutBytes, MaxStderrBytes, nil)
 	if outcome.contextErr != nil {
-		return nil, contextProcessError(outcome.contextErr, "go")
+		return nil, entGraphLoadError("helper_execution_failed", schemaDir)
 	}
 	if outcome.startErr != nil || outcome.stdinErr != nil || outcome.waitErr != nil || outcome.exitCode != 0 || outcome.stdoutOverflow || outcome.stderrOverflow {
-		return nil, newProcessDiagnosticError("tool_failed", "execute", "helper_execution_failed", "", "go", outcome.exitCode, safeDiagnostic(outcome.stderr, diagnosticRedactions{paths: []string{moduleRoot, invocationRoot}}))
+		return nil, entGraphLoadError("helper_execution_failed", schemaDir)
 	}
 	return append([]byte(nil), outcome.stdout...), nil
 }
 
-func rejectVirtualCollisionV2(root, name string) error {
+func rejectVirtualCollisionV2(root, name, schemaDir string) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return newProcessError("tool_failed", "prepare", "helper_prepare_failed", "", "go", 0)
+		return entGraphLoadError("helper_prepare_failed", schemaDir)
 	}
 	fold := strings.ToLower(name)
 	for _, entry := range entries {
 		if strings.ToLower(entry.Name()) == fold {
-			return newProcessError("tool_input_invalid", "input", "importer_collision", "/schemaDir", "go", 0)
+			return entGraphInputError("importer_visibility_invalid", "/schemaDir")
 		}
 	}
 	return nil
+}
+
+func replaceEnvironmentV2(environment []string, name, value string) []string {
+	prefix := name + "="
+	result := make([]string, 0, len(environment)+1)
+	for _, item := range environment {
+		if !strings.HasPrefix(item, prefix) {
+			result = append(result, item)
+		}
+	}
+	return append(result, prefix+value)
 }
 func envMapV2(environment []string) map[string]string {
 	result := map[string]string{}

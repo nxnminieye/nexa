@@ -58,9 +58,38 @@ func TestImporterV2RealReadonlyOverlayProjectsEntityIR(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	spec := V2Spec{RepositoryRoot: repository, ModuleDir: ".", ModulePath: "example.com/entityfixture", SchemaDir: "schema", BuildTags: []string{}, Environment: invocation.Environment()}
+	goExecutable, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goExecutable, err = filepath.EvalSymlinks(goExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionCommand := exec.Command(goExecutable, "version")
+	versionCommand.Env = invocation.Environment()
+	versionBytes, err := versionCommand.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := append(invocation.Environment(), "NEXA_ENT_GO_EXECUTABLE="+goExecutable, "NEXA_ENT_GO_VERSION="+strings.TrimSpace(string(versionBytes)), "PATH=/malicious/does-not-exist")
+	spec := V2Spec{RepositoryRoot: repository, ModuleDir: ".", ModulePath: "example.com/entityfixture", SchemaDir: "schema", BuildTags: []string{}, Environment: environment, GoExecutable: goExecutable, GoVersion: strings.TrimSpace(string(versionBytes))}
 	first, err := DiscoverV2(context.Background(), spec)
 	if err != nil {
+		t.Fatal(err)
+	}
+	mutating := spec
+	mutating.phaseHook = func(phase string) {
+		if phase == "after-type-discovery" {
+			if appendErr := os.WriteFile(filepath.Join(repository, "schema", "account.go"), append([]byte(schema), '\n'), 0o600); appendErr != nil {
+				t.Fatalf("mutate schema: %v", appendErr)
+			}
+		}
+	}
+	if _, err := DiscoverV2(context.Background(), mutating); err == nil {
+		t.Fatal("TOCTOU schema mutation accepted")
+	}
+	if err := os.WriteFile(filepath.Join(repository, "schema", "account.go"), []byte(schema), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	second, err := DiscoverV2(context.Background(), spec)
@@ -71,11 +100,8 @@ func TestImporterV2RealReadonlyOverlayProjectsEntityIR(t *testing.T) {
 		t.Fatalf("non-deterministic importer or types = %v", first.TypeNames)
 	}
 	before := repositorySnapshotV2(t, repository)
-	stdout, err := entexec.RunImporterV2(context.Background(), repository, first.Source, nil, invocation.Environment())
+	stdout, err := entexec.RunImporterV2(context.Background(), repository, first.VirtualDir, "schema", goExecutable, strings.TrimSpace(string(versionBytes)), first.Source, nil, environment)
 	if err != nil {
-		if typed, ok := err.(*entexec.Error); ok {
-			t.Logf("importer diagnostic: %s", typed.Diagnostic())
-		}
 		t.Fatal(err)
 	}
 	document, err := ProjectV2(spec, first, stdout)

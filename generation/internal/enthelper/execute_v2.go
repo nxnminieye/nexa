@@ -33,14 +33,21 @@ func ExecuteV2(ctx context.Context, input []byte) ([]byte, error) {
 	if moduleRoot != cwd {
 		return encodeV2Failure(request, entityload.InputV2Error("module_root_invalid", "/moduleDir"))
 	}
-	spec := entityload.V2Spec{RepositoryRoot: repository, ModuleDir: request.ModuleDir(), ModulePath: request.ModulePath(), SchemaDir: request.SchemaDir(), BuildTags: request.BuildTags(), Environment: os.Environ()}
+	executable, version := os.Getenv("NEXA_ENT_GO_EXECUTABLE"), os.Getenv("NEXA_ENT_GO_VERSION")
+	spec := entityload.V2Spec{RepositoryRoot: repository, ModuleDir: request.ModuleDir(), ModulePath: request.ModulePath(), SchemaDir: request.SchemaDir(), BuildTags: request.BuildTags(), Environment: os.Environ(), GoExecutable: executable, GoVersion: version}
 	importer, err := entityload.DiscoverV2(ctx, spec)
 	if err != nil {
 		return encodeV2Failure(request, err)
 	}
-	stdout, err := entexec.RunImporterV2(ctx, moduleRoot, importer.Source, request.BuildTags(), os.Environ())
+	if err := entityload.VerifyImporterV2(importer, request.SchemaDir()); err != nil {
+		return encodeV2Failure(request, err)
+	}
+	stdout, err := entexec.RunImporterV2(ctx, moduleRoot, importer.VirtualDir, request.SchemaDir(), executable, version, importer.Source, request.BuildTags(), os.Environ())
 	if err != nil {
-		return encodeV2Failure(request, entityload.GraphV2Error("helper_execution_failed", request.SchemaDir()))
+		return encodeV2Failure(request, err)
+	}
+	if err := entityload.VerifyImporterV2(importer, request.SchemaDir()); err != nil {
+		return encodeV2Failure(request, err)
 	}
 	document, err := entityload.ProjectV2(spec, importer, stdout)
 	if err != nil {

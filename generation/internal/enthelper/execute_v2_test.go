@@ -22,7 +22,7 @@ func TestEntGraphV2RunnerRealHelperAndAdversarialTelemetry(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(repository) })
 	module := "module example.com/runnerfixture\n\ngo 1.25.0\n\nrequire (\n entgo.io/ent v0.14.5\n github.com/nxnminieye/nexa v0.0.0\n)\n\nreplace github.com/nxnminieye/nexa => " + filepath.ToSlash(framework) + "\n"
 	writeV2File(t, filepath.Join(repository, "go.mod"), module)
-	writeV2File(t, filepath.Join(repository, "schema", "account.go"), "package schema\n\nimport (\n \"entgo.io/ent\"\n \"entgo.io/ent/schema/field\"\n)\ntype Account struct{ ent.Schema }\nfunc (Account) Fields() []ent.Field { return []ent.Field{field.String(\"name\")} }\n")
+	writeV2File(t, filepath.Join(repository, "pkg", "internal", "schema", "account.go"), "package schema\n\nimport (\n \"entgo.io/ent\"\n \"entgo.io/ent/schema/field\"\n)\ntype Account struct{ ent.Schema }\nfunc (Account) Fields() []ent.Field { return []ent.Field{field.String(\"name\")} }\n")
 	writeV2File(t, filepath.Join(repository, "tools", "tools.go"), "package tools\nimport _ \"entgo.io/ent/entc/load\"\n")
 	tidy := exec.Command("go", "mod", "tidy")
 	tidy.Dir = repository
@@ -47,7 +47,7 @@ func TestEntGraphV2RunnerRealHelperAndAdversarialTelemetry(t *testing.T) {
 	if output, err := prewarm.CombinedOutput(); err != nil {
 		t.Fatalf("prewarm helper: %v\n%s", err, output)
 	}
-	request, err := entipc.NewRequestV2(entipc.RequestV2Spec{ModuleDir: ".", ModulePath: "example.com/runnerfixture", SchemaDir: "schema", BuildTags: []string{}})
+	request, err := entipc.NewRequestV2(entipc.RequestV2Spec{ModuleDir: ".", ModulePath: "example.com/runnerfixture", SchemaDir: "pkg/internal/schema", BuildTags: []string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestEntGraphV2RunnerRealHelperAndAdversarialTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	ambient := append(goCommandEnvWithModuleProxy(t), "HOME="+repository, "XDG_CONFIG_HOME="+repository, "TEST_TELEMETRY_DIR="+repository, "GOTMPDIR="+repository, "TMPDIR="+repository, "GOFLAGS=-modfile=evil -overlay=evil")
-	processResult, err := entexec.RunEntGraphV2(context.Background(), entexec.EntGraphProcessSpec{RepositoryRoot: repository, ModuleDir: ".", GoExecutable: goExecutable, ExpectedVersion: strings.TrimSpace(string(versionBytes)), Request: requestBytes, BuildTags: []string{}, GOCACHE: goCache, GOMODCACHE: moduleCache, TempBase: tempBase, BaseEnvironment: ambient})
+	processResult, err := entexec.RunEntGraphV2(context.Background(), entexec.EntGraphProcessSpec{RepositoryRoot: repository, ModuleDir: ".", ModulePath: "example.com/runnerfixture", SchemaDir: "pkg/internal/schema", GoExecutable: goExecutable, ExpectedVersion: strings.TrimSpace(string(versionBytes)), Request: requestBytes, BuildTags: []string{}, GOCACHE: goCache, GOMODCACHE: moduleCache, TempBase: tempBase, BaseEnvironment: ambient})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestEntGraphV2RunnerRealHelperAndAdversarialTelemetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, ok := result.Projected(); !ok {
-		t.Fatal("helper did not return EntityIR")
+		t.Fatalf("helper did not return EntityIR: %s", processResult.Stdout)
 	}
 	if _, err := os.Lstat(filepath.Join(repository, ".entc")); !os.IsNotExist(err) {
 		t.Fatalf("consumer .entc changed: %v", err)
@@ -118,7 +118,9 @@ func TestEntGraphV2ProbeMismatchCleansBeforeMain(t *testing.T) {
 	moduleCache := goEnvPathV2(t, "GOMODCACHE")
 	tempBase := dedicatedTempBaseV2(t, framework)
 	before, _ := os.ReadDir(tempBase)
-	_, err = entexec.RunEntGraphV2(context.Background(), entexec.EntGraphProcessSpec{RepositoryRoot: framework, ModuleDir: ".", GoExecutable: goExecutable, ExpectedVersion: "go version mismatch", Request: []byte("not launched"), GOCACHE: goCache, GOMODCACHE: moduleCache, TempBase: tempBase, BaseEnvironment: goCommandEnv()})
+	request, _ := entipc.NewRequestV2(entipc.RequestV2Spec{ModuleDir: ".", ModulePath: "github.com/nxnminieye/nexa", SchemaDir: "generation/internal/entityload", BuildTags: []string{}})
+	requestBytes, _ := entipc.CanonicalRequestV2(request)
+	_, err = entexec.RunEntGraphV2(context.Background(), entexec.EntGraphProcessSpec{RepositoryRoot: framework, ModuleDir: ".", ModulePath: "github.com/nxnminieye/nexa", SchemaDir: "generation/internal/entityload", GoExecutable: goExecutable, ExpectedVersion: "go version mismatch", Request: requestBytes, GOCACHE: goCache, GOMODCACHE: moduleCache, TempBase: tempBase, BaseEnvironment: goCommandEnv()})
 	if err == nil {
 		t.Fatal("version mismatch succeeded")
 	}

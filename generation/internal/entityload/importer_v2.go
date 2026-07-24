@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -27,6 +28,9 @@ type V2Spec struct {
 	SchemaDir      string
 	BuildTags      []string
 	Environment    []string
+	GoExecutable   string
+	GoVersion      string
+	phaseHook      func(string)
 }
 
 type ImporterV2 struct {
@@ -34,6 +38,17 @@ type ImporterV2 struct {
 	TypeNames  []string
 	Source     []byte
 	Sources    []provenance.Source
+	VirtualDir string
+	schemaRoot string
+	moduleFile string
+	identities []importerIdentityV2
+}
+
+type importerIdentityV2 struct {
+	path      string
+	info      os.FileInfo
+	digest    provenance.Digest
+	directory bool
 }
 
 type V2Error struct{ code, reason, pointer, source string }
@@ -82,6 +97,17 @@ func DiscoverV2(ctx context.Context, spec V2Spec) (ImporterV2, error) {
 	if err != nil {
 		return ImporterV2{}, err
 	}
+	before, err := captureImporterIdentityV2(filepath.Join(moduleRoot, "go.mod"), schemaRoot)
+	if err != nil {
+		return ImporterV2{}, InputV2Error("schema_source_invalid", "/schemaDir")
+	}
+	goExecutable, goEnvironment, err := validateV2GoIdentity(ctx, spec.GoExecutable, spec.GoVersion, spec.Environment)
+	if err != nil {
+		return ImporterV2{}, GraphV2Error("graph_load_failed", spec.SchemaDir)
+	}
+	if spec.phaseHook != nil {
+		spec.phaseHook("after-input-snapshot")
+	}
 	flags := []string{"-mod=readonly"}
 	tags := append([]string(nil), spec.BuildTags...)
 	sort.Strings(tags)
@@ -89,11 +115,18 @@ func DiscoverV2(ctx context.Context, spec V2Spec) (ImporterV2, error) {
 		flags = append(flags, "-tags="+strings.Join(tags, ","))
 	}
 	config := &packages.Config{
-		Context: ctx, Dir: moduleRoot, Env: append([]string(nil), spec.Environment...),
+		Context: ctx, Dir: moduleRoot, Env: goEnvironment,
 		BuildFlags: flags, Mode: packages.NeedName | packages.NeedTypes | packages.NeedImports | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedModule,
 	}
 	loaded, err := packages.Load(config, importPath)
 	if err != nil || len(loaded) != 1 || packages.PrintErrors(loaded) != 0 || loaded[0].Types == nil || loaded[0].PkgPath != importPath {
+		return ImporterV2{}, GraphV2Error("graph_load_failed", spec.SchemaDir)
+	}
+	if spec.phaseHook != nil {
+		spec.phaseHook("after-type-discovery")
+	}
+	after, err := captureImporterIdentityV2(filepath.Join(moduleRoot, "go.mod"), schemaRoot)
+	if err != nil || !equalImporterIdentityV2(before, after) {
 		return ImporterV2{}, GraphV2Error("graph_load_failed", spec.SchemaDir)
 	}
 	pkg := loaded[0]
@@ -137,7 +170,139 @@ func DiscoverV2(ctx context.Context, spec V2Spec) (ImporterV2, error) {
 	if err != nil {
 		return ImporterV2{}, InputV2Error("schema_source_invalid", "/schemaDir")
 	}
-	return ImporterV2{ImportPath: importPath, TypeNames: names, Source: renderImporterV2(importPath, names), Sources: sources}, nil
+	virtualDir, err := importerVisibilityDirV2(moduleRoot, schemaRoot)
+	if err != nil {
+		return ImporterV2{}, InputV2Error("importer_visibility_invalid", "/schemaDir")
+	}
+	_ = goExecutable
+	return ImporterV2{ImportPath: importPath, TypeNames: names, Source: renderImporterV2(importPath, names), Sources: sources, VirtualDir: virtualDir, schemaRoot: schemaRoot, moduleFile: filepath.Join(moduleRoot, "go.mod"), identities: before}, nil
+}
+
+func validateV2GoIdentity(ctx context.Context, executable, expectedVersion string, environment []string) (string, []string, error) {
+	if executable == "" || expectedVersion == "" {
+		return "", nil, fmt.Errorf("go identity")
+	}
+	canonical, err := filepath.EvalSymlinks(executable)
+	if err != nil || canonical != executable || filepath.Base(canonical) != "go" {
+		return "", nil, fmt.Errorf("go identity")
+	}
+	command := exec.CommandContext(ctx, canonical, "version")
+	command.Env = append([]string(nil), environment...)
+	output, err := command.Output()
+	if err != nil || strings.TrimSpace(string(output)) != expectedVersion {
+		return "", nil, fmt.Errorf("go identity")
+	}
+	values := append([]string(nil), environment...)
+	values = replaceV2Environment(values, "PATH", filepath.Dir(canonical))
+	return canonical, values, nil
+}
+
+func replaceV2Environment(environment []string, name, value string) []string {
+	prefix := name + "="
+	result := make([]string, 0, len(environment)+1)
+	for _, item := range environment {
+		if !strings.HasPrefix(item, prefix) {
+			result = append(result, item)
+		}
+	}
+	return append(result, prefix+value)
+}
+
+func VerifyImporterV2(importer ImporterV2, schemaDir string) error {
+	if importer.schemaRoot == "" || importer.moduleFile == "" || len(importer.identities) == 0 {
+		return GraphV2Error("graph_load_failed", schemaDir)
+	}
+	current, err := captureImporterIdentityV2(importer.moduleFile, importer.schemaRoot)
+	if err != nil || !equalImporterIdentityV2(importer.identities, current) {
+		return GraphV2Error("graph_load_failed", schemaDir)
+	}
+	return nil
+}
+
+func captureImporterIdentityV2(moduleFile, schemaRoot string) ([]importerIdentityV2, error) {
+	rootInfo, err := os.Lstat(schemaRoot)
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("schema root identity")
+	}
+	paths := []string{schemaRoot, moduleFile}
+	moduleInfo, err := os.Lstat(moduleFile)
+	if err != nil || !moduleInfo.Mode().IsRegular() || moduleInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("module identity")
+	}
+	goSum := filepath.Join(filepath.Dir(moduleFile), "go.sum")
+	if sumInfo, sumErr := os.Lstat(goSum); sumErr == nil {
+		if !sumInfo.Mode().IsRegular() || sumInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("sum identity")
+		}
+		paths = append(paths, goSum)
+	} else if !os.IsNotExist(sumErr) {
+		return nil, sumErr
+	}
+	entries, err := os.ReadDir(schemaRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("symlink")
+		}
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			paths = append(paths, filepath.Join(schemaRoot, entry.Name()))
+		}
+	}
+	sort.Strings(paths[1:])
+	result := make([]importerIdentityV2, len(paths))
+	for i, value := range paths {
+		info, err := os.Lstat(value)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return nil, fmt.Errorf("identity")
+		}
+		var digest provenance.Digest
+		if !info.IsDir() {
+			data, readErr := os.ReadFile(value)
+			if readErr != nil {
+				return nil, readErr
+			}
+			digest = provenance.SHA256(data)
+		}
+		result[i] = importerIdentityV2{path: value, info: info, digest: digest, directory: info.IsDir()}
+	}
+	return result, nil
+}
+
+func equalImporterIdentityV2(left, right []importerIdentityV2) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].path != right[i].path || left[i].digest != right[i].digest || left[i].directory != right[i].directory || !os.SameFile(left[i].info, right[i].info) {
+			return false
+		}
+	}
+	return true
+}
+
+func importerVisibilityDirV2(moduleRoot, schemaRoot string) (string, error) {
+	relative, err := filepath.Rel(moduleRoot, schemaRoot)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	visibility := moduleRoot
+	lastInternal := -1
+	for index, part := range parts {
+		if part == "internal" {
+			lastInternal = index
+		}
+	}
+	if lastInternal >= 0 && lastInternal > 0 {
+		visibility = filepath.Join(moduleRoot, filepath.FromSlash(strings.Join(parts[:lastInternal], "/")))
+	}
+	canonical, err := filepath.EvalSymlinks(visibility)
+	if err != nil || canonical != visibility || !pathInsideV2(canonical, moduleRoot) {
+		return "", fmt.Errorf("visibility")
+	}
+	return canonical, nil
 }
 
 func renderImporterV2(importPath string, names []string) []byte {
@@ -155,6 +320,9 @@ func renderImporterV2(importPath string, names []string) []byte {
 }
 
 func ProjectV2(spec V2Spec, importer ImporterV2, stdout []byte) (entity.Document, error) {
+	if err := VerifyImporterV2(importer, spec.SchemaDir); err != nil {
+		return entity.Document{}, err
+	}
 	var records []json.RawMessage
 	if json.Unmarshal(stdout, &records) != nil || len(records) != len(importer.TypeNames) {
 		return entity.Document{}, GraphV2Error("graph_load_failed", spec.SchemaDir)

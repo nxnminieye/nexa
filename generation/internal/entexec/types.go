@@ -16,8 +16,10 @@ const (
 	MaxModuleFileBytes   = 1 << 20
 	MaxModuleSumBytes    = 16 << 20
 	MaxHelperSourceBytes = 256 << 10
-	ScratchModulePath    = "github.com/nxnminieye/nexa/generation/internal/enthelperscratch"
+	ScratchModulePath    = "github.com/nxnminieye/nexa/generation/enthelperexec"
 )
+
+const scratchExecutionModulePath = "github.com/nxnminieye/nexa/generation/internal/enthelperscratch"
 
 type HelperSource struct {
 	Path   string

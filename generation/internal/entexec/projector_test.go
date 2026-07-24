@@ -15,7 +15,7 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-const scratchModulePath = "github.com/nxnminieye/nexa/generation/internal/enthelperscratch"
+const scratchModulePath = "github.com/nxnminieye/nexa/generation/enthelperexec"
 
 func TestLocateSelectsNearestModuleAndDerivesImportPath(t *testing.T) {
 	fixture := newProjectionFixture(t)

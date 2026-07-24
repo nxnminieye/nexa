@@ -1,11 +1,76 @@
 package entexec
 
 import (
+	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/nxnminieye/nexa/generation/internal/entipc"
 )
+
+func TestRunEntGraphV2RejectsCoordinateMismatchBeforeTempOrProcess(t *testing.T) {
+	repository := canonicalDirectory(t, filepath.Clean(filepath.Join(testFileDirV2(t), "../../..")))
+	request, err := entipc.NewRequestV2(entipc.RequestV2Spec{ModuleDir: ".", ModulePath: "github.com/nxnminieye/nexa", SchemaDir: "generation/internal/entityload", BuildTags: []string{"a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestBytes, _ := entipc.CanonicalRequestV2(request)
+	goExecutable, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goExecutable, _ = filepath.EvalSymlinks(goExecutable)
+	goCache, moduleCache := goCachesV2(t)
+	tempBase := t.TempDir()
+	called := false
+	_, err = RunEntGraphV2(context.Background(), EntGraphProcessSpec{RepositoryRoot: repository, ModuleDir: ".", ModulePath: "github.com/nxnminieye/nexa", SchemaDir: "generation/internal/entityload", GoExecutable: goExecutable, ExpectedVersion: "unused", Request: requestBytes, BuildTags: []string{"b"}, GOCACHE: goCache, GOMODCACHE: moduleCache, TempBase: tempBase, BaseEnvironment: os.Environ(), processHook: func(processEvent) { called = true }})
+	if err == nil {
+		t.Fatal("coordinate mismatch accepted")
+	}
+	if called {
+		t.Fatal("process launched before coordinate validation")
+	}
+	entries, readErr := os.ReadDir(tempBase)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("temp mutated: %v", entries)
+	}
+}
+
+func TestRunEntGraphV2CleanupFailureOverridesSuccessWithoutRawError(t *testing.T) {
+	repository := canonicalDirectory(t, filepath.Clean(filepath.Join(testFileDirV2(t), "../../..")))
+	request, err := entipc.NewRequestV2(entipc.RequestV2Spec{ModuleDir: ".", ModulePath: "github.com/nxnminieye/nexa", SchemaDir: "generation/internal/entityload", BuildTags: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestBytes, _ := entipc.CanonicalRequestV2(request)
+	goExecutable := filepath.Join(canonicalDirectory(t, t.TempDir()), "fake-go")
+	script := "#!/bin/sh\nif [ \"$1\" = version ]; then printf 'go version fake\\n'; else printf '{}'; fi\n"
+	if err := os.WriteFile(goExecutable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	goCache, moduleCache := goCachesV2(t)
+	tempBase := canonicalDirectory(t, t.TempDir())
+	marker := "secret-cleanup-marker"
+	_, err = RunEntGraphV2(context.Background(), EntGraphProcessSpec{RepositoryRoot: repository, ModuleDir: ".", ModulePath: "github.com/nxnminieye/nexa", SchemaDir: "generation/internal/entityload", GoExecutable: goExecutable, ExpectedVersion: "go version fake", Request: requestBytes, GOCACHE: goCache, GOMODCACHE: moduleCache, TempBase: tempBase, BaseEnvironment: os.Environ(), cleanupHook: func(string) error { return errors.New(marker) }})
+	if err == nil {
+		t.Fatal("cleanup failure suppressed")
+	}
+	if strings.Contains(err.Error(), marker) || strings.Contains(err.Error(), tempBase) {
+		t.Fatalf("raw cleanup error leaked: %v", err)
+	}
+	typed, ok := err.(*EntGraphError)
+	if !ok || typed.Code() != "entity_graph_load_failed" || typed.Reason() != "helper_cleanup_failed" || typed.Source() != "generation/internal/entityload" {
+		t.Fatalf("cleanup error = %T %#v", err, err)
+	}
+}
 
 func TestInvocationV2ClosesAdversarialGoEnvironment(t *testing.T) {
 	repository := canonicalDirectory(t, filepath.Clean(filepath.Join(testFileDirV2(t), "../../..")))

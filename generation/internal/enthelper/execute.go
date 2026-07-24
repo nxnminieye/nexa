@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/nxnminieye/nexa/generation/internal/crudbuild"
+	"github.com/nxnminieye/nexa/generation/internal/entexec"
 	"github.com/nxnminieye/nexa/generation/internal/entipc"
 	"github.com/nxnminieye/nexa/generation/internal/entityload"
 )
@@ -17,7 +18,7 @@ func Execute(ctx context.Context, stdin []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	document, err := entityload.LoadCurrentProcess(ctx, entitySpec)
+	document, err := entityload.LoadCurrentProcess(ctx, entexec.Spec{RepositoryRoot: entitySpec.RepositoryRoot, SchemaDir: entitySpec.SchemaDir, BuildTags: entitySpec.BuildTags, ExpectedModuleGraphDigest: entexec.OptionalDigest{Value: entitySpec.ExpectedModuleGraphDigest, Present: true}, ExpectedBuildInputDigest: entexec.OptionalDigest{Value: entitySpec.ExpectedBuildInputDigest, Present: true}})
 	if err != nil {
 		return encodeDomain(request, err)
 	}

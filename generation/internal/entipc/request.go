@@ -12,7 +12,6 @@ import (
 
 	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/internal/crudbuild"
-	"github.com/nxnminieye/nexa/generation/internal/entexec"
 	"github.com/nxnminieye/nexa/internal/strictdoc"
 	"github.com/nxnminieye/nexa/provenance"
 )
@@ -55,6 +54,13 @@ type RequestSpec struct {
 	ExistingLock                        *ExistingLockInput
 	PublishedArtifact                   *PublishedArtifact
 	MultiTenant                         MultiTenantConfig
+}
+
+type EntitySpec struct {
+	RepositoryRoot                                      string
+	SchemaDir                                           provenance.DomainSource
+	BuildTags                                           []string
+	ExpectedModuleGraphDigest, ExpectedBuildInputDigest provenance.Digest
 }
 
 type Request struct{ state *requestState }
@@ -209,11 +215,11 @@ func (r Request) RequestDigest() provenance.Digest {
 	}
 	return r.state.requestDigest
 }
-func (r Request) EntitySpec() (entexec.Spec, error) {
+func (r Request) EntitySpec() (EntitySpec, error) {
 	if r.state == nil {
-		return entexec.Spec{}, requestError("canonical_invalid", "", "")
+		return EntitySpec{}, requestError("canonical_invalid", "", "")
 	}
-	return entexec.Spec{RepositoryRoot: r.state.repositoryRoot, SchemaDir: r.state.schemaDir, BuildTags: append([]string(nil), r.state.buildTags...), ExpectedModuleGraphDigest: entexec.OptionalDigest{Value: r.state.moduleGraphDigest, Present: true}, ExpectedBuildInputDigest: entexec.OptionalDigest{Value: r.state.buildInputDigest, Present: true}}, nil
+	return EntitySpec{RepositoryRoot: r.state.repositoryRoot, SchemaDir: r.state.schemaDir, BuildTags: append([]string(nil), r.state.buildTags...), ExpectedModuleGraphDigest: r.state.moduleGraphDigest, ExpectedBuildInputDigest: r.state.buildInputDigest}, nil
 }
 func (r Request) BuildSpec() (crudbuild.Spec, error) {
 	if r.state == nil {
