@@ -71,8 +71,10 @@ func TestWriteRejectsInvalidStaticSetsBeforeMutation(t *testing.T) {
 		{name: "git alias", set: MutationSet{Scopes: []OutputScope{{Path: ".GiT/generated", Mode: OutputModeFileSet}}}, kind: ErrorInvalidScope},
 		{name: "overlap", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}, {Path: "gen/tree", Mode: OutputModeReplaceTree}}}, kind: ErrorInvalidScope},
 		{name: "casefold scope", set: MutationSet{Scopes: []OutputScope{{Path: "Gen", Mode: OutputModeFileSet}, {Path: "gen", Mode: OutputModeFileSet}}}, kind: ErrorInvalidScope},
+		{name: "exact duplicate scope", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}, {Path: "gen", Mode: OutputModeFileSet}}}, kind: ErrorInvalidScope},
 		{name: "unicode casefold action", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/STRASSE.go"}, {Path: "gen/stra\u00dfe.go"}}}, kind: ErrorInvalidMutation},
 		{name: "unicode normalization action", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/caf\u00e9.go"}, {Path: "gen/cafe\u0301.go"}}}, kind: ErrorInvalidMutation},
+		{name: "exact duplicate action", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/a.go"}, {Path: "gen/a.go"}}}, kind: ErrorInvalidMutation},
 		{name: "action ancestor", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/a"}, {Path: "gen/a/b.go"}}}, kind: ErrorInvalidMutation},
 		{name: "write delete collision", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/a.go"}}, Deletes: []string{"gen/A.go"}}, kind: ErrorInvalidMutation},
 		{name: "replace explicit delete", set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeReplaceTree}}, Deletes: []string{"gen/a.go"}}, kind: ErrorInvalidMutation},
@@ -81,9 +83,22 @@ func TestWriteRejectsInvalidStaticSetsBeforeMutation(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, set: MutationSet{Scopes: []OutputScope{{Path: "gen/output", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/output/a.go"}}}, kind: ErrorPathDenied},
+		{name: "replace scope symlink", prepare: func(t *testing.T, root string) {
+			if err := os.Symlink(filepath.Join(root, "manual"), filepath.Join(root, "gen")); err != nil {
+				t.Fatal(err)
+			}
+		}, set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeReplaceTree}}, Writes: []OutputFile{{Path: "gen/a.go"}}}, kind: ErrorPathDenied},
 		{name: "manual casefold neighbor", prepare: func(t *testing.T, root string) {
 			mustWrite(t, root, "gen/foo.go", "manual")
 		}, set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/Foo.go"}}}, kind: ErrorPathDenied},
+		{name: "file-set final symlink", prepare: func(t *testing.T, root string) {
+			if err := os.MkdirAll(filepath.Join(root, "gen"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(root, "manual"), filepath.Join(root, "gen/a.go")); err != nil {
+				t.Fatal(err)
+			}
+		}, set: MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/a.go"}}}, kind: ErrorPathDenied},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -94,13 +109,65 @@ func TestWriteRejectsInvalidStaticSetsBeforeMutation(t *testing.T) {
 			}
 			report, err := Write(context.Background(), root, test.set)
 			var typed *Error
-			if !errors.As(err, &typed) || typed.Kind() != test.kind {
+			if !errors.As(err, &typed) || typed.Kind() != test.kind || typed.ChangeEvidence() != ChangeEvidenceComplete {
 				t.Fatalf("error = %#v, want kind %s", err, test.kind)
 			}
 			if len(report.CompletedWrites) != 0 || len(report.CompletedDeletes) != 0 {
 				t.Fatalf("preflight report = %#v", report)
 			}
 			assertContent(t, root, "manual", "unchanged")
+			if test.name == "file-set final symlink" {
+				info, err := os.Lstat(filepath.Join(root, "gen/a.go"))
+				if err != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("file-set symlink changed during preflight: %v, %v", info, err)
+				}
+			}
+		})
+	}
+}
+
+func TestReplaceTreeRebuildsDesiredPathsOverAnyStaleInternalNode(t *testing.T) {
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, string)
+	}{
+		{name: "desired path was directory", prepare: func(t *testing.T, root string) {
+			mustWrite(t, root, "tree/branch/leaf.go/stale", "stale")
+		}},
+		{name: "desired ancestor was symlink", prepare: func(t *testing.T, root string) {
+			mustWrite(t, root, "outside/keep", "outside")
+			if err := os.MkdirAll(filepath.Join(root, "tree"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(root, "outside"), filepath.Join(root, "tree/branch")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "desired ancestor was regular file", prepare: func(t *testing.T, root string) {
+			mustWrite(t, root, "tree/branch", "stale")
+		}},
+		{name: "casefold stale entry", prepare: func(t *testing.T, root string) {
+			mustWrite(t, root, "tree/BRANCH/stale.go", "stale")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := canonicalTempDir(t)
+			test.prepare(t, root)
+			report, err := Write(context.Background(), root, MutationSet{
+				Scopes: []OutputScope{{Path: "tree", Mode: OutputModeReplaceTree}},
+				Writes: []OutputFile{{Path: "tree/branch/leaf.go", Content: []byte("generated")}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(report.CompletedWrites, []string{"tree/branch/leaf.go"}) || len(report.CompletedDeletes) != 0 {
+				t.Fatalf("report = %#v", report)
+			}
+			assertContent(t, root, "tree/branch/leaf.go", "generated")
+			if test.name == "desired ancestor was symlink" {
+				assertContent(t, root, "outside/keep", "outside")
+			}
 		})
 	}
 }
@@ -113,7 +180,7 @@ func TestWriteReturnsPartialReportAndDoesNotRollback(t *testing.T) {
 		Writes: []OutputFile{{Path: "gen/a.go", Content: []byte("a")}, {Path: "gen/b.go", Content: []byte("b")}},
 	}, files)
 	var typed *Error
-	if !errors.As(err, &typed) || typed.Kind() != ErrorPartialWrite || !reflect.DeepEqual(typed.Report(), report) {
+	if !errors.As(err, &typed) || typed.Kind() != ErrorPartialWrite || typed.ChangeEvidence() != ChangeEvidenceHostOnly || !reflect.DeepEqual(typed.Report(), report) {
 		t.Fatalf("error/report = %#v / %#v", err, report)
 	}
 	if !reflect.DeepEqual(report.CompletedWrites, []string{"gen/a.go"}) {
@@ -121,6 +188,45 @@ func TestWriteReturnsPartialReportAndDoesNotRollback(t *testing.T) {
 	}
 	assertContent(t, root, "gen/a.go", "a")
 	assertAbsent(t, root, "gen/b.go")
+}
+
+func TestOverwriteCreateFailureReportsDeleteAndUncertainEvidence(t *testing.T) {
+	root := canonicalTempDir(t)
+	mustWrite(t, root, "gen/a.go", "old")
+	mustWrite(t, root, "gen/z.go", "stale")
+	files := &failWriteFileSystem{osFileSystem: osFileSystem{}, failAt: 1}
+	report, err := write(context.Background(), root, MutationSet{
+		Scopes:  []OutputScope{{Path: "gen", Mode: OutputModeFileSet}},
+		Writes:  []OutputFile{{Path: "gen/a.go", Content: []byte("new")}},
+		Deletes: []string{"gen/z.go"},
+	}, files)
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind() != ErrorPartialWrite || typed.Path() != "gen/a.go" || typed.ChangeEvidence() != ChangeEvidenceHostOnly {
+		t.Fatalf("error = %#v", err)
+	}
+	if !reflect.DeepEqual(report.CompletedDeletes, []string{"gen/a.go", "gen/z.go"}) || len(report.CompletedWrites) != 0 || !reflect.DeepEqual(typed.Report(), report) {
+		t.Fatalf("report = %#v, typed = %#v", report, typed.Report())
+	}
+	assertAbsent(t, root, "gen/a.go")
+	assertAbsent(t, root, "gen/z.go")
+}
+
+func TestReplaceTreeMutationFailureUsesUncertainEvidence(t *testing.T) {
+	root := canonicalTempDir(t)
+	mustWrite(t, root, "tree/stale.go", "stale")
+	files := &removeThenFailFileSystem{osFileSystem: osFileSystem{}}
+	report, err := write(context.Background(), root, MutationSet{
+		Scopes: []OutputScope{{Path: "tree", Mode: OutputModeReplaceTree}},
+		Writes: []OutputFile{{Path: "tree/new.go", Content: []byte("new")}},
+	}, files)
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind() != ErrorPartialWrite || typed.Path() != "tree" || typed.ChangeEvidence() != ChangeEvidenceHostOnly {
+		t.Fatalf("error = %#v", err)
+	}
+	if len(report.CompletedWrites) != 0 || len(report.CompletedDeletes) != 0 {
+		t.Fatalf("report = %#v", report)
+	}
+	assertAbsent(t, root, "tree")
 }
 
 func TestWriteCancellationIsTyped(t *testing.T) {
@@ -202,6 +308,15 @@ type cancelWriteFileSystem struct {
 	osFileSystem
 	cancel context.CancelFunc
 	calls  int
+}
+
+type removeThenFailFileSystem struct{ osFileSystem }
+
+func (f *removeThenFailFileSystem) RemoveAll(name string) error {
+	if err := f.osFileSystem.RemoveAll(name); err != nil {
+		return err
+	}
+	return errors.New("injected uncertain remove failure")
 }
 
 func (f *cancelWriteFileSystem) WriteExclusive(name string, content []byte, mode fs.FileMode) error {

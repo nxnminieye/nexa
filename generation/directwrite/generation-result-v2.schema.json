@@ -1,6 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nexa.dev/schemas/generation/generation-result-v2.schema.json",
+  "$comment": "The Go owner enforces Unicode NFC case-fold uniqueness, cross-scope topology, and canonical ordering that standard JSON Schema cannot express.",
+  "x-nexa-unicode-casefold-uniqueness": {
+    "normalization": "NFC",
+    "caseFold": "Unicode default case folding",
+    "enforcedBy": "generation/directwrite Go parser"
+  },
+  "x-nexa-path-topology": {
+    "rule": "output scopes must not duplicate or overlap under component-wise Unicode case-fold comparison",
+    "enforcedBy": "generation/directwrite Go parser"
+  },
+  "x-nexa-canonical-order": {
+    "outputScopes": "path then mode",
+    "enforcedBy": "generation/directwrite Go parser"
+  },
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "status", "outputScopes"],
@@ -16,12 +30,18 @@
     }
   },
   "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$",
+      "not": {"pattern": "(^|/)(\\.|\\.\\.|\\.[gG][iI][tT])(/|$)"}
+    },
     "outputScope": {
       "type": "object",
       "additionalProperties": false,
       "required": ["path", "mode"],
       "properties": {
-        "path": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$"},
+        "path": {"$ref": "#/$defs/repositoryPath"},
         "mode": {"enum": ["replace-tree", "file-set"]}
       }
     }

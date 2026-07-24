@@ -21,10 +21,12 @@ type normalizedMutationSet struct {
 
 func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
 	result := normalizedMutationSet{
-		scopes:  append([]OutputScope(nil), input.Scopes...),
+		scopes:  make([]OutputScope, len(input.Scopes)),
 		writes:  make([]OutputFile, len(input.Writes)),
-		deletes: append([]string(nil), input.Deletes...),
+		deletes: make([]string, len(input.Deletes)),
 	}
+	copy(result.scopes, input.Scopes)
+	copy(result.deletes, input.Deletes)
 	for index, item := range input.Writes {
 		result.writes[index] = OutputFile{Path: item.Path, Content: append([]byte(nil), item.Content...)}
 	}

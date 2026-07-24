@@ -72,6 +72,9 @@ func CanonicalGenerationResult(input GenerationResult) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateGenerationResultSchema(input); err != nil {
+		return nil, fmt.Errorf("generation result document does not match schema: %w", err)
+	}
 	return canonicalJSON(input)
 }
 
@@ -99,6 +102,9 @@ func CanonicalGenerationErrorDetails(input GenerationErrorDetails) ([]byte, erro
 	input, err := normalizeGenerationErrorDetails(input)
 	if err != nil {
 		return nil, err
+	}
+	if err := validateGenerationErrorDetailsSchema(input); err != nil {
+		return nil, fmt.Errorf("generation error details document does not match schema: %w", err)
 	}
 	return canonicalJSON(input)
 }

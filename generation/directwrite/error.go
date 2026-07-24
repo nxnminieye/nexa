@@ -21,11 +21,12 @@ var errDirectWrite = errors.New("direct write failed")
 // Error is a typed direct-writer failure. Report remains available on partial
 // write and cancellation failures; Write never attempts rollback.
 type Error struct {
-	kind    ErrorKind
-	path    string
-	report  WriteReport
-	cause   error
-	message string
+	kind     ErrorKind
+	path     string
+	report   WriteReport
+	cause    error
+	message  string
+	evidence ChangeEvidence
 }
 
 func (e *Error) Error() string {
@@ -78,8 +79,21 @@ func (e *Error) Report() WriteReport {
 	return cloneReport(e.report)
 }
 
+// ChangeEvidence reports whether the completed-path report fully describes
+// repository changes that may have occurred before the failure.
+func (e *Error) ChangeEvidence() ChangeEvidence {
+	if e == nil {
+		return ""
+	}
+	return e.evidence
+}
+
 func directError(kind ErrorKind, path, message string, report WriteReport, cause error) *Error {
-	return &Error{kind: kind, path: path, message: message, report: cloneReport(report), cause: cause}
+	return directErrorWithEvidence(kind, path, message, report, cause, ChangeEvidenceComplete)
+}
+
+func directErrorWithEvidence(kind ErrorKind, path, message string, report WriteReport, cause error, evidence ChangeEvidence) *Error {
+	return &Error{kind: kind, path: path, message: message, report: cloneReport(report), cause: cause, evidence: evidence}
 }
 
 func cloneReport(input WriteReport) WriteReport {
