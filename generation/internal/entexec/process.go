@@ -34,6 +34,7 @@ type preparedProcess struct {
 	probed                               bool
 	executableVersion                    string
 	redactions                           diagnosticRedactions
+	direct                               bool
 }
 
 type processOutcome struct {
@@ -42,6 +43,7 @@ type processOutcome struct {
 	startErr, stdinErr, waitErr    error
 	stdoutOverflow, stderrOverflow bool
 	contextErr                     error
+	started                        bool
 }
 
 type preparedExecution struct{ process *preparedProcess }
@@ -77,26 +79,32 @@ func runPreparedProcessWithStdoutLimit(ctx context.Context, execution preparedEx
 	}
 
 	main := executeProcessWithLimits(ctx, prepared.executable, prepared.toolArgs, prepared.environment, prepared.stdin, prepared.workDir, stdoutLimit, MaxStderrBytes, prepared.processHook)
+	failMain := func(err error) (ProcessResult, error) {
+		if main.started {
+			err = markProcessStarted(err, prepared.direct)
+		}
+		return ProcessResult{}, err
+	}
 	if main.contextErr != nil {
-		return ProcessResult{}, contextProcessError(main.contextErr, prepared.toolID)
+		return failMain(contextProcessError(main.contextErr, prepared.toolID))
 	}
 	if main.startErr != nil {
-		return ProcessResult{}, newProcessError("tool_unavailable", "start", "process_start_failed", "/tool/executable", prepared.toolID, 0)
+		return failMain(newProcessError("tool_unavailable", "start", "process_start_failed", "/tool/executable", prepared.toolID, 0))
 	}
 	if main.stdoutOverflow {
-		return ProcessResult{}, newProcessError("tool_output_invalid", "stream", "stdout_limit_exceeded", "/stdout", prepared.toolID, 0)
+		return failMain(newProcessError("tool_output_invalid", "stream", "stdout_limit_exceeded", "/stdout", prepared.toolID, 0))
 	}
 	if main.stderrOverflow {
-		return ProcessResult{}, newProcessError("tool_output_invalid", "stream", "stderr_limit_exceeded", "/stderr", prepared.toolID, 0)
+		return failMain(newProcessError("tool_output_invalid", "stream", "stderr_limit_exceeded", "/stderr", prepared.toolID, 0))
 	}
 	if main.stdinErr != nil {
-		return ProcessResult{}, newProcessError("tool_failed", "stream", "stdin_write_failed", "/stdin", prepared.toolID, 0)
+		return failMain(newProcessError("tool_failed", "stream", "stdin_write_failed", "/stdin", prepared.toolID, 0))
 	}
 	if main.waitErr != nil {
-		return ProcessResult{}, newProcessError("tool_failed", "wait", "process_wait_failed", "", prepared.toolID, 0)
+		return failMain(newProcessError("tool_failed", "wait", "process_wait_failed", "", prepared.toolID, 0))
 	}
 	if main.exitCode != 0 {
-		return ProcessResult{}, newProcessDiagnosticError("tool_failed", "exit", "nonzero_exit", "", prepared.toolID, main.exitCode, safeDiagnostic(main.stderr, prepared.redactions))
+		return failMain(newProcessDiagnosticError("tool_failed", "exit", "nonzero_exit", "", prepared.toolID, main.exitCode, safeDiagnostic(main.stderr, prepared.redactions)))
 	}
 	return ProcessResult{
 		ToolID: prepared.toolID, Version: prepared.version, ExecutableVersion: executableVersion,
@@ -238,16 +246,23 @@ func prepareProcess(ctx context.Context, spec ProcessSpec) (preparedProcess, err
 	if err != nil {
 		return preparedProcess{}, newProcessError("tool_input_invalid", "input", "repository_root_invalid", "/repositoryRoot", "", 0)
 	}
-	staging, err := canonicalExistingDirectory(spec.StagingRoot)
-	if err != nil {
-		return preparedProcess{}, newProcessError("tool_input_invalid", "input", "staging_root_invalid", "/stagingRoot", "", 0)
-	}
-	if pathsOverlap(repository, staging) {
-		return preparedProcess{}, newProcessError("tool_input_invalid", "input", "staging_root_invalid", "/stagingRoot", "", 0)
+	staging := ""
+	if !spec.Direct {
+		staging, err = canonicalExistingDirectory(spec.StagingRoot)
+		if err != nil {
+			return preparedProcess{}, newProcessError("tool_input_invalid", "input", "staging_root_invalid", "/stagingRoot", "", 0)
+		}
+		if pathsOverlap(repository, staging) {
+			return preparedProcess{}, newProcessError("tool_input_invalid", "input", "staging_root_invalid", "/stagingRoot", "", 0)
+		}
+	} else if spec.StagingRoot != "" || spec.WorkDir != "" || spec.Scratch != nil {
+		return preparedProcess{}, newProcessError("tool_input_invalid", "input", "direct_mode_invalid", "/direct", "", 0)
 	}
 	workDir := ""
 	release := func() {}
-	if spec.Scratch == nil {
+	if spec.Direct {
+		workDir = repository
+	} else if spec.Scratch == nil {
 		if spec.WorkDir != staging {
 			return preparedProcess{}, newProcessError("tool_input_invalid", "input", "work_dir_invalid", "/workDir", "", 0)
 		}
@@ -293,6 +308,9 @@ func prepareProcess(ctx context.Context, spec ProcessSpec) (preparedProcess, err
 			return fail(newProcessError("tool_input_invalid", "input", "environment_policy_invalid", indexedPointer("/tool/environment", index), toolID, 0))
 		}
 		if _, exists := rules[rule.Name]; exists {
+			return fail(newProcessError("tool_input_invalid", "input", "environment_policy_invalid", indexedPointer("/tool/environment", index), toolID, 0))
+		}
+		if spec.Direct && rule.Source == EnvironmentScratch {
 			return fail(newProcessError("tool_input_invalid", "input", "environment_policy_invalid", indexedPointer("/tool/environment", index), toolID, 0))
 		}
 		rules[rule.Name] = rule
@@ -355,14 +373,20 @@ func prepareProcess(ctx context.Context, spec ProcessSpec) (preparedProcess, err
 	}
 	toolArgs := append([]string(nil), spec.Tool.Args...)
 	toolArgs = append(toolArgs, spec.Args...)
-	redactions := diagnosticRedactions{paths: []string{repository, staging, workDir, spec.Tool.Executable}, environment: make([]ProcessEnvironment, 0, len(names))}
+	redactionPaths := []string{repository, staging, workDir, spec.Tool.Executable}
+	for _, argument := range append(append([]string(nil), toolArgs...), spec.Tool.Probe.Args...) {
+		if filepath.IsAbs(argument) {
+			redactionPaths = append(redactionPaths, argument)
+		}
+	}
+	redactions := diagnosticRedactions{paths: redactionPaths, environment: make([]ProcessEnvironment, 0, len(names))}
 	for _, name := range names {
 		redactions.environment = append(redactions.environment, ProcessEnvironment{Name: name, Value: values[name]})
 	}
 	return preparedProcess{
 		workDir: workDir, executable: spec.Tool.Executable, toolID: toolID, version: spec.Tool.Version,
 		toolArgs: toolArgs, probeArgs: append([]string(nil), spec.Tool.Probe.Args...), expectedVersion: spec.Tool.Probe.ExpectedVersion,
-		environment: environment, stdin: append([]byte(nil), spec.Stdin...), processHook: spec.processHook, release: release, redactions: redactions,
+		environment: environment, stdin: append([]byte(nil), spec.Stdin...), processHook: spec.processHook, release: release, redactions: redactions, direct: spec.Direct,
 	}, nil
 }
 
@@ -403,6 +427,7 @@ func executeProcessWithLimits(ctx context.Context, executable string, args, envi
 		_ = stderrPipe.Close()
 		return processOutcome{startErr: err, contextErr: ctx.Err()}
 	}
+	started := true
 	stdinCloser := &singleCloseWriteCloser{WriteCloser: stdinPipe}
 	stdinDone := make(chan error, 1)
 	go func() {
@@ -432,7 +457,7 @@ func executeProcessWithLimits(ctx context.Context, executable string, args, envi
 		waitDone <- processWaitResult{state: state, err: waitErr}
 	}()
 
-	outcome := processOutcome{}
+	outcome := processOutcome{started: started}
 	contextDone := ctx.Done()
 	stdoutOverflow := stdout.overflowSignal
 	stderrOverflow := stderr.overflowSignal

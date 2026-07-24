@@ -9,6 +9,7 @@ type Error struct {
 	code, stage, reason, pointer, toolID string
 	diagnostic                           string
 	exitCode                             int
+	started, mayHaveWritten              bool
 	sentinel                             error
 }
 
@@ -71,6 +72,21 @@ func (e *Error) Diagnostic() string {
 		return ""
 	}
 	return e.diagnostic
+}
+
+// Started reports whether the main tool process was successfully started.
+func (e *Error) Started() bool { return e != nil && e.started }
+
+// MayHaveWritten reports whether the main tool may have changed its working tree.
+func (e *Error) MayHaveWritten() bool { return e != nil && e.mayHaveWritten }
+
+func markProcessStarted(err error, mayHaveWritten bool) error {
+	var typed *Error
+	if errors.As(err, &typed) {
+		typed.started = true
+		typed.mayHaveWritten = mayHaveWritten
+	}
+	return err
 }
 
 var entexecErrorSentinels sync.Map

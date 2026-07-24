@@ -155,6 +155,7 @@ type ProcessTool struct {
 
 type ProcessSpec struct {
 	RepositoryRoot, StagingRoot, WorkDir string
+	Direct                               bool
 	Scratch                              *Scratch
 	Tool                                 ProcessTool
 	Args                                 []string
