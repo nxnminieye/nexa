@@ -52,7 +52,12 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$",
-      "not": {"pattern": "(^|/)(\\.|\\.\\.|\\.[gG][iI][tT])(/|$)"}
+      "not": {
+        "anyOf": [
+          {"pattern": "\u0000"},
+          {"pattern": "(^|/)(\\.|\\.\\.|\\.[gG][iI][tT])(/|$)"}
+        ]
+      }
     },
     "outputScope": {
       "type": "object",

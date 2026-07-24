@@ -138,7 +138,7 @@ func TestGenerationResultSchemaDirectlyRejectsNonCleanAndGitPaths(t *testing.T) 
 	if err := compileSchemas(); err != nil {
 		t.Fatal(err)
 	}
-	for _, candidate := range []string{"../outside", "a/./b", ".GiT/hooks"} {
+	for _, candidate := range []string{"../outside", "a/./b", ".GiT/hooks", "bad\x00path"} {
 		resultDocument := map[string]any{
 			"apiVersion":   GenerationResultAPIVersion,
 			"kind":         GenerationResultKind,
