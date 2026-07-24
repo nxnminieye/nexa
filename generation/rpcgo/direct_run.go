@@ -71,6 +71,9 @@ func RunDirectRPCGo(ctx context.Context, request RPCGoRequest, options DirectOpt
 		cause := errors.New("RPC Go tool result does not acknowledge the exact request")
 		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, cause)
 	}
+	if err := validateDirectRPCGoOutput(root, request); err != nil {
+		return RPCGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
+	}
 	return result, nil
 }
 

@@ -16,6 +16,10 @@ import (
 )
 
 func snapshotManualScopeFiles(repository string, scopes []directwrite.OutputScope) (map[string][]byte, error) {
+	return snapshotManualScopeFilesExcept(repository, scopes, nil)
+}
+
+func snapshotManualScopeFilesExcept(repository string, scopes []directwrite.OutputScope, excluded map[string]struct{}) (map[string][]byte, error) {
 	root, err := os.OpenRoot(repository)
 	if err != nil {
 		return nil, err
@@ -42,6 +46,9 @@ func snapshotManualScopeFiles(repository string, scopes []directwrite.OutputScop
 			closeErr := file.Close()
 			if readErr != nil || closeErr != nil {
 				return errors.Join(readErr, closeErr)
+			}
+			if _, generated := excluded[name]; generated {
+				return nil
 			}
 			if !apiGeneratedMarker(name, content) {
 				result[name] = content
@@ -88,6 +95,10 @@ func verifyManualScopeFiles(repository string, before map[string][]byte) error {
 }
 
 func rejectNewUnmarkedFiles(repository string, scopes []directwrite.OutputScope, before map[string][]byte) error {
+	return rejectNewUnmarkedFilesExcept(repository, scopes, before, nil)
+}
+
+func rejectNewUnmarkedFilesExcept(repository string, scopes []directwrite.OutputScope, before map[string][]byte, allowed map[string]struct{}) error {
 	root, err := os.OpenRoot(repository)
 	if err != nil {
 		return err
@@ -102,6 +113,9 @@ func rejectNewUnmarkedFiles(repository string, scopes []directwrite.OutputScope,
 				return walkErr
 			}
 			if _, existed := before[name]; existed {
+				return nil
+			}
+			if _, permitted := allowed[name]; permitted {
 				return nil
 			}
 			info, err := entry.Info()

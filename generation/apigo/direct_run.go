@@ -101,6 +101,9 @@ func RunDirectAPIGo(ctx context.Context, request APIGoRequest, options DirectOpt
 		cause := errors.New("API Go tool result does not acknowledge the exact request")
 		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, cause)
 	}
+	if err := validateDirectAPIGoOutput(root, request); err != nil {
+		return APIGoResult{}, toolchain.DirectPostInvocationError(options.Tool.ID, toolchain.DirectPostInvocationAcknowledgementInvalid, err)
+	}
 	return result, nil
 }
 

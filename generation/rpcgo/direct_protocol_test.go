@@ -88,6 +88,44 @@ func TestRunDirectRPCGoPreservesEveryNonGoManualFile(t *testing.T) {
 	}
 }
 
+func TestRunDirectRPCGoAllowsGeneratedProtoOutput(t *testing.T) {
+	request := validDirectRPCRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	generated := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "account.proto")
+	if err := os.MkdirAll(filepath.Dir(generated), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+		if err := os.WriteFile(generated, []byte("syntax = \"proto3\"; package account.v1; message Account {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return toolchain.Result{ToolID: "rpc", Version: "v2", ExecutableVersion: "rpc-v2", Stdout: canonicalRPCDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
+	})
+	tool := toolchain.Tool{ID: "rpc", Version: "v2", WriteScopes: rpcTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "rpc-v2"}}
+	if _, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes}); err != nil {
+		t.Fatalf("generated proto output = %v", err)
+	}
+}
+
+func TestRunDirectRPCGoRejectsInvalidGeneratedProto(t *testing.T) {
+	request := validDirectRPCRequest(t)
+	repository, _ := filepath.EvalSymlinks(t.TempDir())
+	generated := filepath.Join(repository, filepath.FromSlash(request.OutputScopes[0].Path), "account.proto")
+	if err := os.MkdirAll(filepath.Dir(generated), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := toolchain.DirectRunnerFunc(func(_ context.Context, call toolchain.DirectRequest) (toolchain.Result, error) {
+		if err := os.WriteFile(generated, []byte("syntax = \"proto3\"; package account.v1; message {\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return toolchain.Result{ToolID: "rpc", Version: "v2", ExecutableVersion: "rpc-v2", Stdout: canonicalRPCDirectResult(t, provenance.SHA256(call.Stdin), request.OutputScopes)}, nil
+	})
+	tool := toolchain.Tool{ID: "rpc", Version: "v2", WriteScopes: rpcTestScopePaths(request.OutputScopes), Probe: toolchain.ExecutableProbe{ExpectedVersion: "rpc-v2"}}
+	if _, err := rpcgo.RunDirectRPCGo(context.Background(), request, rpcgo.DirectOptions{RepositoryRoot: repository, Tool: tool, Runner: runner, OutputScopes: request.OutputScopes}); err == nil {
+		t.Fatal("accepted invalid generated proto")
+	}
+}
+
 func TestRPCGoV2SchemasRejectEveryRepositoryPathEscapeAndOpenNestedIR(t *testing.T) {
 	request := validDirectRPCRequest(t)
 	canonical, err := rpcgo.CanonicalRPCGoRequest(request)

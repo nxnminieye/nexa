@@ -121,6 +121,9 @@ func rejectNewUnmarkedFiles(repository string, scopes []directwrite.OutputScope,
 			if readErr != nil {
 				return readErr
 			}
+			if path.Ext(name) == ".proto" {
+				return nil
+			}
 			if !hasGeneratedMarker(name, content) {
 				return errors.New("tool created unmarked manual output")
 			}

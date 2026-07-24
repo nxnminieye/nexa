@@ -113,7 +113,11 @@ func WriteDirect(ctx context.Context, spec DirectSpec, options DirectOptions) (A
 	if _, err := CanonicalAPIGoRequest(request); err != nil {
 		return APIGoResult{}, apiDirectFailure("validate-input", "request_invalid", options, err, false)
 	}
-	manual, err := snapshotManualScopeFiles(root, commandScopes)
+	excludedStatic := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		excludedStatic[input.Path] = struct{}{}
+	}
+	manual, err := snapshotManualScopeFilesExcept(root, commandScopes, excludedStatic)
 	if err != nil {
 		return APIGoResult{}, apiDirectFailure("validate-input", "repository_invalid", options, err, false)
 	}
@@ -143,6 +147,13 @@ func WriteDirect(ctx context.Context, spec DirectSpec, options DirectOptions) (A
 	result, err := RunDirectAPIGo(ctx, request, DirectOptions{RepositoryRoot: root, Tool: tool, Runner: options.Runner, Environment: options.Environment, OutputScopes: commandScopes})
 	if err != nil {
 		return APIGoResult{}, apiDirectFailureWithReport("invoke-tool", "tool_failed", options, err, true, report, hostEvidence)
+	}
+	allowedStatic := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		allowedStatic[input.Path] = struct{}{}
+	}
+	if err := rejectNewUnmarkedFilesExcept(root, commandScopes, manual, allowedStatic); err != nil {
+		return APIGoResult{}, apiDirectFailureWithReport("post-validate", "artifact_invalid", options, err, true, report, hostEvidence)
 	}
 	if err := verifyManualScopeFiles(root, manual); err != nil {
 		return APIGoResult{}, apiDirectFailureWithReport("post-validate", "artifact_invalid", options, err, true, report, hostEvidence)
