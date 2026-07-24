@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -72,6 +73,9 @@ func normalizeMutations(input MutationSet) (normalizedMutationSet, error) {
 }
 
 func cleanRelativePath(value string) (string, error) {
+	if !utf8.ValidString(value) || strings.IndexByte(value, 0) >= 0 {
+		return "", fmt.Errorf("path contains invalid text")
+	}
 	if value == "" || value == "." || strings.Contains(value, "\\") || strings.HasPrefix(value, "/") || filepath.IsAbs(value) {
 		return "", fmt.Errorf("path must be a clean slash-separated repository-relative path")
 	}
@@ -80,7 +84,7 @@ func cleanRelativePath(value string) (string, error) {
 	}
 	parts := strings.Split(value, "/")
 	for _, part := range parts {
-		if part == "" || part == "." || part == ".." || strings.ContainsRune(part, 0) {
+		if part == "" || part == "." || part == ".." {
 			return "", fmt.Errorf("path contains an invalid component")
 		}
 		if foldedComponent(part) == ".git" {

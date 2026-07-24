@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/gowebpki/jcs"
 )
@@ -198,6 +199,9 @@ func validFailureStage(stage FailureStage) bool {
 }
 
 func strictJSON(data []byte, target any) error {
+	if !utf8.Valid(data) {
+		return errors.New("JSON document is not valid UTF-8")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

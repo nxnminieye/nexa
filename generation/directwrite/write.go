@@ -56,30 +56,32 @@ func write(ctx context.Context, repositoryRoot string, mutations MutationSet, fi
 		return WriteReport{}, err
 	}
 	report := WriteReport{CompletedWrites: []string{}, CompletedDeletes: []string{}}
+	evidence := ChangeEvidenceComplete
 	for _, scope := range set.scopes {
 		if scope.Mode != OutputModeReplaceTree {
 			continue
 		}
-		if err := canceled(ctx, report); err != nil {
+		if err := canceled(ctx, report, evidence); err != nil {
 			return report, err
 		}
 		if err := verifyScopeAncestors(root, scope.Path, files); err != nil {
-			return report, partialFailure(scope.Path, "replace-tree path changed after preflight", report, err)
+			return report, partialFailure(scope.Path, "replace-tree path changed after preflight", report, err, evidence)
 		}
 		absolute := rootedPath(root, scope.Path)
 		if err := files.RemoveAll(absolute); err != nil {
 			return report, uncertainPartialFailure(scope.Path, "replace-tree could not be cleared", report, err)
 		}
+		evidence = ChangeEvidenceHostOnly
 		if err := makeDirectories(root, scope.Path, files); err != nil {
 			return report, uncertainPartialFailure(scope.Path, "replace-tree root could not be created", report, err)
 		}
 	}
 	for _, target := range set.deletes {
-		if err := canceled(ctx, report); err != nil {
+		if err := canceled(ctx, report, evidence); err != nil {
 			return report, err
 		}
 		if err := verifyActionPath(root, target, true, files); err != nil {
-			return report, partialFailure(target, "delete path changed after preflight", report, err)
+			return report, partialFailure(target, "delete path changed after preflight", report, err, evidence)
 		}
 		absolute := rootedPath(root, target)
 		if _, err := files.Lstat(absolute); err == nil {
@@ -87,12 +89,12 @@ func write(ctx context.Context, repositoryRoot string, mutations MutationSet, fi
 				return report, uncertainPartialFailure(target, "file could not be deleted", report, err)
 			}
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			return report, partialFailure(target, "delete path could not be inspected", report, err)
+			return report, partialFailure(target, "delete path could not be inspected", report, err, evidence)
 		}
 		report.CompletedDeletes = addCanonicalPath(report.CompletedDeletes, target)
 	}
 	for _, output := range set.writes {
-		if err := canceled(ctx, report); err != nil {
+		if err := canceled(ctx, report, evidence); err != nil {
 			return report, err
 		}
 		parent := filepath.ToSlash(filepath.Dir(filepath.FromSlash(output.Path)))
@@ -102,13 +104,13 @@ func write(ctx context.Context, repositoryRoot string, mutations MutationSet, fi
 			}
 		}
 		if err := verifyActionPath(root, output.Path, true, files); err != nil {
-			return report, partialFailure(output.Path, "write path changed after preflight", report, err)
+			return report, partialFailure(output.Path, "write path changed after preflight", report, err, evidence)
 		}
 		absolute := rootedPath(root, output.Path)
 		unlinked := false
 		if info, err := files.Lstat(absolute); err == nil {
 			if !info.Mode().IsRegular() {
-				return report, partialFailure(output.Path, "write target is not a regular file", report, fs.ErrInvalid)
+				return report, partialFailure(output.Path, "write target is not a regular file", report, fs.ErrInvalid, evidence)
 			}
 			if err := files.Remove(absolute); err != nil {
 				return report, uncertainPartialFailure(output.Path, "existing generated file could not be unlinked", report, err)
@@ -116,7 +118,7 @@ func write(ctx context.Context, repositoryRoot string, mutations MutationSet, fi
 			unlinked = true
 			report.CompletedDeletes = addCanonicalPath(report.CompletedDeletes, output.Path)
 		} else if !errors.Is(err, fs.ErrNotExist) {
-			return report, partialFailure(output.Path, "write target could not be inspected", report, err)
+			return report, partialFailure(output.Path, "write target could not be inspected", report, err, evidence)
 		}
 		if err := files.WriteExclusive(absolute, output.Content, 0o644); err != nil {
 			return report, uncertainPartialFailure(output.Path, "generated file could not be created", report, err)
@@ -259,15 +261,15 @@ func rootedPath(root, relative string) string {
 	return filepath.Join(root, filepath.FromSlash(relative))
 }
 
-func canceled(ctx context.Context, report WriteReport) error {
+func canceled(ctx context.Context, report WriteReport, evidence ChangeEvidence) error {
 	if err := ctx.Err(); err != nil {
-		return directError(ErrorCanceled, "", "direct write was canceled", report, err)
+		return directErrorWithEvidence(ErrorCanceled, "", "direct write was canceled", report, err, evidence)
 	}
 	return nil
 }
 
-func partialFailure(path, message string, report WriteReport, cause error) error {
-	return directError(ErrorPartialWrite, path, message, report, cause)
+func partialFailure(path, message string, report WriteReport, cause error, evidence ChangeEvidence) error {
+	return directErrorWithEvidence(ErrorPartialWrite, path, message, report, cause, evidence)
 }
 
 func uncertainPartialFailure(path, message string, report WriteReport, cause error) error {

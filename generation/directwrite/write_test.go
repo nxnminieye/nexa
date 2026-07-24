@@ -229,13 +229,74 @@ func TestReplaceTreeMutationFailureUsesUncertainEvidence(t *testing.T) {
 	assertAbsent(t, root, "tree")
 }
 
+func TestReplaceTreeSuccessfulClearMakesLaterCancellationHostOnly(t *testing.T) {
+	root := canonicalTempDir(t)
+	mustWrite(t, root, "tree/stale.go", "stale")
+	ctx, cancel := context.WithCancel(context.Background())
+	files := &cancelAfterClearFileSystem{osFileSystem: osFileSystem{}, cancel: cancel}
+	report, err := write(ctx, root, MutationSet{
+		Scopes: []OutputScope{{Path: "tree", Mode: OutputModeReplaceTree}},
+		Writes: []OutputFile{{Path: "tree/new.go", Content: []byte("new")}},
+	}, files)
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind() != ErrorCanceled || typed.Path() != "" || typed.ChangeEvidence() != ChangeEvidenceHostOnly || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %#v", err)
+	}
+	if len(report.CompletedWrites) != 0 || len(report.CompletedDeletes) != 0 || !reflect.DeepEqual(typed.Report(), report) {
+		t.Fatalf("report = %#v, typed = %#v", report, typed.Report())
+	}
+	report.CompletedWrites = append(report.CompletedWrites, "caller/mutation.go")
+	if len(typed.Report().CompletedWrites) != 0 {
+		t.Fatalf("error report aliases returned report: %#v", typed.Report())
+	}
+	assertAbsent(t, root, "tree/stale.go")
+	assertAbsent(t, root, "tree/new.go")
+}
+
+func TestReplaceTreeSuccessfulClearMakesLaterDeterministicFailureHostOnly(t *testing.T) {
+	root := canonicalTempDir(t)
+	mustWrite(t, root, "tree/stale.go", "stale")
+	files := &denyReadAfterClearFileSystem{osFileSystem: osFileSystem{}, denied: filepath.Join(root, "tree")}
+	report, err := write(context.Background(), root, MutationSet{
+		Scopes: []OutputScope{{Path: "tree", Mode: OutputModeReplaceTree}},
+		Writes: []OutputFile{{Path: "tree/new.go", Content: []byte("new")}},
+	}, files)
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind() != ErrorPartialWrite || typed.Path() != "tree/new.go" || typed.ChangeEvidence() != ChangeEvidenceHostOnly {
+		t.Fatalf("error = %#v", err)
+	}
+	if len(report.CompletedWrites) != 0 || len(report.CompletedDeletes) != 0 || !reflect.DeepEqual(typed.Report(), report) {
+		t.Fatalf("report = %#v, typed = %#v", report, typed.Report())
+	}
+	assertAbsent(t, root, "tree/stale.go")
+	assertAbsent(t, root, "tree/new.go")
+}
+
+func TestReplaceTreeSuccessfulClearMakesImmediateMkdirFailureHostOnly(t *testing.T) {
+	root := canonicalTempDir(t)
+	mustWrite(t, root, "tree/stale.go", "stale")
+	files := &failMkdirAfterClearFileSystem{osFileSystem: osFileSystem{}}
+	report, err := write(context.Background(), root, MutationSet{
+		Scopes: []OutputScope{{Path: "tree", Mode: OutputModeReplaceTree}},
+		Writes: []OutputFile{{Path: "tree/new.go", Content: []byte("new")}},
+	}, files)
+	var typed *Error
+	if !errors.As(err, &typed) || typed.Kind() != ErrorPartialWrite || typed.Path() != "tree" || typed.ChangeEvidence() != ChangeEvidenceHostOnly {
+		t.Fatalf("error = %#v", err)
+	}
+	if len(report.CompletedWrites) != 0 || len(report.CompletedDeletes) != 0 || !reflect.DeepEqual(typed.Report(), report) {
+		t.Fatalf("report = %#v, typed = %#v", report, typed.Report())
+	}
+	assertAbsent(t, root, "tree")
+}
+
 func TestWriteCancellationIsTyped(t *testing.T) {
 	root := canonicalTempDir(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	report, err := Write(ctx, root, MutationSet{Scopes: []OutputScope{{Path: "gen", Mode: OutputModeFileSet}}, Writes: []OutputFile{{Path: "gen/a.go"}}})
 	var typed *Error
-	if !errors.As(err, &typed) || typed.Kind() != ErrorCanceled || !errors.Is(err, context.Canceled) || len(report.CompletedWrites) != 0 {
+	if !errors.As(err, &typed) || typed.Kind() != ErrorCanceled || typed.ChangeEvidence() != ChangeEvidenceComplete || !errors.Is(err, context.Canceled) || len(report.CompletedWrites) != 0 || !reflect.DeepEqual(typed.Report(), report) {
 		t.Fatalf("error/report = %#v / %#v", err, report)
 	}
 	assertAbsent(t, root, "gen/a.go")
@@ -312,6 +373,60 @@ type cancelWriteFileSystem struct {
 
 type removeThenFailFileSystem struct{ osFileSystem }
 
+type cancelAfterClearFileSystem struct {
+	osFileSystem
+	cancel context.CancelFunc
+}
+
+func (f *cancelAfterClearFileSystem) RemoveAll(name string) error {
+	if err := f.osFileSystem.RemoveAll(name); err != nil {
+		return err
+	}
+	f.cancel()
+	return nil
+}
+
+type denyReadAfterClearFileSystem struct {
+	osFileSystem
+	cleared bool
+	denied  string
+}
+
+type failMkdirAfterClearFileSystem struct {
+	osFileSystem
+	cleared bool
+}
+
+func (f *failMkdirAfterClearFileSystem) RemoveAll(name string) error {
+	if err := f.osFileSystem.RemoveAll(name); err != nil {
+		return err
+	}
+	f.cleared = true
+	return nil
+}
+
+func (f *failMkdirAfterClearFileSystem) Mkdir(name string, mode fs.FileMode) error {
+	if f.cleared {
+		return errors.New("injected mkdir failure after clear")
+	}
+	return f.osFileSystem.Mkdir(name, mode)
+}
+
+func (f *denyReadAfterClearFileSystem) RemoveAll(name string) error {
+	if err := f.osFileSystem.RemoveAll(name); err != nil {
+		return err
+	}
+	f.cleared = true
+	return nil
+}
+
+func (f *denyReadAfterClearFileSystem) ReadDir(name string) ([]fs.DirEntry, error) {
+	if f.cleared && name == f.denied {
+		return nil, fs.ErrPermission
+	}
+	return f.osFileSystem.ReadDir(name)
+}
+
 func (f *removeThenFailFileSystem) RemoveAll(name string) error {
 	if err := f.osFileSystem.RemoveAll(name); err != nil {
 		return err
@@ -365,7 +480,7 @@ func assertAbsent(t *testing.T, root, relative string) {
 }
 
 func TestCleanRelativePathRejectsPlatformAndNonCanonicalForms(t *testing.T) {
-	for _, value := range []string{"", ".", "a//b", "a/./b", "a/../b", `a\\b`, "a/.GIT/b", "a/nu\x00ll"} {
+	for _, value := range []string{"", ".", "a//b", "a/./b", "a/../b", `a\\b`, "a/.GIT/b", "a/nu\x00ll", string([]byte{'a', '/', 0xff})} {
 		if _, err := cleanRelativePath(value); err == nil {
 			t.Fatalf("cleanRelativePath(%q) succeeded", value)
 		}

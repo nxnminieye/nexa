@@ -163,3 +163,81 @@ func TestGenerationResultSchemaDirectlyRejectsNonCleanAndGitPaths(t *testing.T) 
 		}
 	}
 }
+
+func TestWireOwnersRejectNULAndInvalidUTF8Paths(t *testing.T) {
+	invalidUTF8 := string([]byte{'g', 'e', 'n', '/', 0xff, '.', 'g', 'o'})
+	for _, candidate := range []string{"gen/nu\x00ll.go", invalidUTF8} {
+		result := GenerationResult{
+			APIVersion: GenerationResultAPIVersion, Kind: GenerationResultKind,
+			Status:       GenerationResultStatusGenerated,
+			OutputScopes: []OutputScope{{Path: candidate, Mode: OutputModeFileSet}},
+		}
+		if _, err := CanonicalGenerationResult(result); err == nil {
+			t.Fatalf("canonical result accepted path %q", candidate)
+		}
+		details := GenerationErrorDetails{
+			APIVersion: GenerationErrorDetailsAPIVersion, Kind: GenerationErrorDetailsKind,
+			Stage: FailureStageWrite, ScopeState: ScopeStateResolved,
+			OutputScopes:    []OutputScope{{Path: "gen", Mode: OutputModeFileSet}},
+			CompletedWrites: []string{candidate}, CompletedDeletes: []string{},
+			ChangeEvidence: ChangeEvidenceComplete,
+		}
+		if _, err := CanonicalGenerationErrorDetails(details); err == nil {
+			t.Fatalf("canonical error details accepted path %q", candidate)
+		}
+	}
+
+	nulResult := []byte(`{"apiVersion":"nexa.dev/generation-result/v2","kind":"GenerationResult","outputScopes":[{"mode":"file-set","path":"gen/nu\u0000ll.go"}],"status":"generated"}`)
+	if _, err := ParseGenerationResult(nulResult); err == nil {
+		t.Fatal("result parser accepted NUL path")
+	}
+	nulDetails := []byte(`{"apiVersion":"nexa.dev/generation-error-details/v2","changeEvidence":"complete","completedDeletes":[],"completedWrites":["gen/nu\u0000ll.go"],"kind":"GenerationErrorDetails","outputScopes":[{"mode":"file-set","path":"gen"}],"scopeState":"resolved","stage":"write"}`)
+	if _, err := ParseGenerationErrorDetails(nulDetails); err == nil {
+		t.Fatal("error-details parser accepted NUL path")
+	}
+
+	rawResult := []byte(`{"apiVersion":"nexa.dev/generation-result/v2","kind":"GenerationResult","outputScopes":[{"mode":"file-set","path":"gen/`)
+	rawResult = append(rawResult, 0xff)
+	rawResult = append(rawResult, []byte(`.go"}],"status":"generated"}`)...)
+	if _, err := ParseGenerationResult(rawResult); err == nil {
+		t.Fatal("result parser accepted raw invalid UTF-8")
+	}
+	rawDetails := []byte(`{"apiVersion":"nexa.dev/generation-error-details/v2","changeEvidence":"complete","completedDeletes":[],"completedWrites":["gen/`)
+	rawDetails = append(rawDetails, 0xff)
+	rawDetails = append(rawDetails, []byte(`.go"],"kind":"GenerationErrorDetails","outputScopes":[{"mode":"file-set","path":"gen"}],"scopeState":"resolved","stage":"write"}`)...)
+	if _, err := ParseGenerationErrorDetails(rawDetails); err == nil {
+		t.Fatal("error-details parser accepted raw invalid UTF-8")
+	}
+}
+
+func TestEmbeddedSchemasDirectlyRejectNULInEveryPathSurface(t *testing.T) {
+	if err := compileSchemas(); err != nil {
+		t.Fatal(err)
+	}
+	resultDocument := map[string]any{
+		"apiVersion": GenerationResultAPIVersion, "kind": GenerationResultKind,
+		"status":       GenerationResultStatusGenerated,
+		"outputScopes": []any{map[string]any{"path": "gen/nu\x00ll", "mode": string(OutputModeFileSet)}},
+	}
+	if err := resultSchema.Validate(resultDocument); err == nil {
+		t.Fatal("result schema accepted NUL output scope")
+	}
+	for _, field := range []string{"outputScopes", "completedWrites", "completedDeletes"} {
+		document := map[string]any{
+			"apiVersion": GenerationErrorDetailsAPIVersion, "kind": GenerationErrorDetailsKind,
+			"stage": string(FailureStageWrite), "scopeState": string(ScopeStateResolved),
+			"outputScopes":    []any{map[string]any{"path": "gen", "mode": string(OutputModeFileSet)}},
+			"completedWrites": []any{}, "completedDeletes": []any{},
+			"changeEvidence": string(ChangeEvidenceComplete),
+		}
+		switch field {
+		case "outputScopes":
+			document[field] = []any{map[string]any{"path": "gen/nu\x00ll", "mode": string(OutputModeFileSet)}}
+		case "completedWrites", "completedDeletes":
+			document[field] = []any{"gen/nu\x00ll"}
+		}
+		if err := errorDetailsSchema.Validate(document); err == nil {
+			t.Fatalf("error schema accepted NUL in %s", field)
+		}
+	}
+}
