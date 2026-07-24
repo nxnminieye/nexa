@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/generation-error-details-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "stage", "scopeState", "outputScopes", "completedWrites", "completedDeletes", "changeEvidence"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/generation-error-details/v2"},
+    "kind": {"const": "GenerationErrorDetails"},
+    "stage": {"enum": ["load", "validate-input", "resolve-output", "invoke-tool", "write", "post-validate"]},
+    "scopeState": {"enum": ["unresolved", "resolved"]},
+    "outputScopes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/outputScope"}
+    },
+    "completedWrites": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$"}},
+    "completedDeletes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$"}},
+    "changeEvidence": {"enum": ["complete", "host-only"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"scopeState": {"const": "unresolved"}}},
+      "then": {
+        "properties": {
+          "outputScopes": {"maxItems": 0},
+          "completedWrites": {"maxItems": 0},
+          "completedDeletes": {"maxItems": 0}
+        }
+      },
+      "else": {"properties": {"outputScopes": {"minItems": 1}}}
+    }
+  ],
+  "$defs": {
+    "outputScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mode"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$"},
+        "mode": {"enum": ["replace-tree", "file-set"]}
+      }
+    }
+  }
+}
