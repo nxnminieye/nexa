@@ -279,6 +279,12 @@
       ],
       "requiresProfiles": [],
       "requiresBundles": [],
+      "requiresGoModules": [
+        {
+          "modulePath": "golang.org/x/crypto",
+          "version": "v0.48.0"
+        }
+      ],
       "validations": [
         {
           "id": "core-backend-test",

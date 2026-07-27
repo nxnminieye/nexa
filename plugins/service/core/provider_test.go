@@ -31,6 +31,29 @@ func TestProviderPublishesImmutableCoreBundle(t *testing.T) {
 	if got := profileIDs(profiles); !reflect.DeepEqual(got, []string{"backend", "frontend", "full", "identity-oidc"}) {
 		t.Fatalf("profiles = %#v", got)
 	}
+	backend, err := provider.Manifest().ResolveProfile("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendModules := backend.GoModuleRequirements()
+	if len(backendModules) != 1 || backendModules[0].ModulePath() != "golang.org/x/crypto" || backendModules[0].Version() != "v0.48.0" {
+		t.Fatalf("backend Go module requirements = %#v", backendModules)
+	}
+	full, err := provider.Manifest().ResolveProfile("full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullModules := full.GoModuleRequirements()
+	if len(fullModules) != 1 || fullModules[0].ModulePath() != "golang.org/x/crypto" || fullModules[0].Version() != "v0.48.0" {
+		t.Fatalf("full Go module requirements = %#v", fullModules)
+	}
+	frontend, err := provider.Manifest().ResolveProfile("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frontend.GoModuleRequirements()) != 0 {
+		t.Fatalf("frontend Go module requirements = %#v", frontend.GoModuleRequirements())
+	}
 
 	snapshot, err := sourceplugin.SnapshotProvider(provider)
 	if err != nil || snapshot.Manifest().Digest() != provider.Manifest().Digest() || snapshot.Tree().Digest() != provider.Tree().Digest() {

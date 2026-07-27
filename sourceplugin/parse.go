@@ -35,11 +35,17 @@ type fileDocument struct {
 }
 
 type profileDocument struct {
-	ID               *string                      `json:"id,omitempty"`
-	Files            *[]string                    `json:"files,omitempty"`
-	RequiresProfiles *[]string                    `json:"requiresProfiles,omitempty"`
-	RequiresBundles  *[]bundleRequirementDocument `json:"requiresBundles,omitempty"`
-	Validations      *[]validationDocument        `json:"validations,omitempty"`
+	ID                *string                        `json:"id,omitempty"`
+	Files             *[]string                      `json:"files,omitempty"`
+	RequiresProfiles  *[]string                      `json:"requiresProfiles,omitempty"`
+	RequiresBundles   *[]bundleRequirementDocument   `json:"requiresBundles,omitempty"`
+	RequiresGoModules *[]goModuleRequirementDocument `json:"requiresGoModules,omitempty"`
+	Validations       *[]validationDocument          `json:"validations,omitempty"`
+}
+
+type goModuleRequirementDocument struct {
+	ModulePath *string `json:"modulePath,omitempty"`
+	Version    *string `json:"version,omitempty"`
 }
 
 type bundleRequirementDocument struct {
@@ -195,6 +201,7 @@ func semanticPointerMaps(document manifestDocument) (canonicalToAuthored, author
 		add(canonicalBase+"/files", authoredBase+"/files")
 		add(canonicalBase+"/requiresProfiles", authoredBase+"/requiresProfiles")
 		add(canonicalBase+"/requiresBundles", authoredBase+"/requiresBundles")
+		add(canonicalBase+"/requiresGoModules", authoredBase+"/requiresGoModules")
 		add(canonicalBase+"/validations", authoredBase+"/validations")
 		if profile.Files != nil {
 			indices := sortedIndices(len(*profile.Files), func(left, right int) bool { return (*profile.Files)[left] < (*profile.Files)[right] })
@@ -221,6 +228,18 @@ func semanticPointerMaps(document manifestDocument) (canonicalToAuthored, author
 				for _, field := range []string{"providerId", "modulePath", "packagePath", "version", "profileId", "manifestDigest", "treeDigest"} {
 					add(canonicalRequirement+"/"+field, authoredRequirement+"/"+field)
 				}
+			}
+		}
+		if profile.RequiresGoModules != nil {
+			indices := sortedIndices(len(*profile.RequiresGoModules), func(left, right int) bool {
+				return valueString((*profile.RequiresGoModules)[left].ModulePath) < valueString((*profile.RequiresGoModules)[right].ModulePath)
+			})
+			for canonicalIndex, authoredIndex := range indices {
+				canonicalRequirement := canonicalBase + "/requiresGoModules/" + strconv.Itoa(canonicalIndex)
+				authoredRequirement := authoredBase + "/requiresGoModules/" + strconv.Itoa(authoredIndex)
+				add(canonicalRequirement, authoredRequirement)
+				add(canonicalRequirement+"/modulePath", authoredRequirement+"/modulePath")
+				add(canonicalRequirement+"/version", authoredRequirement+"/version")
 			}
 		}
 		if profile.Validations != nil {
@@ -301,6 +320,14 @@ func manifestSpecFromDocument(document manifestDocument) (ManifestSpec, *Error) 
 				}
 			}
 		}
+		if profile.RequiresGoModules != nil {
+			converted.RequiresGoModules = make([]GoModuleRequirementSpec, len(*profile.RequiresGoModules))
+			for index, requirement := range *profile.RequiresGoModules {
+				converted.RequiresGoModules[index] = GoModuleRequirementSpec{
+					ModulePath: valueString(requirement.ModulePath), Version: valueString(requirement.Version),
+				}
+			}
+		}
 		if profile.Validations != nil {
 			converted.Validations = make([]ValidationRecipeSpec, len(*profile.Validations))
 			for index, validation := range *profile.Validations {
@@ -315,7 +342,7 @@ func manifestSpecFromDocument(document manifestDocument) (ManifestSpec, *Error) 
 }
 
 func collectDiagnostics(source string, document strictdoc.Document, wire manifestDocument, spec ManifestSpec) diagnosticLocations {
-	result := diagnosticLocations{source: source, profileEdges: make(map[string]diagnosticLocation), requirements: make(map[string]diagnosticLocation)}
+	result := diagnosticLocations{source: source, profileEdges: make(map[string]diagnosticLocation), requirements: make(map[string]diagnosticLocation), goModuleRequirements: make(map[string]diagnosticLocation)}
 	for profileIndex, profile := range *wire.Profiles {
 		profileID := valueString(profile.ID)
 		if profile.RequiresProfiles != nil {
@@ -331,6 +358,14 @@ func collectDiagnostics(source string, document strictdoc.Document, wire manifes
 				pointer := "/profiles/" + strconv.Itoa(profileIndex) + "/requiresBundles/" + strconv.Itoa(requirementIndex)
 				if line, column, ok := document.Location(pointer); ok {
 					result.requirements[requirementDiagnosticKey(profileID, spec.Profiles[profileIndex].RequiresBundles[requirementIndex])] = diagnosticLocation{line: line, column: column}
+				}
+			}
+		}
+		if profile.RequiresGoModules != nil {
+			for requirementIndex := range *profile.RequiresGoModules {
+				pointer := "/profiles/" + strconv.Itoa(profileIndex) + "/requiresGoModules/" + strconv.Itoa(requirementIndex)
+				if line, column, ok := document.Location(pointer); ok {
+					result.goModuleRequirements[goModuleRequirementDiagnosticKey(profileID, spec.Profiles[profileIndex].RequiresGoModules[requirementIndex])] = diagnosticLocation{line: line, column: column}
 				}
 			}
 		}
@@ -545,6 +580,8 @@ func nextPointerState(state, component string) (string, bool) {
 			return "scalar-list", true
 		case "requiresBundles":
 			return "requirements", true
+		case "requiresGoModules":
+			return "go-module-requirements", true
 		case "validations":
 			return "validations", true
 		}
@@ -559,6 +596,15 @@ func nextPointerState(state, component string) (string, bool) {
 	case "requirement":
 		switch component {
 		case "providerId", "modulePath", "packagePath", "version", "profileId", "manifestDigest", "treeDigest":
+			return "scalar", true
+		}
+	case "go-module-requirements":
+		if canonicalIndex(component) {
+			return "go-module-requirement", true
+		}
+	case "go-module-requirement":
+		switch component {
+		case "modulePath", "version":
 			return "scalar", true
 		}
 	case "validations":

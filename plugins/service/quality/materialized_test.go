@@ -20,12 +20,13 @@ func TestMaterializedBackendExecutesInExternalModule(t *testing.T) {
 		t.Fatal(err)
 	}
 	moduleRoot := t.TempDir()
+	targetRoot := filepath.Join(moduleRoot, "framework", "quality")
 	for _, file := range closure.Files() {
 		treeFile, ok := provider.Tree().Lookup(file.Path())
 		if !ok {
 			t.Fatalf("tree file %q missing", file.Path())
 		}
-		name := filepath.Join(moduleRoot, filepath.FromSlash(file.Path()))
+		name := filepath.Join(targetRoot, filepath.FromSlash(file.Path()))
 		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +47,7 @@ func TestMaterializedBackendExecutesInExternalModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	module := fmt.Sprintf("module example.com/quality-runtime\n\ngo 1.25.0\n\nrequire github.com/nxnminieye/nexa v0.0.0\n\nreplace github.com/nxnminieye/nexa => %s\n", filepath.ToSlash(replacement))
+	module := fmt.Sprintf("module corp.example/independent/consumer\n\ngo 1.25.0\n\nrequire github.com/nxnminieye/nexa v0.0.0\n\nreplace github.com/nxnminieye/nexa => %s\n", filepath.ToSlash(replacement))
 	if err := os.WriteFile(filepath.Join(moduleRoot, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}

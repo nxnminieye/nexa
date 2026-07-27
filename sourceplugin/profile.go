@@ -6,11 +6,12 @@ import (
 )
 
 type ProfileClosure struct {
-	rootProfileID string
-	profileIDs    []string
-	files         []File
-	requirements  []BundleRequirement
-	validations   []ValidationRecipe
+	rootProfileID        string
+	profileIDs           []string
+	files                []File
+	requirements         []BundleRequirement
+	goModuleRequirements []GoModuleRequirement
+	validations          []ValidationRecipe
 }
 
 func (c ProfileClosure) RootProfileID() string { return c.rootProfileID }
@@ -18,6 +19,9 @@ func (c ProfileClosure) ProfileIDs() []string  { return append([]string(nil), c.
 func (c ProfileClosure) Files() []File         { return append([]File(nil), c.files...) }
 func (c ProfileClosure) BundleRequirements() []BundleRequirement {
 	return append([]BundleRequirement(nil), c.requirements...)
+}
+func (c ProfileClosure) GoModuleRequirements() []GoModuleRequirement {
+	return append([]GoModuleRequirement(nil), c.goModuleRequirements...)
 }
 func (c ProfileClosure) Validations() []ValidationRecipe {
 	result := make([]ValidationRecipe, len(c.validations))
@@ -39,6 +43,7 @@ func (m Manifest) ResolveProfile(id string) (ProfileClosure, error) {
 	fileSet := make(map[string]File)
 	requirementByFullKey := make(map[string]BundleRequirement)
 	requirementByIdentity := make(map[string]BundleRequirement)
+	goModuleRequirementByPath := make(map[string]GoModuleRequirement)
 	for _, profileID := range profileIDs {
 		profileIndex := m.profileIndex[profileID]
 		profile := m.profiles[profileIndex]
@@ -62,6 +67,20 @@ func (m Manifest) ResolveProfile(id string) (ProfileClosure, error) {
 			requirementByIdentity[identityKey] = requirement
 			requirementByFullKey[fullKey] = requirement
 		}
+		for requirementIndex, requirement := range profile.goModuleRequirements {
+			if previous, ok := goModuleRequirementByPath[requirement.modulePath]; ok && previous.version != requirement.version {
+				err := newSourceError(
+					"source_go_module_requirement_invalid", "requirement_conflict",
+					"/profiles/"+strconv.Itoa(profileIndex)+"/requiresGoModules/"+strconv.Itoa(requirementIndex),
+				)
+				key := goModuleRequirementDiagnosticKey(profileID, GoModuleRequirementSpec{ModulePath: requirement.modulePath, Version: requirement.version})
+				if location, ok := m.diagnostics.goModuleRequirements[key]; ok {
+					err = withLocation(err, m.diagnostics.source, location.line, location.column)
+				}
+				return ProfileClosure{}, err
+			}
+			goModuleRequirementByPath[requirement.modulePath] = requirement
+		}
 		for _, recipe := range profile.validations {
 			closure.validations = append(closure.validations, cloneValidation(recipe))
 		}
@@ -83,6 +102,15 @@ func (m Manifest) ResolveProfile(id string) (ProfileClosure, error) {
 	closure.requirements = make([]BundleRequirement, len(requirementKeys))
 	for index, key := range requirementKeys {
 		closure.requirements[index] = requirementByFullKey[key]
+	}
+	goModulePaths := make([]string, 0, len(goModuleRequirementByPath))
+	for modulePath := range goModuleRequirementByPath {
+		goModulePaths = append(goModulePaths, modulePath)
+	}
+	sort.Strings(goModulePaths)
+	closure.goModuleRequirements = make([]GoModuleRequirement, len(goModulePaths))
+	for index, modulePath := range goModulePaths {
+		closure.goModuleRequirements[index] = goModuleRequirementByPath[modulePath]
 	}
 	return closure, nil
 }

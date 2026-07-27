@@ -13,7 +13,7 @@
     {"path": "backend/quality/qualityapp/error.go", "size": 796, "digest": "sha256:8530fafb4abf75883d00425bb4305a4932a6d9ee8e0e4559f3d5a98664613817", "mode": "0644"},
     {"path": "backend/quality/qualityapp/health.go", "size": 605, "digest": "sha256:0cb8768ee80793af8b3bd7269c58e31a9380af2b2ab83ec1ef994ef755315796", "mode": "0644"},
     {"path": "backend/quality/qualityapp/server.go", "size": 1495, "digest": "sha256:a7a87bb9eeacb5803f08a9087a12afe52d565a6bdb7389b9fd4a1f25f278a88f", "mode": "0644"},
-    {"path": "backend/quality/qualityapp/server_test.go", "size": 3036, "digest": "sha256:3129af96f2bc048d27ac5fe822ad589bbb74f3c6a50aa7b3f9de547f81a11359", "mode": "0644"},
+    {"path": "backend/quality/qualityapp/server_test.go", "size": 2896, "digest": "sha256:d01176d674c12453b5d372eee7a158203949d30f40cc2fb0c91863ed827ad107", "mode": "0644"},
     {"path": "backend/quality/qualityapp/source.go", "size": 321, "digest": "sha256:1037d1e6921e673a036c8c9a320a4d50ed70445f018190905684614d79d490c9", "mode": "0644"},
     {"path": "frontend/frontend/quality/locales/en-US.json", "size": 782, "digest": "sha256:de2414259c45e13eca4e35a5d4e3da2050c95e9dcfbca28c3f13bf762c893526", "mode": "0644"},
     {"path": "frontend/frontend/quality/locales/zh-CN.json", "size": 766, "digest": "sha256:6dabc88125918147a86960baedf91f393d621b9c985a763e44104c075a6a201a", "mode": "0644"},

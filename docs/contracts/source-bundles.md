@@ -52,6 +52,26 @@ Plan 先检查 local collision、unsafe path、selection 和 target。完整候�
 manifest validation recipe，再在每个发布点检查 current file 未漂移并按文件写入。Source generation 在同一
 worktree 由调用方串行执行，不提供跨进程 transaction lock、WAL 或 Recover。
 
+Go validation 在 staging 中使用独立的 consumer module 视图。若 target 自带根 `go.mod`，它必须是单一、
+自包含的 module；否则 engine 只复制 consumer 根 `go.mod` 和可选 `go.sum` 到 staging repository root，
+不复制其他 consumer 源码，也不执行 `go.work use`。Provider profile 声明的 Go module requirement 必须在
+该 `go.mod` 中存在精确版本的 `require` directive；`indirect` 可以接受，但这只验证声明本身，不声称最终
+MVS selection 被固定。
+
+Staging 会删除 consumer `go.mod` 中的全部 `replace`。只有 `go.work` 中与当前 selected provider module
+匹配、带精确旧版本且指向无 symlink 的本地 module root 的单条 version-specific `replace`，才会在校验前
+投影为 absolute local replace；该旧版本必须对齐 consumer `go.mod` 的 module requirement，而不是
+SourceBundle release version。wildcard、竞争项、版本不一致、module path 不一致和 consumer `go.mod`
+直接替换 selected provider 都 fail closed。其他 `use` 和 `replace` 不进入 staging。Go 校验继续使用
+`GOWORK=off`、`GOPROXY=off`、caller 显式提供的 `GOMODCACHE`，以及隔离的 HOME、TMPDIR、GOPATH 和
+GOCACHE；未预热的外部依赖会以校验失败返回，不会访问网络。
+
+只有 target 不自带根 `go.mod`、采用 consumer root module context 时，engine 才在 preview staging 建立后、
+Go invocation 前记录 consumer 根 `go.mod`、`go.sum`、`go.work` 的 absent/present、类型和精确 bytes，并在
+任何 target 或 Source Lock 写入前复核。自包含 target 不读取 consumer root module metadata。校验期间只允许
+staging 副本被 Go 更新；metadata 漂移返回 conflict，真实 consumer metadata 在成功和失败路径都不由 engine
+修改，staging metadata 也永不发布。
+
 失败报告真实阶段和原因。若发布中途失败，已经写入的普通文件保持当前状态；下一次结合当前 files 和 lock
 重新 plan，不回放旧过程。
 

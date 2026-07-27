@@ -7,6 +7,8 @@ import (
 
 	"github.com/nxnminieye/nexa/provenance"
 	"github.com/nxnminieye/nexa/sourceplugin/internal/contract"
+	"golang.org/x/mod/module"
+	"golang.org/x/mod/semver"
 )
 
 const MaxStableIDBytes = contract.MaxStableIDBytes
@@ -17,9 +19,10 @@ type diagnosticLocation struct {
 }
 
 type diagnosticLocations struct {
-	source       string
-	profileEdges map[string]diagnosticLocation
-	requirements map[string]diagnosticLocation
+	source               string
+	profileEdges         map[string]diagnosticLocation
+	requirements         map[string]diagnosticLocation
+	goModuleRequirements map[string]diagnosticLocation
 }
 
 func (d diagnosticLocations) clone() diagnosticLocations {
@@ -34,6 +37,12 @@ func (d diagnosticLocations) clone() diagnosticLocations {
 		result.requirements = make(map[string]diagnosticLocation, len(d.requirements))
 		for key, location := range d.requirements {
 			result.requirements[key] = location
+		}
+	}
+	if d.goModuleRequirements != nil {
+		result.goModuleRequirements = make(map[string]diagnosticLocation, len(d.goModuleRequirements))
+		for key, location := range d.goModuleRequirements {
+			result.goModuleRequirements[key] = location
 		}
 	}
 	return result
@@ -80,17 +89,21 @@ func normalizeManifestSpec(spec ManifestSpec) ManifestSpec {
 	sort.SliceStable(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
 	for index, profile := range spec.Profiles {
 		result.Profiles[index] = ProfileSpec{
-			ID:               profile.ID,
-			Files:            cloneStringsPreservingPresence(profile.Files),
-			RequiresProfiles: append([]string(nil), profile.RequiresProfiles...),
-			RequiresBundles:  append([]BundleRequirementSpec(nil), profile.RequiresBundles...),
-			Validations:      make([]ValidationRecipeSpec, len(profile.Validations)),
+			ID:                profile.ID,
+			Files:             cloneStringsPreservingPresence(profile.Files),
+			RequiresProfiles:  append([]string(nil), profile.RequiresProfiles...),
+			RequiresBundles:   append([]BundleRequirementSpec(nil), profile.RequiresBundles...),
+			RequiresGoModules: append([]GoModuleRequirementSpec(nil), profile.RequiresGoModules...),
+			Validations:       make([]ValidationRecipeSpec, len(profile.Validations)),
 		}
 		if result.Profiles[index].RequiresProfiles == nil {
 			result.Profiles[index].RequiresProfiles = []string{}
 		}
 		if result.Profiles[index].RequiresBundles == nil {
 			result.Profiles[index].RequiresBundles = []BundleRequirementSpec{}
+		}
+		if result.Profiles[index].RequiresGoModules == nil {
+			result.Profiles[index].RequiresGoModules = []GoModuleRequirementSpec{}
 		}
 		for validationIndex, recipe := range profile.Validations {
 			result.Profiles[index].Validations[validationIndex] = ValidationRecipeSpec{
@@ -105,6 +118,9 @@ func normalizeManifestSpec(spec ManifestSpec) ManifestSpec {
 		sort.Strings(result.Profiles[index].RequiresProfiles)
 		sort.SliceStable(result.Profiles[index].RequiresBundles, func(i, j int) bool {
 			return requirementFullKey(result.Profiles[index].RequiresBundles[i]) < requirementFullKey(result.Profiles[index].RequiresBundles[j])
+		})
+		sort.SliceStable(result.Profiles[index].RequiresGoModules, func(i, j int) bool {
+			return result.Profiles[index].RequiresGoModules[i].ModulePath < result.Profiles[index].RequiresGoModules[j].ModulePath
 		})
 		for validationIndex := range result.Profiles[index].Validations {
 			sort.Strings(result.Profiles[index].Validations[validationIndex].Packages)
@@ -248,6 +264,18 @@ func validateProfiles(profiles []ProfileSpec, files []FileSpec) *Error {
 				return newSourceError("source_bundle_requirement_invalid", "requirement_duplicate", pointer)
 			}
 		}
+		for index, requirement := range profile.RequiresGoModules {
+			pointer := base + "/requiresGoModules/" + strconv.Itoa(index)
+			if module.Check(requirement.ModulePath, requirement.Version) != nil || !semver.IsValid(requirement.Version) || semver.Canonical(requirement.Version) != requirement.Version {
+				return newSourceError("source_go_module_requirement_invalid", "requirement_invalid", pointer)
+			}
+			if index > 0 && requirement.ModulePath == profile.RequiresGoModules[index-1].ModulePath {
+				if requirement.Version == profile.RequiresGoModules[index-1].Version {
+					return newSourceError("source_go_module_requirement_invalid", "requirement_duplicate", pointer)
+				}
+				return newSourceError("source_go_module_requirement_invalid", "requirement_conflict", pointer)
+			}
+		}
 		for index, validation := range profile.Validations {
 			pointer := base + "/validations/" + strconv.Itoa(index)
 			if !validStableID(validation.ID) {
@@ -363,6 +391,10 @@ func requirementDiagnosticKey(profileID string, requirement BundleRequirementSpe
 	return profileID + "\x00" + requirementFullKey(requirement)
 }
 
+func goModuleRequirementDiagnosticKey(profileID string, requirement GoModuleRequirementSpec) string {
+	return strings.Join([]string{profileID, requirement.ModulePath, requirement.Version}, "\x00")
+}
+
 func manifestFromSpec(spec ManifestSpec, diagnostics diagnosticLocations) Manifest {
 	manifest := Manifest{
 		identity: Identity{providerID: spec.Identity.ProviderID, modulePath: spec.Identity.ModulePath, packagePath: spec.Identity.PackagePath, version: spec.Identity.Version},
@@ -374,9 +406,12 @@ func manifestFromSpec(spec ManifestSpec, diagnostics diagnosticLocations) Manife
 		manifest.fileIndex[file.Path] = index
 	}
 	for index, profile := range spec.Profiles {
-		converted := Profile{id: profile.ID, filePaths: append([]string{}, profile.Files...), requiredProfiles: append([]string{}, profile.RequiresProfiles...), requirements: make([]BundleRequirement, len(profile.RequiresBundles)), validations: make([]ValidationRecipe, len(profile.Validations))}
+		converted := Profile{id: profile.ID, filePaths: append([]string{}, profile.Files...), requiredProfiles: append([]string{}, profile.RequiresProfiles...), requirements: make([]BundleRequirement, len(profile.RequiresBundles)), goModuleRequirements: make([]GoModuleRequirement, len(profile.RequiresGoModules)), validations: make([]ValidationRecipe, len(profile.Validations))}
 		for requirementIndex, requirement := range profile.RequiresBundles {
 			converted.requirements[requirementIndex] = BundleRequirement{providerID: requirement.ProviderID, modulePath: requirement.ModulePath, packagePath: requirement.PackagePath, version: requirement.Version, profileID: requirement.ProfileID, manifestDigest: requirement.ManifestDigest, treeDigest: requirement.TreeDigest}
+		}
+		for requirementIndex, requirement := range profile.RequiresGoModules {
+			converted.goModuleRequirements[requirementIndex] = GoModuleRequirement{modulePath: requirement.ModulePath, version: requirement.Version}
 		}
 		for validationIndex, recipe := range profile.Validations {
 			converted.validations[validationIndex] = ValidationRecipe{id: recipe.ID, kind: recipe.Kind, workingDirectory: recipe.WorkingDirectory, packages: append([]string(nil), recipe.Packages...)}
