@@ -105,7 +105,7 @@ func (r *commandRunner) generateRPC(ctx context.Context, invocation plugin.Invoc
 	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
 		return nil, inputError("fact_source_invalid", "provider", "rpc_facts_invalid", "/project/services/rpc/facts", "")
 	}
-	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleRPCGo, service.RPC.Tool, service.RPC.GeneratedScope, service.RPC.ExtensionScopes, []string{"generate", "--service", service.ServiceID}, stdin)
+	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleRPCGo, service.RPC.Tool, service.RPC.GeneratedScope, service.RPC.ExtensionScopes, stdin)
 }
 
 func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invocation) (any, error) {
@@ -120,10 +120,10 @@ func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invoc
 	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
 		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api/facts", "")
 	}
-	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, []string{"generate", "--service", service.ServiceID}, stdin)
+	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, stdin)
 }
 
-func (r *commandRunner) generate(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions, args []string, stdin []byte) (any, error) {
+func (r *commandRunner) generate(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, stdin []byte) (any, error) {
 	if err := r.requireProviderTool(providerID, role, tool); err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (r *commandRunner) generate(ctx context.Context, repository, providerID, se
 	}
 	result, err := toolchain.RunDirect(ctx, r.runner, toolchain.Request{
 		RepositoryRoot: repository, StagingRoot: repository, WorkDir: repository,
-		Tool: tool, Args: append([]string(nil), args...), Environment: environment, Stdin: append([]byte(nil), stdin...),
+		Tool: tool, Args: []string{"generate", "--service", serviceID, "--generated-scope", prepared}, Environment: environment, Stdin: append([]byte(nil), stdin...),
 	})
 	if err != nil {
 		return nil, projectOwnerError(err)

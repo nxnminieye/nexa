@@ -54,8 +54,9 @@ ownership。
 ## Delegated tool
 
 Delegated tool 是 consumer 明确选择的受信任本地进程。Framework 将 canonical typed facts 写入 stdin，并在
-consumer repository 中直接执行 version-pinned tool。Nexa 不提供 OS sandbox、repository staging、私有构建
-cache 或自动 rollback。
+consumer repository 中直接执行 version-pinned tool，同时通过
+`--generated-scope <validated-relative-scope>` 传入唯一输出根。Nexa 不提供 OS sandbox、repository staging、
+私有构建 cache 或自动 rollback。
 
 路径或输入 contract 失败必须在清空 generated scope 前返回非零。Tool probe 或执行开始后的失败同样返回
 非零，但已发生的删除和写入保留。使用方通过 `git diff` 审阅，通过 `git restore` 恢复，不由 generator 隐藏
