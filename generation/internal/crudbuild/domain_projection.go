@@ -61,7 +61,7 @@ func invalidDomain(field DomainField) (DomainProjection, *DomainValidationError)
 }
 
 var helperReasons = map[string]map[string]struct{}{
-	"crud_build_invalid":        setOf("document_state_invalid", "service_id_invalid", "proto_package_invalid", "go_package_invalid", "crud_operation_invalid", "identity_type_unsupported", "field_type_unsupported", "read_policy_conflict", "mutation_policy_conflict", "message_identity_duplicate", "method_identity_duplicate", "multi_tenant_disabled", "source_closure_invalid", "canonical_invalid"),
+	"crud_build_invalid":        setOf("document_state_invalid", "service_id_invalid", "proto_package_invalid", "go_package_invalid", "crud_operation_invalid", "identity_type_unsupported", "field_type_unsupported", "read_policy_conflict", "mutation_policy_conflict", "message_identity_duplicate", "method_identity_duplicate", "multi_tenant_disabled", "source_closure_invalid", "canonical_invalid", "schema_key_invalid", "schema_key_collision", "schema_key_too_long"),
 	"crud_wire_invalid":         setOf("field_identity_duplicate", "wire_name_invalid", "wire_name_duplicate", "wire_number_exhausted", "wire_number_duplicate", "wire_number_reserved", "wire_type_unsupported"),
 	"crud_compatibility_failed": setOf("compatibility_lock_missing", "lock_service_mismatch", "lock_schema_mismatch", "published_baseline_mismatch", "wire_incompatible", "retired_assignment_conflict", "reservation_conflict", "lock_digest_mismatch"),
 	"crud_render_invalid":       setOf("proto_symbol_invalid", "proto_symbol_duplicate", "proto_import_invalid", "proto_artifact_path_invalid", "proto_artifact_owner_invalid", "render_failed", "render_canonical_invalid"),
@@ -101,7 +101,7 @@ func validDomainPointer(code, reason, pointer string) bool {
 	case "crud_render_invalid":
 		return strings.HasPrefix(pointer, "/messages/") || strings.HasPrefix(pointer, "/services/") || strings.HasPrefix(pointer, "/imports/") || strings.HasPrefix(pointer, "/protoArtifact/") || strings.HasPrefix(pointer, "/lockProposal/") || pointer == "/document"
 	case "crud_proto_compile_failed":
-		return pointer == "/protoArtifact/bytes"
+		return pointer == "/protoArtifact/bytes" || pointer == "/fragments"
 	}
 	return false
 }

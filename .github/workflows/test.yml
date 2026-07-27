@@ -2,13 +2,53 @@ name: Test
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  verification:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fast-check
+            command: make check
+          - name: package-tests
+            command: make test
+          - name: integration-tests
+            command: make integration-tests
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: GOWORK=off go mod download
+
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}
+
+      - name: Verify module files are tidy
+        if: matrix.name == 'fast-check'
+        run: |
+          GOWORK=off go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  source-bundle-runtime:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -23,10 +63,5 @@ jobs:
       - name: Download dependencies
         run: GOWORK=off go mod download
 
-      - name: Run repository checks
-        run: make check
-
-      - name: Verify module files are tidy
-        run: |
-          GOWORK=off go mod tidy
-          git diff --exit-code -- go.mod go.sum
+      - name: Run source-bundle/runtime release gate
+        run: make source-bundle-runtime

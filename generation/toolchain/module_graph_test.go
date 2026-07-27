@@ -89,8 +89,19 @@ func TestCompileBuildInputManifestUsesExactReadonlyRunnerProtocol(t *testing.T) 
 		t.Fatalf("BuildTags() = %#v, %v", tags, err)
 	}
 	inputs, err := manifest.Inputs()
-	if err != nil || len(inputs) != 3 {
+	if err != nil || len(inputs) != 2 {
 		t.Fatalf("Inputs() count = %d, %v", len(inputs), err)
+	}
+	for _, input := range inputs {
+		module, moduleErr := input.Module()
+		role, roleErr := module.Role()
+		kind, kindErr := input.Kind()
+		if moduleErr != nil || roleErr != nil || kindErr != nil {
+			t.Fatalf("retained input readback failed: %v/%v/%v", moduleErr, roleErr, kindErr)
+		}
+		if role == toolchain.RetainedModuleScratchMain && (kind == toolchain.BuildInputModuleFile || kind == toolchain.BuildInputModuleSum) {
+			t.Fatalf("derived scratch module boundary entered manifest: %#v", input)
+		}
 	}
 }
 

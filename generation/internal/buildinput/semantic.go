@@ -612,6 +612,12 @@ func compileModuleBoundaryCandidates(repositoryRoot string, descriptors map[stri
 	seenSource := map[string]struct{}{}
 	for _, key := range keys {
 		descriptor := descriptors[key]
+		// The scratch module boundaries are derived execution controls. Their
+		// selected semantics are already bound by the module graph, while the
+		// executor verifies their exact bytes and identity for in-run drift.
+		if descriptor.retained.Role == "scratch-main" {
+			continue
+		}
 		boundaries := []struct {
 			name string
 			kind string

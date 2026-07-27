@@ -359,9 +359,13 @@ func TestValidationCanonicalNormalizesHostAndScratchEnvironment(t *testing.T) {
 
 func TestRealCRUDCandidateMatrix(t *testing.T) {
 	fixture := newRealCRUDConsumer(t)
+	temporary, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	command := exec.Command("go", "run", "-mod=mod", "./cmd/plan", "all")
 	command.Dir = fixture
-	command.Env = append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local", "TMPDIR=/private/tmp")
+	command.Env = append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local", "TMPDIR="+temporary)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("real BuildPlan/Validate/TransactionInputs matrix: %v\n%s", err, output)
 	}
@@ -513,7 +517,7 @@ func newRealCRUDConsumer(t *testing.T) string {
 	if output, err := check.CombinedOutput(); err != nil {
 		t.Fatalf("compile real Ent schema: %v\n%s", err, output)
 	}
-	command := exec.Command("go", "run", "-mod=mod", "entgo.io/ent/cmd/ent@v0.14.5", "generate", "--template", "file=ent/template/stringer.tmpl", "./ent/schema")
+	command := exec.Command("go", "run", "-mod=mod", "entgo.io/ent/cmd/ent", "generate", "--template", "file=ent/template/stringer.tmpl", "./ent/schema")
 	command.Dir = moduleRoot
 	command.Env = append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
 	if output, err := command.CombinedOutput(); err != nil {

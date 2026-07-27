@@ -19,6 +19,8 @@ const (
 	ScratchModulePath    = "github.com/nxnminieye/nexa/generation/enthelperexec"
 )
 
+const scratchExecutionModulePath = "github.com/nxnminieye/nexa/generation/internal/enthelperscratch"
+
 type HelperSource struct {
 	Path   string
 	Bytes  []byte
@@ -155,6 +157,7 @@ type ProcessTool struct {
 
 type ProcessSpec struct {
 	RepositoryRoot, StagingRoot, WorkDir string
+	Direct                               bool
 	Scratch                              *Scratch
 	Tool                                 ProcessTool
 	Args                                 []string

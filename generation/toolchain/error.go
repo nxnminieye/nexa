@@ -14,6 +14,7 @@ type Error struct {
 	code, reason, stage, pointer, source, toolID, message string
 	diagnostic                                            string
 	exitCode                                              int
+	started, mayHaveWritten                               bool
 	sentinel                                              error
 }
 
@@ -23,7 +24,9 @@ func projectEntExecError(err error) error {
 	}
 	var internal *entexec.Error
 	if errors.As(err, &internal) {
-		return newDiagnosticError(internal.Code(), internal.Stage(), internal.Reason(), internal.Pointer(), "", internal.ToolID(), internal.ExitCode(), internal.Diagnostic())
+		projected := newDiagnosticError(internal.Code(), internal.Stage(), internal.Reason(), internal.Pointer(), "", internal.ToolID(), internal.ExitCode(), internal.Diagnostic())
+		projected.started, projected.mayHaveWritten = internal.Started(), internal.MayHaveWritten()
+		return projected
 	}
 	return newError("scratch_projection_invalid", "project", "location_state_invalid", "/location", "", "", 0)
 }
@@ -113,6 +116,12 @@ func (e *Error) Diagnostic() string {
 	return e.diagnostic
 }
 
+// Started reports whether a delegated probe or main process was successfully started.
+func (e *Error) Started() bool { return e != nil && e.started }
+
+// MayHaveWritten reports whether a direct tool may have changed the consumer tree.
+func (e *Error) MayHaveWritten() bool { return e != nil && e.mayHaveWritten }
+
 var errorSentinels sync.Map
 
 func stableSentinel(code, reason string) error {
@@ -131,6 +140,62 @@ func newDiagnosticError(code, stage, reason, pointer, source, toolID string, exi
 		toolID: toolID, exitCode: exitCode, diagnostic: diagnostic, message: "build input operation failed",
 		sentinel: stableSentinel(code, reason),
 	}
+}
+
+// DirectPostInvocationFailure is the closed set of protocol failures that can
+// occur after a direct runner has returned success.
+type DirectPostInvocationFailure uint8
+
+const (
+	DirectPostInvocationProcessIdentityInvalid DirectPostInvocationFailure = iota + 1
+	DirectPostInvocationResultInvalid
+	DirectPostInvocationAcknowledgementInvalid
+)
+
+type directPostInvocationError struct {
+	projected *Error
+	cause     error
+}
+
+func (e *directPostInvocationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.projected.Error()
+}
+
+// Unwrap returns a fresh slice so callers cannot mutate the wrapper's relation.
+func (e *directPostInvocationError) Unwrap() []error {
+	if e == nil {
+		return nil
+	}
+	if e.cause == nil {
+		return []error{e.projected}
+	}
+	return []error{e.projected, e.cause}
+}
+
+func directPostInvocationLocation(failure DirectPostInvocationFailure) (reason, pointer string) {
+	switch failure {
+	case DirectPostInvocationProcessIdentityInvalid:
+		return "process_identity_invalid", "/process"
+	case DirectPostInvocationResultInvalid:
+		return "result_invalid", "/stdout"
+	case DirectPostInvocationAcknowledgementInvalid:
+		return "result_acknowledgement_invalid", "/result"
+	default:
+		return "post_invocation_failure_invalid", "/failure"
+	}
+}
+
+// DirectPostInvocationError projects a closed protocol failure after a direct
+// runner has returned success. The original cause remains available to errors.Is/As.
+func DirectPostInvocationError(toolID string, failure DirectPostInvocationFailure, cause error) error {
+	reason, pointer := directPostInvocationLocation(failure)
+	projected := newError("tool_output_invalid", "result", reason, pointer, "", toolID, 0)
+	projected.started = true
+	projected.mayHaveWritten = true
+	return &directPostInvocationError{projected: projected, cause: cause}
 }
 
 func projectBuildInputError(err error, toolID string, exitCode int) error {

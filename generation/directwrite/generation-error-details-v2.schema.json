@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/generation-error-details-v2.schema.json",
+  "$comment": "The Go owner enforces Unicode NFC case-fold uniqueness, cross-array path topology, scope containment, and canonical ordering that standard JSON Schema cannot express.",
+  "x-nexa-unicode-casefold-uniqueness": {
+    "normalization": "NFC",
+    "caseFold": "Unicode default case folding",
+    "enforcedBy": "generation/directwrite Go parser"
+  },
+  "x-nexa-path-topology": {
+    "rule": "completed paths must be unique, non-overlapping, and contained by exactly one output scope under component-wise Unicode case-fold comparison",
+    "enforcedBy": "generation/directwrite Go parser"
+  },
+  "x-nexa-canonical-order": {
+    "outputScopes": "path then mode",
+    "completedWrites": "bytewise path order",
+    "completedDeletes": "bytewise path order",
+    "enforcedBy": "generation/directwrite Go parser"
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "stage", "scopeState", "outputScopes", "completedWrites", "completedDeletes", "changeEvidence"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/generation-error-details/v2"},
+    "kind": {"const": "GenerationErrorDetails"},
+    "stage": {"enum": ["load", "validate-input", "resolve-output", "invoke-tool", "write", "post-validate"]},
+    "scopeState": {"enum": ["unresolved", "resolved"]},
+    "outputScopes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/outputScope"}
+    },
+    "completedWrites": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repositoryPath"}},
+    "completedDeletes": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/repositoryPath"}},
+    "changeEvidence": {"enum": ["complete", "host-only"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"scopeState": {"const": "unresolved"}}},
+      "then": {
+        "properties": {
+          "outputScopes": {"maxItems": 0},
+          "completedWrites": {"maxItems": 0},
+          "completedDeletes": {"maxItems": 0}
+        }
+      },
+      "else": {"properties": {"outputScopes": {"minItems": 1}}}
+    }
+  ],
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$",
+      "not": {
+        "anyOf": [
+          {"pattern": "\u0000"},
+          {"pattern": "(^|/)(\\.|\\.\\.|\\.[gG][iI][tT])(/|$)"}
+        ]
+      }
+    },
+    "outputScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mode"],
+      "properties": {
+        "path": {"$ref": "#/$defs/repositoryPath"},
+        "mode": {"enum": ["replace-tree", "file-set"]}
+      }
+    }
+  }
+}

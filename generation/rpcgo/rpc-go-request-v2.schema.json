@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/rpcgo/rpc-go-request-v2.schema.json",
+  "$comment": "The Go owner enforces outer/nested service identity, Unicode NFC case-fold uniqueness, cross-scope topology, canonical ordering, and complete Go module-path syntax.",
+  "x-nexa-unicode-casefold-uniqueness": {"normalization": "NFC", "caseFold": "Unicode default case folding", "enforcedBy": "generation/rpcgo Go parser"},
+  "x-nexa-path-topology": {"rule": "output scopes must not duplicate or overlap under component-wise Unicode case-fold comparison", "enforcedBy": "generation/rpcgo Go parser"},
+  "x-nexa-canonical-order": {"outputScopes": "path then mode", "enforcedBy": "generation/rpcgo Go parser"},
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "serviceId", "modulePath", "protocolIR", "outputScopes"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/rpc-go-request/v2"},
+    "kind": {"const": "RPCGoRequest"},
+    "serviceId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+    "modulePath": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "protocolIR": {"$ref": "https://nexa.dev/schemas/generation/protocol/protocol-ir-v2.schema.json"},
+    "outputScopes": {"$ref": "#/$defs/scopes"}
+  },
+  "$defs": {
+    "repositoryPath": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+(?:/[^/\\\\]+)*$", "not": {"anyOf": [{"pattern": "\u0000"}, {"pattern": "(^|/)(\\.|\\.\\.|\\.[gG][iI][tT])(/|$)"}]}},
+    "scope": {"type": "object", "additionalProperties": false, "required": ["path", "mode"], "properties": {"path": {"$ref": "#/$defs/repositoryPath"}, "mode": {"enum": ["replace-tree", "file-set"]}}},
+    "scopes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/scope"}}
+  }
+}

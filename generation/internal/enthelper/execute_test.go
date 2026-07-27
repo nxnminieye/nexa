@@ -16,6 +16,8 @@ import (
 	"github.com/nxnminieye/nexa/provenance"
 )
 
+const actualV1ScratchModulePath = "github.com/nxnminieye/nexa/generation/internal/enthelperscratch"
+
 func TestExecuteRejectsInvalidRequestWithoutTrustedBytes(t *testing.T) {
 	stdout, err := Execute(context.Background(), []byte(`{"apiVersion":"nexa.dev/ent-graph-request/v1"}`))
 	if err == nil {
@@ -42,6 +44,7 @@ func TestTypedFixtureHelperProducesDeterministicPlan(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte(consumerGoMod), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	downloadEntHelperModuleGraph(t, consumer)
 	consumerTidy := exec.Command("go", "mod", "tidy")
 	consumerTidy.Dir = consumer
 	consumerTidy.Env = goCommandEnvWithModuleProxy(t)
@@ -70,7 +73,7 @@ func TestTypedFixtureHelperProducesDeterministicPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeModule := fmt.Sprintf("module github.com/nxnminieye/nexa/generation/enthelperexec\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", consumer, frameworkRoot)
+	runtimeModule := fmt.Sprintf("module %s\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", actualV1ScratchModulePath, consumer, frameworkRoot)
 	if err := os.WriteFile(filepath.Join(runtimeRoot, "go.mod"), []byte(runtimeModule), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +137,7 @@ func helperRepositoryRoot(t *testing.T) string {
 func buildFixtureRequest(t *testing.T, frameworkRoot, consumer, repository, schemaDir string) []byte {
 	t.Helper()
 	root := t.TempDir()
-	module := fmt.Sprintf("module github.com/nxnminieye/nexa/generation/enthelperexec\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", consumer, frameworkRoot)
+	module := fmt.Sprintf("module %s\n\ngo 1.25.0\n\nrequire (\n github.com/nxnminieye/nexa/generation/entconsumerfixture v0.0.0\n github.com/nxnminieye/nexa v0.0.0\n)\nreplace github.com/nxnminieye/nexa/generation/entconsumerfixture => %s\nreplace github.com/nxnminieye/nexa => %s\n", actualV1ScratchModulePath, consumer, frameworkRoot)
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(module), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +265,16 @@ func goCommandEnvWithModuleProxy(t *testing.T) []string {
 	environment := replaceEnv(goCommandEnv(), "GOMODCACHE", cache)
 	environment = replaceEnv(environment, "GOPROXY", "file://"+filepath.ToSlash(filepath.Join(cache, "cache", "download")))
 	return replaceEnv(environment, "GOSUMDB", "off")
+}
+
+func downloadEntHelperModuleGraph(t *testing.T, root string) {
+	t.Helper()
+	command := exec.Command("go", "mod", "download", "all")
+	command.Dir = root
+	command.Env = goCommandEnv()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("download fixture module graph: %v\n%s", err, output)
+	}
 }
 
 func replaceEnv(environment []string, name, value string) []string {

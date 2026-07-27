@@ -37,8 +37,14 @@ type coreSourceRef struct {
 	TreeDigest     string `json:"treeDigest"`
 }
 
+type coreModuleSnapshot struct {
+	goMod []byte
+	goSum []byte
+}
+
 func TestSourceBundleCoreMaterializesGeneratesCompilesAndRuns(t *testing.T) {
 	temporary := canonicalIntegrationDirectory(t, t.TempDir())
+	makeTreeWritableOnCleanup(t, temporary)
 	consumer := filepath.Join(temporary, "consumer")
 	frontendConsumer := filepath.Join(temporary, "frontend-consumer")
 	fixture := filepath.Join(repositoryRoot(t), "fixtures", "consumers", "framework-minimum")
@@ -102,6 +108,7 @@ func TestSourceBundleCoreMaterializesGeneratesCompilesAndRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), formatted, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	downloadModuleGraph(t, consumer)
 
 	environment := isolatedExternalGoEnvironment(t, filepath.Join(temporary, "go-environment"))
 	goPath := filepath.Join(temporary, "go-environment", "gopath")
@@ -181,6 +188,7 @@ func TestSourceBundleCoreMaterializesGeneratesCompilesAndRuns(t *testing.T) {
 	framework = consumerFramework
 	configureCoreConsumerModule(t, consumer, framework)
 	writeToolModule(t, generationModule, "example.com/nexa-generation-tool", framework)
+	runFrameworkConsumer(t, consumer, environment, "go", "test", "-mod=mod", "./backend/core/coreapp", "./backend/core/ent/schema")
 	runFrameworkConsumer(t, consumer, environment, "go", "test", "-mod=readonly", "./backend/core/coreapp", "./backend/core/ent/schema")
 
 	helper := filepath.Join(temporary, "generation-helper")
@@ -190,6 +198,7 @@ func TestSourceBundleCoreMaterializesGeneratesCompilesAndRuns(t *testing.T) {
 	assertPackageGraphExcludes(t, generationModule, environment, ".",
 		nexaModulePath+"/plugins/nexactl/source", nexaModulePath+"/plugins/service/core", nexaModulePath+"/sourceplugin")
 
+	moduleSnapshot := readCoreModuleSnapshot(t, consumer)
 	initialReport := runAndValidateGenerationReport(t, "primary-initial", consumer, environment, generationTool, helper, coreGenerationWritesAll)
 	restoreCoreCommand()
 	runFrameworkConsumer(t, consumer, environment, "go", "mod", "tidy")
@@ -200,12 +209,12 @@ func TestSourceBundleCoreMaterializesGeneratesCompilesAndRuns(t *testing.T) {
 	if len(first) == 0 {
 		t.Fatal("Core generation produced no artifacts")
 	}
-	fresh, freshReport := materializeFreshCoreGeneratedSnapshot(t, sourceRef, environment)
+	fresh, freshReport := materializeFreshCoreGeneratedSnapshot(t, sourceRef, environment, moduleSnapshot)
 	if difference := snapshotDifference(first, fresh); difference != "" {
 		t.Fatalf("fresh Core materialize -> generate artifact bytes differ from primary snapshot: %s", difference)
 	}
 	if !bytes.Equal(initialReport, freshReport) {
-		t.Fatalf("fresh Core generation report bytes differ from primary report:\nprimary: %s\nfresh:   %s", initialReport, freshReport)
+		t.Fatalf("fresh Core generation report differs from primary report: %s", generationReportDifference(t, initialReport, freshReport))
 	}
 	if _, err := os.Stat(filepath.Join(consumer, "backend", "account", "ent", "client.go")); err != nil {
 		t.Fatalf("Core Ent generation did not produce the account client: %v", err)
@@ -376,7 +385,7 @@ func runAndValidateGenerationReport(t *testing.T, label, consumer string, enviro
 			t.Fatalf("%s generation command %q count = %d, want %d (all=%#v)", label, commandID, actual[commandID], count, actual)
 		}
 	}
-	t.Logf("%s generation report: %s", label, strings.TrimSpace(string(encoded)))
+	t.Logf("%s generation report: commands=%d digest=%x", label, len(report.Commands), sha256.Sum256(encoded))
 	return encoded
 }
 
@@ -408,6 +417,77 @@ func validateGenerationReportCommand(label string, index int, consumer string, c
 		return err
 	}
 	return validateGenerationDigestReports(label, index, "inputDigests", command.InputDigests)
+}
+
+func generationReportDifference(t *testing.T, primary, fresh []byte) string {
+	t.Helper()
+	var left, right coreGenerationReport
+	if err := json.Unmarshal(primary, &left); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(fresh, &right); err != nil {
+		t.Fatal(err)
+	}
+	if len(left.Commands) != len(right.Commands) {
+		return fmt.Sprintf("command count primary=%d fresh=%d", len(left.Commands), len(right.Commands))
+	}
+	var differences []string
+	for index := range left.Commands {
+		before, after := left.Commands[index], right.Commands[index]
+		identity := before.CommandID
+		if before.CommandID != after.CommandID || before.Sequence != after.Sequence {
+			differences = append(differences, fmt.Sprintf("command[%d] identity primary=%d:%s fresh=%d:%s", index, before.Sequence, before.CommandID, after.Sequence, after.CommandID))
+			continue
+		}
+		if before.PlanDigest != after.PlanDigest {
+			differences = append(differences, fmt.Sprintf("%s planDigest primary=%s fresh=%s", identity, before.PlanDigest, after.PlanDigest))
+		}
+		if before.Status != after.Status {
+			differences = append(differences, fmt.Sprintf("%s status primary=%s fresh=%s", identity, before.Status, after.Status))
+		}
+		beforeArtifacts, _ := json.Marshal(before.ArtifactDigests)
+		afterArtifacts, _ := json.Marshal(after.ArtifactDigests)
+		if !bytes.Equal(beforeArtifacts, afterArtifacts) {
+			differences = append(differences, identity+" artifactDigests differ")
+		}
+		beforeInputs, _ := json.Marshal(before.InputDigests)
+		afterInputs, _ := json.Marshal(after.InputDigests)
+		if !bytes.Equal(beforeInputs, afterInputs) {
+			differences = append(differences, identity+" inputDigests "+generationDigestDifference(before.InputDigests, after.InputDigests))
+		}
+	}
+	if len(differences) == 0 {
+		return fmt.Sprintf("canonical bytes primary=%x fresh=%x", sha256.Sum256(primary), sha256.Sum256(fresh))
+	}
+	return strings.Join(differences, "; ")
+}
+
+func generationDigestDifference(primary, fresh []coreGenerationDigestReport) string {
+	left := make(map[string]string, len(primary))
+	right := make(map[string]string, len(fresh))
+	for _, value := range primary {
+		left[value.ID] = value.Digest
+	}
+	for _, value := range fresh {
+		right[value.ID] = value.Digest
+	}
+	keys := make([]string, 0, len(left)+len(right))
+	for key := range left {
+		keys = append(keys, key)
+	}
+	for key := range right {
+		if _, exists := left[key]; !exists {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	var differences []string
+	for _, key := range keys {
+		if left[key] != right[key] {
+			differences = append(differences, fmt.Sprintf("%s primary=%s fresh=%s", key, left[key], right[key]))
+		}
+	}
+	return strings.Join(differences, ", ")
 }
 
 func validateGenerationDigestReports(label string, index int, kind string, digests []coreGenerationDigestReport) error {
@@ -455,9 +535,10 @@ func expectedCoreGenerationCommands(writeMode coreGenerationWriteMode) map[strin
 	return result
 }
 
-func materializeFreshCoreGeneratedSnapshot(t *testing.T, expectedRef coreSourceRef, primaryEnvironment []string) (map[string][]byte, []byte) {
+func materializeFreshCoreGeneratedSnapshot(t *testing.T, expectedRef coreSourceRef, primaryEnvironment []string, expectedModule coreModuleSnapshot) (map[string][]byte, []byte) {
 	t.Helper()
 	temporary := canonicalIntegrationDirectory(t, t.TempDir())
+	makeTreeWritableOnCleanup(t, temporary)
 	consumer := filepath.Join(temporary, "fresh-consumer")
 	fixture := filepath.Join(repositoryRoot(t), "fixtures", "consumers", "framework-minimum")
 	if err := os.CopyFS(consumer, os.DirFS(fixture)); err != nil {
@@ -492,7 +573,7 @@ func materializeFreshCoreGeneratedSnapshot(t *testing.T, expectedRef coreSourceR
 	if err := materializeHermeticModuleDirectory(repositoryRoot(t), framework, modmodule.Version{Path: nexaModulePath, Version: "v0.8.0"}); err != nil {
 		t.Fatalf("materialize fresh framework module: %v", err)
 	}
-	reverseCoreProviderFileOrder(t, filepath.Join(framework, "plugins", "service", "core", "bundle.json"))
+	restoreProviderManifest := reverseCoreProviderFileOrder(t, filepath.Join(framework, "plugins", "service", "core", "bundle.json"))
 	writeToolModule(t, sourceModule, "example.com/nexa-fresh-source-tool", framework)
 	configureCoreConsumerModule(t, consumer, framework)
 
@@ -529,6 +610,7 @@ func materializeFreshCoreGeneratedSnapshot(t *testing.T, expectedRef coreSourceR
 	if _, err := os.Stat(filepath.Join(consumer, "frontend")); !os.IsNotExist(err) {
 		t.Fatalf("fresh Core backend materialization unexpectedly selected frontend: %v", err)
 	}
+	restoreProviderManifest()
 
 	consumerFramework := filepath.Join(consumer, ".framework")
 	if err := os.Rename(framework, consumerFramework); err != nil {
@@ -536,13 +618,16 @@ func materializeFreshCoreGeneratedSnapshot(t *testing.T, expectedRef coreSourceR
 	}
 	framework = consumerFramework
 	configureCoreConsumerModule(t, consumer, framework)
+	downloadModuleGraph(t, consumer)
 	writeToolModule(t, generationModule, "example.com/nexa-fresh-generation-tool", framework)
+	runFrameworkConsumer(t, consumer, environment, "go", "test", "-mod=mod", "./backend/core/coreapp", "./backend/core/ent/schema")
 	runFrameworkConsumer(t, consumer, environment, "go", "test", "-mod=readonly", "./backend/core/coreapp", "./backend/core/ent/schema")
 
 	helper := filepath.Join(temporary, "fresh-generation-helper")
 	generationTool := filepath.Join(temporary, "fresh-generation-tool")
 	runFrameworkConsumer(t, generationModule, environment, "go", "build", "-mod=mod", "-o", helper, "./cmd/generation-helper")
 	runFrameworkConsumer(t, generationModule, environment, "go", "build", "-mod=mod", "-o", generationTool, ".")
+	assertCoreModuleSnapshot(t, expectedModule, readCoreModuleSnapshot(t, consumer))
 	initialReport := runAndValidateGenerationReport(t, "fresh-initial", consumer, environment, generationTool, helper, coreGenerationWritesAll)
 	restoreCoreCommand()
 	runFrameworkConsumer(t, consumer, environment, "go", "mod", "tidy")
@@ -591,7 +676,28 @@ func configureCoreConsumerModule(t *testing.T, consumer, framework string) {
 	}
 }
 
-func reverseCoreProviderFileOrder(t *testing.T, manifestPath string) {
+func readCoreModuleSnapshot(t *testing.T, consumer string) coreModuleSnapshot {
+	t.Helper()
+	result := coreModuleSnapshot{goMod: mustReadFile(t, filepath.Join(consumer, "go.mod"))}
+	if value, err := os.ReadFile(filepath.Join(consumer, "go.sum")); err == nil {
+		result.goSum = value
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func assertCoreModuleSnapshot(t *testing.T, expected, actual coreModuleSnapshot) {
+	t.Helper()
+	if !bytes.Equal(actual.goMod, expected.goMod) {
+		t.Fatalf("fresh Core go.mod differs before initial generation: got %x want %x", sha256.Sum256(actual.goMod), sha256.Sum256(expected.goMod))
+	}
+	if !bytes.Equal(actual.goSum, expected.goSum) {
+		t.Fatalf("fresh Core go.sum differs before initial generation: got %x want %x", sha256.Sum256(actual.goSum), sha256.Sum256(expected.goSum))
+	}
+}
+
+func reverseCoreProviderFileOrder(t *testing.T, manifestPath string) func() {
 	t.Helper()
 	encoded := mustReadFile(t, manifestPath)
 	var document map[string]json.RawMessage
@@ -619,6 +725,20 @@ func reverseCoreProviderFileOrder(t *testing.T, manifestPath string) {
 	}
 	if err := os.WriteFile(manifestPath, append(rewritten, '\n'), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	restored := false
+	return func() {
+		t.Helper()
+		if restored {
+			t.Fatal("Core provider manifest restored more than once")
+		}
+		if err := os.WriteFile(manifestPath, encoded, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if actual := mustReadFile(t, manifestPath); !bytes.Equal(actual, encoded) {
+			t.Fatal("Core provider manifest bytes changed while restoring authored order fixture")
+		}
+		restored = true
 	}
 }
 
@@ -677,9 +797,7 @@ func TestSourceBundleCoreGenerationHelperBuildsRunnableRPCTransport(t *testing.T
 	if err := os.CopyFS(helperModule, os.DirFS(helperSource)); err != nil {
 		t.Fatalf("copy dedicated Core generation helper: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreGenerationHelperModule(t, helperModule)
 	helper := filepath.Join(temporary, "generation-helper")
 	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
 
@@ -782,9 +900,7 @@ func TestSourceBundleCoreGenerationHelperBuildsBearerProtectedHTTPTransport(t *t
 	if err := os.CopyFS(helperModule, os.DirFS(helperSource)); err != nil {
 		t.Fatalf("copy dedicated Core generation helper: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreGenerationHelperModule(t, helperModule)
 	helper := filepath.Join(temporary, "generation-helper")
 	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
 
@@ -933,9 +1049,7 @@ func TestSourceBundleCoreGenerationHelperBuildsRunnableAccountRPCTransport(t *te
 	if err := os.CopyFS(helperModule, os.DirFS(helperSource)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreGenerationHelperModule(t, helperModule)
 	helper := filepath.Join(temporary, "generation-helper")
 	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
 	staging := filepath.Join(temporary, "account-rpc-staging")
@@ -993,9 +1107,7 @@ func TestSourceBundleCoreGenerationHelperRejectsProtocolAndCredentialDrift(t *te
 	if err := os.CopyFS(helperModule, os.DirFS(helperSource)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreGenerationHelperModule(t, helperModule)
 	helper := filepath.Join(temporary, "generation-helper")
 	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
 
@@ -1049,9 +1161,7 @@ func TestSourceBundleCoreGenerationHelperRunsStagedGoTestInRestrictedCoreGenerat
 	if err := os.CopyFS(helperModule, os.DirFS(helperSource)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreGenerationHelperModule(t, helperModule)
 	helper := filepath.Join(temporary, "generation-helper")
 	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
 	staging := newGenerationHelperStaging(t, temporary, "restricted-rpc")
@@ -1119,9 +1229,7 @@ func TestSourceBundleCoreLifecycleDefersRuntimeUntilGeneratedTransportsExist(t *
 	if err := os.CopyFS(helperModule, os.DirFS(helperSource)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(helperModule, "go.mod"), []byte("module example.com/core-helper\n\ngo 1.25.0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCoreGenerationHelperModule(t, helperModule)
 	helper := filepath.Join(temporary, "generation-helper")
 	runFrameworkConsumer(t, helperModule, os.Environ(), "go", "build", "-o", helper, ".")
 
@@ -1725,6 +1833,12 @@ func writeToolModule(t *testing.T, root, modulePath, framework string) {
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeCoreGenerationHelperModule(t *testing.T, root string) {
+	t.Helper()
+	writeToolModule(t, root, "example.com/core-helper", repositoryRoot(t))
+	tidyModuleGraph(t, root)
 }
 
 func executableInEnvironment(environment []string, name string) bool {

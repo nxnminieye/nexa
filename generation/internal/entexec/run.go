@@ -270,6 +270,9 @@ func executeInspectionChain(ctx context.Context, spec Spec, profile ExecutionPro
 	if err != nil {
 		return nil, Normalization{}, err
 	}
+	if err := reidentifyScratchForExecution(scratch); err != nil {
+		return scratch, Normalization{}, err
+	}
 	environment, err := executionEnvironment(profile.process, execution.staging)
 	if err != nil {
 		return scratch, Normalization{}, err
@@ -282,6 +285,31 @@ func executeInspectionChain(ctx context.Context, spec Spec, profile ExecutionPro
 		return scratch, Normalization{}, err
 	}
 	return scratch, normalization, nil
+}
+
+func reidentifyScratchForExecution(scratch *Scratch) error {
+	if scratch == nil || scratch.state == nil || scratch.state.owner == nil {
+		return projectError("scratch_write_failed", "/scratch")
+	}
+	data, err := scratch.state.owner.rootHandle.ReadFile("go.mod")
+	if err != nil {
+		return projectError("scratch_write_failed", "/scratch")
+	}
+	file, err := modfile.Parse("go.mod", data, nil)
+	if err != nil || file.Module == nil || file.Module.Mod.Path != ScratchModulePath || file.AddModuleStmt(scratchExecutionModulePath) != nil {
+		return projectError("scratch_write_failed", "/scratch")
+	}
+	formatted, err := file.Format()
+	if err != nil {
+		return projectError("scratch_write_failed", "/scratch")
+	}
+	if err := scratch.state.owner.rootHandle.Remove("go.mod"); err != nil {
+		return projectError("scratch_write_failed", "/scratch")
+	}
+	if err := writeScratchFile(scratch.state.owner.rootHandle, "go.mod", formatted, 0o644); err != nil {
+		return projectError("scratch_write_failed", "/scratch")
+	}
+	return nil
 }
 
 func executionEnvironment(policy ProcessPolicy, staging string) ([]ProcessEnvironment, error) {
@@ -398,7 +426,7 @@ func validateHelperProcessRoots(repository string) (string, string, error) {
 		return "", "", executionRootError("helper_cwd_invalid", "/helperProcess/cwd")
 	}
 	file, err := modfile.Parse("go.mod", moduleBytes, nil)
-	if err != nil || file.Module == nil || file.Module.Mod.Path != ScratchModulePath {
+	if err != nil || file.Module == nil || (file.Module.Mod.Path != ScratchModulePath && file.Module.Mod.Path != scratchExecutionModulePath) {
 		return "", "", executionRootError("helper_cwd_invalid", "/helperProcess/cwd")
 	}
 	tmp := os.Getenv("TMPDIR")

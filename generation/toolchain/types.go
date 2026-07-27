@@ -68,6 +68,28 @@ type Runner interface {
 	Run(context.Context, Request) (Result, error)
 }
 
+// DirectRequest runs a trusted consumer-selected tool in the consumer repository.
+// It deliberately has no staging, scratch, or repository-copy coordinate.
+type DirectRequest struct {
+	RepositoryRoot string
+	Tool           Tool
+	Args           []string
+	Environment    []EnvVar
+	Stdin          []byte
+}
+
+// DirectRunner is the additive write-in-place process boundary.
+type DirectRunner interface {
+	RunDirect(context.Context, DirectRequest) (Result, error)
+}
+
+// DirectRunnerFunc adapts a function to DirectRunner.
+type DirectRunnerFunc func(context.Context, DirectRequest) (Result, error)
+
+func (f DirectRunnerFunc) RunDirect(ctx context.Context, request DirectRequest) (Result, error) {
+	return f(ctx, request)
+}
+
 func cloneTool(input Tool) Tool {
 	result := input
 	result.Args = append([]string(nil), input.Args...)
