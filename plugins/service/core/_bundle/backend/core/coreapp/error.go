@@ -14,6 +14,10 @@ type ErrorCode string
 const (
 	CodeInvalidInput          ErrorCode = "invalid_input"
 	CodeConflict              ErrorCode = "conflict"
+	CodeNotFound              ErrorCode = "not_found"
+	CodeConcurrentWrite       ErrorCode = "concurrent_write"
+	CodePermissionDenied      ErrorCode = "permission_denied"
+	CodeFailedPrecondition    ErrorCode = "failed_precondition"
 	CodeInvalidCredentials    ErrorCode = "invalid_credentials"
 	CodeSessionExpired        ErrorCode = "session_expired"
 	CodeSessionReplayed       ErrorCode = "session_replayed"

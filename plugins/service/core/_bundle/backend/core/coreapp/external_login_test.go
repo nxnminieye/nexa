@@ -19,7 +19,7 @@ func TestExternalLoginRequeriesExactBindingAfterUnmatchedPolicy(t *testing.T) {
 	})
 	service := newExternalLoginTestService(t, lookup, policy,
 		tenantAdmissionPolicyFunc(func(_ context.Context, input TenantAdmissionInput) (TenantMember, error) {
-			return TenantMember{ID: "member-a", Tenant: input.Tenant, AccountID: input.Account.ID}, nil
+			return TenantMember{ID: "member-a", TenantCode: input.Tenant, AccountID: input.Account.ID}, nil
 		}),
 		externalRoleMapperFunc(func(context.Context, ExternalRoleMappingInput) ([]string, error) { return nil, nil }),
 		newExternalGrantStore(),
@@ -106,21 +106,21 @@ func TestExternalLoginRejectsUnverifiedAccountAndMember(t *testing.T) {
 			name:    "empty member id",
 			account: IdentityAccount{ID: "account-a"},
 			admission: tenantAdmissionPolicyFunc(func(_ context.Context, input TenantAdmissionInput) (TenantMember, error) {
-				return TenantMember{Tenant: input.Tenant, AccountID: input.Account.ID}, nil
+				return TenantMember{TenantCode: input.Tenant, AccountID: input.Account.ID}, nil
 			}),
 		},
 		{
 			name:    "member tenant mismatch",
 			account: IdentityAccount{ID: "account-a"},
 			admission: tenantAdmissionPolicyFunc(func(_ context.Context, input TenantAdmissionInput) (TenantMember, error) {
-				return TenantMember{ID: "member-a", Tenant: "tenant-b", AccountID: input.Account.ID}, nil
+				return TenantMember{ID: "member-a", TenantCode: "tenant-b", AccountID: input.Account.ID}, nil
 			}),
 		},
 		{
 			name:    "member account mismatch",
 			account: IdentityAccount{ID: "account-a"},
 			admission: tenantAdmissionPolicyFunc(func(_ context.Context, input TenantAdmissionInput) (TenantMember, error) {
-				return TenantMember{ID: "member-a", Tenant: input.Tenant, AccountID: "account-b"}, nil
+				return TenantMember{ID: "member-a", TenantCode: input.Tenant, AccountID: "account-b"}, nil
 			}),
 		},
 	}
@@ -173,7 +173,7 @@ func TestExternalLoginReplacesOnlyVerifiedSourceGrantsAndIssuesSessionLast(t *te
 		}),
 		tenantAdmissionPolicyFunc(func(_ context.Context, input TenantAdmissionInput) (TenantMember, error) {
 			order = append(order, "admission")
-			return TenantMember{ID: "member-a", Tenant: input.Tenant, AccountID: input.Account.ID}, nil
+			return TenantMember{ID: "member-a", TenantCode: input.Tenant, AccountID: input.Account.ID}, nil
 		}),
 		externalRoleMapperFunc(func(_ context.Context, input ExternalRoleMappingInput) ([]string, error) {
 			if input.Identity.SourceCode != "oidc-a" {
@@ -221,7 +221,7 @@ func TestExternalLoginStopsBeforeSessionWhenGrantReplacementFails(t *testing.T) 
 	service := newExternalLoginTestService(t, lookup,
 		unmatchedIdentityPolicyFunc(func(context.Context, UnmatchedIdentityInput) error { return nil }),
 		tenantAdmissionPolicyFunc(func(_ context.Context, input TenantAdmissionInput) (TenantMember, error) {
-			return TenantMember{ID: "member-a", Tenant: input.Tenant, AccountID: input.Account.ID}, nil
+			return TenantMember{ID: "member-a", TenantCode: input.Tenant, AccountID: input.Account.ID}, nil
 		}),
 		externalRoleMapperFunc(func(context.Context, ExternalRoleMappingInput) ([]string, error) {
 			return []string{"role.operator"}, nil
@@ -281,7 +281,7 @@ func TestExternalLoginExtensionErrorsAreStageSpecific(t *testing.T) {
 				if test.stage == "admission" {
 					return TenantMember{}, test.err
 				}
-				return TenantMember{ID: "member-a", Tenant: input.Tenant, AccountID: input.Account.ID}, nil
+				return TenantMember{ID: "member-a", TenantCode: input.Tenant, AccountID: input.Account.ID}, nil
 			})
 			mapper := externalRoleMapperFunc(func(context.Context, ExternalRoleMappingInput) ([]string, error) {
 				if test.stage == "mapper" {
@@ -434,11 +434,11 @@ func (s *externalGrantStore) ReplaceExternalRoleGrants(ctx context.Context, inpu
 		return s.err
 	}
 	key := externalGrantKey(input.MemberID, input.SourceCode)
-	if len(input.RoleRefs) == 0 {
+	if len(input.RoleCodes) == 0 {
 		delete(s.values, key)
 		return nil
 	}
-	s.values[key] = append([]string(nil), input.RoleRefs...)
+	s.values[key] = append([]string(nil), input.RoleCodes...)
 	return nil
 }
 

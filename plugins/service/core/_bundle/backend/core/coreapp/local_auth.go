@@ -81,7 +81,7 @@ func (a *LocalAuthenticator) Login(ctx context.Context, login LocalLogin) (Sessi
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return Session{}, canceled(operation, err)
 		}
-		if errors.Is(err, ErrStoreNotFound) {
+		if errors.Is(err, ErrStoreNotFound) || errors.Is(err, ErrStoreCredentialUnavailable) {
 			return Session{}, coreError(operation, CodeInvalidCredentials, err)
 		}
 		return Session{}, storeFailure(operation, err)
@@ -96,6 +96,9 @@ func (a *LocalAuthenticator) Login(ctx context.Context, login LocalLogin) (Sessi
 	if err := a.store.CreateSession(ctx, stored); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return Session{}, canceled(operation, err)
+		}
+		if errors.Is(err, ErrStoreCredentialUnavailable) {
+			return Session{}, coreError(operation, CodeInvalidCredentials, err)
 		}
 		return Session{}, storeFailure(operation, err)
 	}
@@ -119,6 +122,9 @@ func (a *LocalAuthenticator) Refresh(ctx context.Context, refresh RefreshToken) 
 		if errors.Is(err, ErrStoreNotFound) {
 			return Session{}, coreError(operation, CodeSessionReplayed, err)
 		}
+		if errors.Is(err, ErrStoreCredentialUnavailable) {
+			return Session{}, coreError(operation, CodeInvalidCredentials, err)
+		}
 		return Session{}, storeFailure(operation, err)
 	}
 	if current.Revoked {
@@ -138,6 +144,9 @@ func (a *LocalAuthenticator) Refresh(ctx context.Context, refresh RefreshToken) 
 		}
 		if errors.Is(err, ErrStoreConflict) || errors.Is(err, ErrStoreNotFound) {
 			return Session{}, coreError(operation, CodeSessionReplayed, err)
+		}
+		if errors.Is(err, ErrStoreCredentialUnavailable) {
+			return Session{}, coreError(operation, CodeInvalidCredentials, err)
 		}
 		return Session{}, storeFailure(operation, err)
 	}

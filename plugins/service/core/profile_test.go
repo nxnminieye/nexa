@@ -68,7 +68,7 @@ func TestProfileBackendFactsLoadSemantically(t *testing.T) {
 	models := []interface {
 		Annotations() []entschema.Annotation
 		Fields() []ent.Field
-	}{coreschema.Tenant{}, coreschema.IdentityAccount{}, coreschema.TenantMember{}, coreschema.Role{}, coreschema.Permission{}, coreschema.AuthSession{}}
+	}{coreschema.Tenant{}, coreschema.IdentityAccount{}, coreschema.TenantMember{}, coreschema.Role{}, coreschema.TenantMemberRoleGrant{}, coreschema.Permission{}, coreschema.AuthSession{}}
 	for _, model := range models {
 		assertTypedAnnotation(t, model.Annotations(), nexaent.SchemaAnnotationName)
 		for _, value := range model.Fields() {
@@ -79,11 +79,9 @@ func TestProfileBackendFactsLoadSemantically(t *testing.T) {
 			assertTypedAnnotation(t, descriptor.Annotations, nexaent.FieldAnnotationName)
 		}
 	}
-	memberRoles := coreschema.TenantMember{}.Edges()[2].Descriptor()
 	rolePermissions := coreschema.Role{}.Edges()[2].Descriptor()
-	if memberRoles.StorageKey == nil || memberRoles.StorageKey.Table != "tenant_member_roles" ||
-		rolePermissions.StorageKey == nil || rolePermissions.StorageKey.Table != "role_permissions" {
-		t.Fatalf("RBAC relation storage = %#v, %#v", memberRoles.StorageKey, rolePermissions.StorageKey)
+	if rolePermissions.StorageKey == nil || rolePermissions.StorageKey.Table != "role_permissions" {
+		t.Fatalf("legacy permission relation storage = %#v", rolePermissions.StorageKey)
 	}
 	physicalEdges := []struct {
 		name, field string
@@ -92,6 +90,9 @@ func TestProfileBackendFactsLoadSemantically(t *testing.T) {
 		{"tenant", "tenant_id", coreschema.TenantMember{}.Edges()[0]},
 		{"identity_account", "identity_account_id", coreschema.TenantMember{}.Edges()[1]},
 		{"tenant", "tenant_id", coreschema.Role{}.Edges()[0]},
+		{"tenant", "tenant_id", coreschema.TenantMemberRoleGrant{}.Edges()[0]},
+		{"member", "tenant_member_id", coreschema.TenantMemberRoleGrant{}.Edges()[1]},
+		{"role", "role_id", coreschema.TenantMemberRoleGrant{}.Edges()[2]},
 		{"tenant", "tenant_id", coreschema.AuthSession{}.Edges()[0]},
 		{"identity_account", "identity_account_id", coreschema.AuthSession{}.Edges()[1]},
 	}
@@ -188,7 +189,7 @@ services:
 		t.Fatal(err)
 	}
 	merged, err := httpapi.Merge(api, generated)
-	if err != nil || len(merged.Operations()) != 7 {
+	if err != nil || len(merged.Operations()) != 19 {
 		t.Fatalf("merged Core operations = %d, %v", len(merged.Operations()), err)
 	}
 }

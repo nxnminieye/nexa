@@ -97,7 +97,7 @@ func (s *ExternalLoginService) Login(ctx context.Context, providerID string, inp
 	if err != nil {
 		return ExternalLoginResult{}, mapTenantAdmissionError(operation, err)
 	}
-	if member.ID == "" || member.Tenant != input.Tenant || member.AccountID != account.ID {
+	if member.ID == "" || member.TenantCode != input.Tenant || member.AccountID != account.ID {
 		return ExternalLoginResult{}, invalid(operation)
 	}
 	roles, err := s.mapper.MapExternalRoles(ctx, ExternalRoleMappingInput{
@@ -111,7 +111,7 @@ func (s *ExternalLoginService) Login(ctx context.Context, providerID string, inp
 		return ExternalLoginResult{}, err
 	}
 	if err := s.grants.ReplaceExternalRoleGrants(ctx, ReplaceExternalRoleGrantsInput{
-		Tenant: input.Tenant, MemberID: member.ID, SourceCode: identity.SourceCode, RoleRefs: roles,
+		Tenant: input.Tenant, MemberID: member.ID, SourceCode: identity.SourceCode, RoleCodes: roles,
 	}); err != nil {
 		return ExternalLoginResult{}, mapStoreError(operation, err)
 	}

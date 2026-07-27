@@ -27,6 +27,18 @@
       "mode": "0644"
     },
     {
+      "path": "backend/core/coreapp/catalog.go",
+      "size": 5357,
+      "digest": "sha256:98fd80b5aa365eea0718ea621638115c654b2f99734466c428ac26315525eb65",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/catalog_test.go",
+      "size": 4547,
+      "digest": "sha256:d7811d6a50df69e861fd93af0fb5e1eebeba4c321d64b906407afc8d36b2a7a4",
+      "mode": "0644"
+    },
+    {
       "path": "backend/core/coreapp/coreapp_test.go",
       "size": 10512,
       "digest": "sha256:111f822ac747048b21805bef345e8856282ee9aff023eac4fe47d84c8d196501",
@@ -34,20 +46,32 @@
     },
     {
       "path": "backend/core/coreapp/error.go",
-      "size": 1472,
-      "digest": "sha256:499edda729aca76e67e4facc2e749ba6cf62f38a38b60a19d178f7ed5dd69119",
+      "size": 1701,
+      "digest": "sha256:33dd3185fa36ea84e4fb3c4de5be6f7812d59fbb0a166e1bc3da8f1e034242af",
       "mode": "0644"
     },
     {
       "path": "backend/core/coreapp/external_login_test.go",
-      "size": 18838,
-      "digest": "sha256:f2bf15794b3fb24d242f725ef7426cdfaf8b3116640d53005e276761c56fc53c",
+      "size": 18868,
+      "digest": "sha256:019b8a5845d52a5c78f5a12fa081499cf357972b0939b88b554525a00415df29",
       "mode": "0644"
     },
     {
       "path": "backend/core/coreapp/health.go",
       "size": 249,
       "digest": "sha256:84079e12bdaacb8a9f772dc656c7e263f463b7de5df1cba9f7fa93d6bcacd09c",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/iam.go",
+      "size": 19101,
+      "digest": "sha256:8f87973af68ea5bcf47e01a7867f6675f38638d9dcac154a159e42accd94a1ca",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/iam_test.go",
+      "size": 13403,
+      "digest": "sha256:97ebeb366597af458eca6de802ea3ffb20389e18c01b667550049b4501d1c030",
       "mode": "0644"
     },
     {
@@ -58,8 +82,8 @@
     },
     {
       "path": "backend/core/coreapp/local_auth.go",
-      "size": 5708,
-      "digest": "sha256:2dcb4071bb3198c45322cef7a25ef337dba58299115b43a7508a881a3ab218dd",
+      "size": 6141,
+      "digest": "sha256:1ebf27c738efc1d8e1c736e74fe48458241d095ecc41bbfb2ed086e3b64cacd1",
       "mode": "0644"
     },
     {
@@ -81,6 +105,12 @@
       "mode": "0644"
     },
     {
+      "path": "backend/core/coreapp/postgres_store.go",
+      "size": 36476,
+      "digest": "sha256:188dfece3a3066e319971df1306c05000dd200aeaa0155dbca52646a8548a8c9",
+      "mode": "0644"
+    },
+    {
       "path": "backend/core/coreapp/provider_set.go",
       "size": 3574,
       "digest": "sha256:878a2e76ba90ca24196bf1813c4e749c868889398f149fcb2eb1970fa111172a",
@@ -88,8 +118,8 @@
     },
     {
       "path": "backend/core/coreapp/provision.go",
-      "size": 5800,
-      "digest": "sha256:28e77942aae2a33fa971e8aa74d61952ba0824f0a72b4d65dc6e536a269e20ca",
+      "size": 5805,
+      "digest": "sha256:5b57a431025df847e5831d89f4a3a8907c4a9f8d7ac8c251fd5cf539cc540daf",
       "mode": "0644"
     },
     {
@@ -100,8 +130,8 @@
     },
     {
       "path": "backend/core/coreapp/store.go",
-      "size": 2498,
-      "digest": "sha256:a829a0147e9930110f5e589ad8e07af1fc806a72d2b366f85081037858cd05b0",
+      "size": 6555,
+      "digest": "sha256:9a62db99fbb994e29e4acaaefe1f1cb502704eae245771f62602d68f69359a5b",
       "mode": "0644"
     },
     {
@@ -112,8 +142,8 @@
     },
     {
       "path": "backend/core/desc/core.proto",
-      "size": 6135,
-      "digest": "sha256:637e9b97c5a7175b4e6db03553c4c4dd54b97fc3d076fe5526485d3d9a20b24f",
+      "size": 27308,
+      "digest": "sha256:d830f7ec098a09c282a090f2a9419faa8741ddcd217fe4ba85fd0b6707cb94bb",
       "mode": "0644"
     },
     {
@@ -124,20 +154,26 @@
     },
     {
       "path": "backend/core/ent/schema/models.go",
-      "size": 7731,
-      "digest": "sha256:69480612ea4d063f8895102ca4ed8bed106a25eb68cb0ef1821858e40340bcb5",
+      "size": 23174,
+      "digest": "sha256:a00866b6a8816960c09eaec3850c08c383b4e112d42cbe21e0a99bd78be40ee7",
       "mode": "0644"
     },
     {
       "path": "backend/core/ent/schema/models_test.go",
-      "size": 1410,
-      "digest": "sha256:f13c5c5de2e357b0dae3521aaae1e1220914a41eda1103cc6c7896d8d92c1868",
+      "size": 6425,
+      "digest": "sha256:b838d8e3531f318d0c9abe5e407f7d97a6f13564b2211a86b01d93889934b43c",
       "mode": "0644"
     },
     {
       "path": "backend/core/migrations/001_core.sql",
       "size": 2041,
       "digest": "sha256:4ae1bef364cbcec7e84f0ba72f961c7cd974c9332ce7c0d02770b2edcb6acfb5",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/migrations/002_core_iam.sql",
+      "size": 5183,
+      "digest": "sha256:46a8b5fd2e4b0b71dca0d1d5b292a949088bca1e38936f4248aef0b5b53847f8",
       "mode": "0644"
     },
     {
@@ -172,13 +208,18 @@
         "backend/core/coreapp/authority.go",
         "backend/core/coreapp/authorization.go",
         "backend/core/coreapp/authorization_test.go",
+        "backend/core/coreapp/catalog.go",
+        "backend/core/coreapp/catalog_test.go",
         "backend/core/coreapp/coreapp_test.go",
         "backend/core/coreapp/error.go",
         "backend/core/coreapp/external_login_test.go",
         "backend/core/coreapp/health.go",
+        "backend/core/coreapp/iam.go",
+        "backend/core/coreapp/iam_test.go",
         "backend/core/coreapp/identity.go",
         "backend/core/coreapp/local_auth.go",
         "backend/core/coreapp/password.go",
+        "backend/core/coreapp/postgres_store.go",
         "backend/core/coreapp/provider_set.go",
         "backend/core/coreapp/provision.go",
         "backend/core/coreapp/session.go",
@@ -188,7 +229,8 @@
         "backend/core/ent/schema/metadata.go",
         "backend/core/ent/schema/models.go",
         "backend/core/ent/schema/models_test.go",
-        "backend/core/migrations/001_core.sql"
+        "backend/core/migrations/001_core.sql",
+        "backend/core/migrations/002_core_iam.sql"
       ],
       "requiresProfiles": [],
       "requiresBundles": [],

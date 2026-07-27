@@ -31,6 +31,7 @@ flowchart LR
 ## Nexa 能提供什么
 
 - [业务事实契约](contracts/business-facts.md)：强类型 Ent metadata、服务关系与 authoring ownership。
+- [Core IAM 契约](contracts/core-iam.md)：中性的账号、租户、成员、角色、菜单与权限边界。
 - [受控生成](contracts/controlled-generation.md)：从 typed facts 到 direct replace-tree 普通源码。
 - [标准服务 starter](starters/standard-services.md)：可由 consumer 接管和继续修改的标准源码。
 - [Runtime packages](contracts/runtime-packages.md)：按 Go import 和 constructor 显式选择的公共运行契约，包括 `runtime/s3` 与可选 AWS SDK v2 adapter。
