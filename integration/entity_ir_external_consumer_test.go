@@ -66,6 +66,10 @@ replace github.com/nxnminieye/nexa => %s
 	if err := os.MkdirAll(filepath.Join(helper, "tmp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	tidyModuleGraph(t, consumer)
+	downloadModuleGraph(t, consumer)
+	tidyModuleGraph(t, helper)
+	downloadModuleGraph(t, helper)
 
 	environment := isolatedExternalGoEnvironment(t, temporary)
 	environment = replaceEnvironment(environment, "TMPDIR", filepath.Join(helper, "tmp"))

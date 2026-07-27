@@ -121,24 +121,26 @@ func TestInvocationV2RejectsSymlinkedTempBaseBeforeCreation(t *testing.T) {
 
 func goCachesV2(t *testing.T) (string, string) {
 	t.Helper()
-	goCache := os.Getenv("GOCACHE")
-	moduleCache := os.Getenv("GOMODCACHE")
-	if goCache == "" {
-		goCache = filepath.Join(os.Getenv("HOME"), "Library/Caches/go-build")
-	}
-	if moduleCache == "" {
-		moduleCache = filepath.Join(os.Getenv("HOME"), "go/pkg/mod")
-	}
-	var err error
-	goCache, err = filepath.EvalSymlinks(goCache)
+	return goEnvironmentPathV2(t, "GOCACHE"), goEnvironmentPathV2(t, "GOMODCACHE")
+}
+
+func goEnvironmentPathV2(t *testing.T, name string) string {
+	t.Helper()
+	command := exec.Command("go", "env", name)
+	command.Env = append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
+	output, err := command.Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("go env %s: %v", name, err)
 	}
-	moduleCache, err = filepath.EvalSymlinks(moduleCache)
+	value := strings.TrimSpace(string(output))
+	if value == "" || !filepath.IsAbs(value) {
+		t.Fatalf("go env %s returned non-absolute path %q", name, value)
+	}
+	canonical, err := filepath.EvalSymlinks(value)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("canonicalize go env %s: %v", name, err)
 	}
-	return goCache, moduleCache
+	return canonical
 }
 func testFileDirV2(t *testing.T) string {
 	t.Helper()

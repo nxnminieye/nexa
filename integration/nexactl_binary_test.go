@@ -35,6 +35,10 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	}
 
 	var inspection struct {
+		Binary struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"binary"`
 		Plugins []struct {
 			ID              string `json:"id"`
 			Version         string `json:"version"`
@@ -85,7 +89,10 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		{id: "generation", version: "v0.1.0"},
 		{id: "governance", version: "v0.1.0"},
 		{id: "sdk-python-assets", version: "v0.1.0"},
-		{id: "source", version: "v0.0.0-dev"},
+		{id: "source", version: inspection.Binary.Version},
+	}
+	if inspection.Binary.Name != "nexactl" || inspection.Binary.Version == "" {
+		t.Fatalf("unexpected binary identity: %#v", inspection.Binary)
 	}
 	for index, want := range wantPlugins {
 		got := inspection.Plugins[index]

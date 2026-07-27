@@ -267,7 +267,7 @@ func TestRetainedBuildInputManifestSnapshotNestedSemanticPrecedence(t *testing.T
 		{name: "missing input ref", reason: "retained_input_invalid", pointer: "/inputs/0/module", mutate: func(value map[string]any) {
 			value["inputs"].([]any)[0].(map[string]any)["module"].(map[string]any)["path"] = "example.com/missing"
 		}},
-		{name: "duplicate input path", reason: "retained_input_duplicate", pointer: "/inputs/5/path", mutate: func(value map[string]any) {
+		{name: "duplicate input path", reason: "retained_input_duplicate", pointer: "/inputs/4/path", mutate: func(value map[string]any) {
 			inputs := value["inputs"].([]any)
 			duplicate := cloneManifestObject(inputs[0].(map[string]any))
 			duplicate["kind"] = "embed"
@@ -329,7 +329,7 @@ func TestRetainedBuildInputManifestSnapshotCompoundSemanticPrecedence(t *testing
 			inputs[0].(map[string]any)["digest"] = badDigest
 			inputs[1].(map[string]any)["module"].(map[string]any)["path"] = "example.com/missing"
 		}},
-		{name: "duplicate path before kind size and digest", reason: "retained_input_duplicate", pointer: "/inputs/5/path", mutate: func(value map[string]any) {
+		{name: "duplicate path before kind size and digest", reason: "retained_input_duplicate", pointer: "/inputs/4/path", mutate: func(value map[string]any) {
 			inputs := value["inputs"].([]any)
 			inputs[0].(map[string]any)["digest"] = badDigest
 			duplicate := cloneManifestObject(inputs[0].(map[string]any))

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/mod/modfile"
@@ -15,6 +16,12 @@ import (
 )
 
 const nexaModulePath = "github.com/nxnminieye/nexa"
+
+var rootModuleGraphDownload struct {
+	sync.Once
+	err    error
+	output []byte
+}
 
 func prepareHermeticExternalModule(t *testing.T, temporary, moduleRoot string) []string {
 	t.Helper()
@@ -185,6 +192,7 @@ func addLocalModuleReplace(t *testing.T, moduleFile *modfile.File, moduleRoot, m
 
 func rootModuleCache(t *testing.T) string {
 	t.Helper()
+	ensureRootModuleGraph(t)
 	command := exec.Command("go", "env", "GOMODCACHE")
 	command.Dir = repositoryRoot(t)
 	command.Env = overriddenEnvironment(
@@ -204,6 +212,67 @@ func rootModuleCache(t *testing.T) string {
 		t.Fatalf("root module cache is not absolute: %q", path)
 	}
 	return path
+}
+
+func ensureRootModuleGraph(t *testing.T) {
+	t.Helper()
+	rootModuleGraphDownload.Do(func() {
+		rootModuleGraphDownload.output, rootModuleGraphDownload.err = downloadModuleGraphWithoutMutation(repositoryRoot(t))
+	})
+	if rootModuleGraphDownload.err != nil {
+		t.Fatalf("download root module graph: %v\n%s", rootModuleGraphDownload.err, rootModuleGraphDownload.output)
+	}
+}
+
+func downloadModuleGraph(t *testing.T, root string) {
+	t.Helper()
+	if output, err := downloadModuleGraphWithoutMutation(root); err != nil {
+		t.Fatalf("download module graph for %s: %v\n%s", filepath.Base(root), err, output)
+	}
+}
+
+func downloadModuleGraphWithoutMutation(root string) ([]byte, error) {
+	module, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	temporary, err := os.CreateTemp(root, ".nexa-module-download-*.mod")
+	if err != nil {
+		return nil, err
+	}
+	modPath := temporary.Name()
+	sumPath := strings.TrimSuffix(modPath, ".mod") + ".sum"
+	defer os.Remove(modPath)
+	defer os.Remove(sumPath)
+	if _, err := temporary.Write(module); err != nil {
+		_ = temporary.Close()
+		return nil, err
+	}
+	if err := temporary.Close(); err != nil {
+		return nil, err
+	}
+	sum, err := os.ReadFile(filepath.Join(root, "go.sum"))
+	if err == nil {
+		if err := os.WriteFile(sumPath, sum, 0o600); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	command := exec.Command("go", "mod", "download", "-modfile="+modPath, "all")
+	command.Dir = root
+	command.Env = overriddenEnvironment(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
+	return command.CombinedOutput()
+}
+
+func tidyModuleGraph(t *testing.T, root string) {
+	t.Helper()
+	command := exec.Command("go", "mod", "tidy")
+	command.Dir = root
+	command.Env = overriddenEnvironment(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("tidy module graph for %s: %v\n%s", filepath.Base(root), err, output)
+	}
 }
 
 func overriddenEnvironment(environment []string, overrides ...string) []string {

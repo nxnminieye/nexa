@@ -112,7 +112,7 @@ func main() {
 	}
 	selected := projectTools(*helper, filepath.Join(*repository, ".framework"))
 	buildPlugin, err := generation.New(generation.Options{
-		Providers: []generation.ProjectProvider{provider{tools: selected}}, Runner: toolchain.NewExecRunner(), Environment: hostEnvironment(),
+		Providers: []generation.ProjectProvider{provider{tools: selected}}, Runner: toolchain.NewExecRunner(), Environment: hostEnvironment(filepath.Join(*repository, ".framework")),
 	})
 	if err != nil {
 		panic(err)
@@ -369,20 +369,21 @@ func projectTools(helper, frameworkRoot string) tools {
 		Environment: append([]toolchain.EnvironmentRule(nil), crud.Environment...),
 		Probe:       toolchain.ExecutableProbe{Args: []string{"version"}, ExpectedVersion: "nexa-core-generation-helper v1.0.0"},
 	}
-	canonicalFramework, err := filepath.EvalSymlinks(frameworkRoot)
-	if err != nil {
-		panic(err)
-	}
-	helperTool.Environment = append(helperTool.Environment, toolchain.EnvironmentRule{Name: "NEXA_FRAMEWORK_ROOT", Source: toolchain.EnvironmentFixed, FixedValue: canonicalFramework})
+	helperTool.Environment = append(helperTool.Environment, toolchain.EnvironmentRule{Name: "NEXA_FRAMEWORK_ROOT", Source: toolchain.EnvironmentHost})
 	rpc, api := helperTool, helperTool
 	rpc.ID, rpc.Args = "consumer.rpc-go", []string{"rpc"}
 	api.ID, api.Args = "consumer.api-go", []string{"api"}
 	return tools{ent: ent, crud: crud, rpc: rpc, api: api}
 }
 
-func hostEnvironment() []toolchain.EnvVar {
+func hostEnvironment(frameworkRoot string) []toolchain.EnvVar {
+	canonicalFramework, err := filepath.EvalSymlinks(frameworkRoot)
+	if err != nil {
+		panic(err)
+	}
 	return []toolchain.EnvVar{
 		{Name: "PATH", Value: os.Getenv("PATH")}, {Name: "GOROOT", Value: runtime.GOROOT()},
 		{Name: "GOMODCACHE", Value: os.Getenv("GOMODCACHE")}, {Name: "GOPROXY", Value: os.Getenv("GOPROXY")}, {Name: "GOSUMDB", Value: os.Getenv("GOSUMDB")},
+		{Name: "NEXA_FRAMEWORK_ROOT", Value: canonicalFramework},
 	}
 }

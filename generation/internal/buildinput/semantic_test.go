@@ -86,7 +86,6 @@ func TestCompileRetainsOnlySelectedPureGoEmbedAndModuleBoundaries(t *testing.T) 
 		"example.com/acme/consumer:go.sum:module-sum",
 		"example.com/acme/consumer:schema/models/schema.go:go",
 		"example.com/acme/consumer:schema/models/vendor/data.txt:embed",
-		"example.com/ent-helper:go.mod:module-file",
 	}
 	sort.Strings(wantInputs)
 	if !reflect.DeepEqual(gotInputs, wantInputs) {
@@ -96,6 +95,48 @@ func TestCompileRetainsOnlySelectedPureGoEmbedAndModuleBoundaries(t *testing.T) 
 		if strings.Contains(input, "schema_test.go") || strings.Contains(input, "ignored.go") || strings.Contains(input, "unrelated") {
 			t.Fatalf("unretained input leaked into manifest: %q", input)
 		}
+		if strings.HasPrefix(input, "example.com/ent-helper:go.mod:") {
+			t.Fatalf("derived scratch module boundary entered manifest: %q", input)
+		}
+	}
+}
+
+func TestCompileRetainsScratchHelperSourcesWithoutDerivedModuleBoundaries(t *testing.T) {
+	fixture := newDiscoveryFixture(t)
+	helper := filepath.Join(fixture.input.ScratchRoot, "cmd", "enthelper", "main.go")
+	mustWriteFile(t, helper, []byte("package main\n\nfunc main() {}\n"))
+	mustWriteFile(t, filepath.Join(fixture.input.ScratchRoot, "go.sum"), []byte("example.com/dependency v1.0.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"))
+	packages := decodeTestJSONStream(t, fixture.input.PackageList)
+	packages = append(packages, map[string]any{
+		"Dir": filepath.Dir(helper), "ImportPath": "example.com/ent-helper/cmd/enthelper", "Name": "main",
+		"Module": map[string]any{
+			"Path": "example.com/ent-helper", "Main": true, "Dir": fixture.input.ScratchRoot,
+			"GoMod": filepath.Join(fixture.input.ScratchRoot, "go.mod"), "GoVersion": "1.25",
+		},
+		"GoFiles": []string{"main.go"},
+	})
+	fixture.input.PackageList = jsonStream(t, packages...)
+	compilation, err := Compile(fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := compilation.Manifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := manifest.Inputs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundHelper := false
+	for _, input := range inputs {
+		if input.Module.Role == "scratch-main" && (input.Kind == "module-file" || input.Kind == "module-sum") {
+			t.Fatalf("derived scratch module boundary entered manifest: %#v", input)
+		}
+		foundHelper = foundHelper || input.Module.Role == "scratch-main" && input.Path == "cmd/enthelper/main.go" && input.Kind == "go"
+	}
+	if !foundHelper {
+		t.Fatalf("scratch helper source missing from retained inputs: %#v", inputs)
 	}
 }
 
@@ -181,7 +222,7 @@ func TestCompileAppliesTotalByteBudgetDuringDeclarationOrderReads(t *testing.T) 
 		return payload, nil
 	}
 	_, err := Compile(fixture.input)
-	assertBuildInputError(t, err, "build_input_invalid", "retain", "retained_input_limit_exceeded", "/retainedInputs/18", "")
+	assertBuildInputError(t, err, "build_input_invalid", "retain", "retained_input_limit_exceeded", "/retainedInputs/17", "")
 	if len(packageLimits) != 16 {
 		t.Fatalf("package reads = %d (%#v), want 16 through first total-budget offender", len(packageLimits), packageNames)
 	}
@@ -355,7 +396,7 @@ func TestCompileValidatesDuplicateAndOverlappingPathsBeforeReading(t *testing.T)
 			pkg["EmbedFiles"] = []string{}
 			fixture.input.PackageList = jsonStream(t, pkg)
 			_, err := Compile(fixture.input)
-			assertBuildInputError(t, err, "build_input_invalid", "retain", test.reason, "/retainedInputs/4/path", "")
+			assertBuildInputError(t, err, "build_input_invalid", "retain", test.reason, "/retainedInputs/3/path", "")
 		})
 	}
 }
@@ -528,22 +569,22 @@ func TestCompileRejectsSelectedFileSafetyViolations(t *testing.T) {
 		name, member, reason, pointer string
 		prepare                       func(*testing.T, discoveryFixture, string)
 	}{
-		{name: "symlink", member: "selected-link.go", reason: "retained_input_symlink", pointer: "/retainedInputs/3", prepare: func(t *testing.T, fixture discoveryFixture, path string) {
+		{name: "symlink", member: "selected-link.go", reason: "retained_input_symlink", pointer: "/retainedInputs/2", prepare: func(t *testing.T, fixture discoveryFixture, path string) {
 			if err := os.Symlink(filepath.Join(fixture.repo, "schema/models/schema.go"), path); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "not regular", member: "selected-directory", reason: "retained_input_not_regular", pointer: "/retainedInputs/3", prepare: func(t *testing.T, _ discoveryFixture, path string) {
+		{name: "not regular", member: "selected-directory", reason: "retained_input_not_regular", pointer: "/retainedInputs/2", prepare: func(t *testing.T, _ discoveryFixture, path string) {
 			if err := os.MkdirAll(path, 0o755); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{name: "size", member: "selected-large.go", reason: "retained_input_limit_exceeded", pointer: "/retainedInputs/3", prepare: func(t *testing.T, _ discoveryFixture, path string) {
+		{name: "size", member: "selected-large.go", reason: "retained_input_limit_exceeded", pointer: "/retainedInputs/2", prepare: func(t *testing.T, _ discoveryFixture, path string) {
 			mustWriteFile(t, path, bytes.Repeat([]byte{'x'}, MaxRetainedBuildInputBytes+1))
 		}},
-		{name: "missing", member: "selected-missing.go", reason: "retained_input_read_failed", pointer: "/retainedInputs/3", prepare: func(*testing.T, discoveryFixture, string) {}},
-		{name: "escape", member: "../escape.go", reason: "retained_path_invalid", pointer: "/retainedInputs/3/path", prepare: func(*testing.T, discoveryFixture, string) {}},
-		{name: "symlink parent", member: "selected-parent/file.go", reason: "retained_parent_drift", pointer: "/retainedInputs/3", prepare: func(t *testing.T, fixture discoveryFixture, path string) {
+		{name: "missing", member: "selected-missing.go", reason: "retained_input_read_failed", pointer: "/retainedInputs/2", prepare: func(*testing.T, discoveryFixture, string) {}},
+		{name: "escape", member: "../escape.go", reason: "retained_path_invalid", pointer: "/retainedInputs/2/path", prepare: func(*testing.T, discoveryFixture, string) {}},
+		{name: "symlink parent", member: "selected-parent/file.go", reason: "retained_parent_drift", pointer: "/retainedInputs/2", prepare: func(t *testing.T, fixture discoveryFixture, path string) {
 			target := filepath.Join(fixture.repo, "real-selected-parent")
 			mustWriteFile(t, filepath.Join(target, "file.go"), []byte("package models\n"))
 			if err := os.Symlink(target, filepath.Dir(path)); err != nil {
@@ -581,7 +622,7 @@ func TestCompileRejectsRepositoryReplacementThroughIntermediateSymlink(t *testin
 	})
 	fixture.input.ModuleList = jsonStream(t, modules...)
 	_, err := Compile(fixture.input)
-	assertBuildInputError(t, err, "build_input_invalid", "retain", "retained_parent_drift", "/retainedInputs/3", "")
+	assertBuildInputError(t, err, "build_input_invalid", "retain", "retained_parent_drift", "/retainedInputs/2", "")
 }
 
 func TestCompileDoesNotEnumerateUnretainedSiblingsOrObserveTheirMutation(t *testing.T) {
@@ -789,7 +830,7 @@ func newDiscoveryFixture(t *testing.T) discoveryFixture {
 	if err := os.Symlink("missing-target", filepath.Join(repo, "unrelated-link")); err != nil {
 		t.Fatal(err)
 	}
-	mustWriteFile(t, filepath.Join(scratch, "go.mod"), []byte("module example.com/ent-helper\n\ngo 1.25\n"))
+	mustWriteFile(t, filepath.Join(scratch, "go.mod"), []byte("module example.com/ent-helper\n\ngo 1.25\n\nrequire example.com/acme/consumer v0.0.0\n\nreplace example.com/acme/consumer => "+repo+"\n"))
 
 	consumer := map[string]any{
 		"Path": "example.com/acme/consumer", "Version": "v0.0.0", "Dir": repo, "GoMod": filepath.Join(repo, "go.mod"),

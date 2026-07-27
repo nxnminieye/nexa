@@ -24,6 +24,7 @@ func TestEntGraphV2RunnerRealHelperAndAdversarialTelemetry(t *testing.T) {
 	writeV2File(t, filepath.Join(repository, "go.mod"), module)
 	writeV2File(t, filepath.Join(repository, "pkg", "internal", "schema", "account.go"), "package schema\n\nimport (\n \"entgo.io/ent\"\n \"entgo.io/ent/schema/field\"\n)\ntype Account struct{ ent.Schema }\nfunc (Account) Fields() []ent.Field { return []ent.Field{field.String(\"name\")} }\n")
 	writeV2File(t, filepath.Join(repository, "tools", "tools.go"), "package tools\nimport _ \"entgo.io/ent/entc/load\"\n")
+	downloadEntHelperModuleGraph(t, repository)
 	tidy := exec.Command("go", "mod", "tidy")
 	tidy.Dir = repository
 	tidy.Env = goCommandEnvWithModuleProxy(t)

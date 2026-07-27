@@ -44,6 +44,7 @@ func TestTypedFixtureHelperProducesDeterministicPlan(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte(consumerGoMod), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	downloadEntHelperModuleGraph(t, consumer)
 	consumerTidy := exec.Command("go", "mod", "tidy")
 	consumerTidy.Dir = consumer
 	consumerTidy.Env = goCommandEnvWithModuleProxy(t)
@@ -264,6 +265,16 @@ func goCommandEnvWithModuleProxy(t *testing.T) []string {
 	environment := replaceEnv(goCommandEnv(), "GOMODCACHE", cache)
 	environment = replaceEnv(environment, "GOPROXY", "file://"+filepath.ToSlash(filepath.Join(cache, "cache", "download")))
 	return replaceEnv(environment, "GOSUMDB", "off")
+}
+
+func downloadEntHelperModuleGraph(t *testing.T, root string) {
+	t.Helper()
+	command := exec.Command("go", "mod", "download", "all")
+	command.Dir = root
+	command.Env = goCommandEnv()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("download fixture module graph: %v\n%s", err, output)
+	}
 }
 
 func replaceEnv(environment []string, name, value string) []string {

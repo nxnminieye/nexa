@@ -509,10 +509,24 @@ func replaceFragmentIdentity(t *testing.T, root, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(fragmentPath); err != nil {
+	replacement, err := os.CreateTemp(filepath.Dir(fragmentPath), ".fragment-replacement-*")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(fragmentPath, content, 0o644); err != nil {
+	replacementPath := replacement.Name()
+	t.Cleanup(func() { _ = os.Remove(replacementPath) })
+	if _, err := replacement.Write(content); err != nil {
+		_ = replacement.Close()
+		t.Fatal(err)
+	}
+	if err := replacement.Chmod(0o644); err != nil {
+		_ = replacement.Close()
+		t.Fatal(err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacementPath, fragmentPath); err != nil {
 		t.Fatal(err)
 	}
 }
