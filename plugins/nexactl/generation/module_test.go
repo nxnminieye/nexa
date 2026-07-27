@@ -1,54 +1,29 @@
-package generation
+package generation_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
-	"github.com/nxnminieye/nexa/generation/composition"
-	"github.com/nxnminieye/nexa/provenance"
+	"github.com/nxnminieye/nexa/plugins/nexactl/generation"
 )
 
-func TestNestedModuleFactsRebaseArtifactsAndAttributeModuleSource(t *testing.T) {
+func TestDirectAPIGenerationConsumesTypedFacts(t *testing.T) {
 	repository := t.TempDir()
-	for name, content := range map[string]string{
-		"backend/go.mod":             "module example.com/consumer/backend\n\ngo 1.25.0\n",
-		"backend/core/desc/core.api": "syntax = \"v1\"\n",
-	} {
-		filename := filepath.Join(repository, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(filename), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filename, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	tool := directTool("consumer.api")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			Facts: apiDocument(t, repository), Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
+		}}}},
 	}
-	repository, err := filepath.EvalSymlinks(repository)
-	if err != nil {
+	runner := &testRunner{writePath: "generated/api/routes.go", writeData: []byte("package apigenerated\n")}
+	command := generationCommand(t, provider, runner, "api")
+	if _, err := command.Run(context.Background(), invocation(repository)); err != nil {
 		t.Fatal(err)
 	}
-	module, repositoryCoreRoot, moduleCoreRoot, err := loadAPIModuleFacts(repository, "backend/core/desc/core.api")
-	if err != nil {
-		t.Fatalf("module facts: %#v", err)
-	}
-	owner, err := provenance.RepositoryRef("backend/account/desc/account.proto", "method:account.get")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rendered, err := rebaseRenderedArtifacts([]composition.RenderedArtifact{{
-		ID: "logic.account.get", Path: "core/internal/logic/rpcproxy/account-get.generated.go", Owner: "nexa.dev/generator/composition/v1",
-		Content: []byte("package rpcproxy\nimport _ \"example.com/consumer/backend/core/internal/serviceclients/account\"\n"),
-		Sources: []provenance.SourceRef{owner},
-	}}, module, repositoryCoreRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if module.modulePath != "example.com/consumer/backend" || module.repositoryRoot != "backend" || moduleCoreRoot != "core" {
-		t.Fatalf("module facts = %#v, module core root = %q", module, moduleCoreRoot)
-	}
-	if len(rendered) != 1 || rendered[0].Path != "backend/core/internal/logic/rpcproxy/account-get.generated.go" ||
-		!reflect.DeepEqual(rendered[0].Sources, []provenance.SourceRef{owner, module.source.Ref}) {
-		t.Fatalf("rendered = %#v", rendered)
+	if data, err := os.ReadFile(filepath.Join(repository, "generated/api/routes.go")); err != nil || string(data) != "package apigenerated\n" {
+		t.Fatalf("generated API = %q, %v", data, err)
 	}
 }

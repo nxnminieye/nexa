@@ -19,7 +19,7 @@ Nexa Skill 是 AI 开发或采用 Nexa 的必选入口。它负责把任务路�
 
 | 任务 | 专项 Skill |
 | --- | --- |
-| facts、IR、generation、manifest、generated/manual ownership | `nexa-controlled-generation` |
+| facts、typed document、direct generation、generated/extensions scopes | `nexa-controlled-generation` |
 | CLI、machine envelope、error、exit code、stdout/stderr | `nexa-ai-first-cli` |
 | 计划、隔离实现、review、验证与外部写入边界 | `nexa-development-workflow` |
 

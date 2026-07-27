@@ -33,25 +33,25 @@ digest 和 tree digest 从各 source command 的 input schema extension 读取�
 2. 审核 selection、target、digests、plan digest 和 affected files；
 3. `source materialize` 使用同一选择写入；
 4. 在 materialized source 上运行其 manifest 声明的验证 recipe；
-5. 对其中的 Ent/Proto/`.api` native facts 运行所选 generation；
+5. 对当前 binary 明确支持的 typed facts 运行所选 generation；
 6. 用 consumer 自己的 build/test 验证最终工程。
 
 当前 alpha 的 reference composition 包含可选 Core source provider。它用于证明 source-to-consumer 闭包，
 不要求所有 consumer 采用 Core，也不代表目录中其他 Provider 已编入某个二进制。
 
-## Tenant 与 CRUD 切入点
+## Tenant 与 generation 切入点
 
 多租户 schema 可以直接组合 `nexaent/mixin.Tenant`。该 mixin 提供 required、positive、immutable 的
 `tenant_id` Ent field 和固定 internal metadata；业务 schema 仍需用 `nexaent.Schema` 明确选择
 `ScopeTenant`，两者缺一都不能凭名称自动启用隔离。
 
-选择 `nexaent.CRUD(...)` 后，CRUD Proto generation 会按 field policy 生成公开输入输出。启用 multi-tenant
-build option 时，tenant-owned entity 的 RPC request 获得内部 `tenant_id` context binding；该字段不进入
-公开 item 或外部 mutation field。`generation/crudlogic` 可以从同一份 verified CRUD projection 生成默认
-go-zero logic 和 tenant helper。
+当前官方 generation plugin 只公开 typed RPC 和 HTTP API generation。是否可用、命令 schema 和 delegated
+tool 必须以 consumer binary 的 fresh inspection 为准。生成时 consumer 显式声明 generated 与 extensions
+scopes；工具直接清空并重建 generated 目录，extensions 中的业务 logic、hooks 和其他人工源码保持不变。
 
-默认 manual logic 只在缺失时创建，之后归业务方修改。业务确实需要重新生成时，可以在 composition 中显式
-选择 overwrite；它直接覆盖 plan 绑定的目标，不分析 Git diff，也不替业务方合并旧逻辑。
+官方 generation plugin 不公开 Ent、CRUD、Service Manifest、manual create-once 或 overwrite 契约。标准
+CRUD 的业务 contract 和非空 logic 必须由对应领域 owner 冻结并保留，不能由 starter 或 generator 生成空
+实现替代。生成后由 consumer 审阅 Git diff，失败时允许保留部分变更并返回非零；再次生成必须无新 diff。
 
 ## Detach
 

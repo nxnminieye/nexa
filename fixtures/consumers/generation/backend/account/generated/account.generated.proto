@@ -1,0 +1,3 @@
+syntax = "proto3";
+package generated.account.v1;
+message Account { string name = 1; }

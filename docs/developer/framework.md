@@ -9,7 +9,7 @@
 Consumer authoring facts
   -> Nexa public typed contracts and strict loaders
   -> versioned IR and deterministic generation
-  -> Consumer-owned ordinary source and manifests
+  -> Consumer-owned ordinary generated source
 
 Source Provider -> materialized source -> Consumer authoring/generation path
 Runtime packages ----------------------> Consumer runtime composition
@@ -23,7 +23,7 @@ Nexa Skills -> owner and task routing --> source/schema/CLI/test facts
 ### Framework / Consumer
 
 Framework 拥有可复用的 public contract、loader、parser、IR、generator、validator 和 CLI 协议。Consumer
-拥有业务事实实例、组合选择、生成产物、manual logic、迁移、部署和运行结果。框架测试证明公共行为，不
+拥有业务事实实例、组合选择、生成产物、extensions、迁移、部署和运行结果。框架测试证明公共行为，不
 证明某个 consumer 已采用或上线。
 
 ### Public / Internal
@@ -46,7 +46,7 @@ inspection、生成源码和 read model 是 projection。新增字段前先确�
 | machine document | type/schema owner package | strict parse、canonical projection、`apiVersion` |
 | CLI command 或 flag | `nexactl/host` 或 owning plugin | inspection、envelope、exit code、stdout/stderr |
 | authoring fact 或 relation | 最近的 consumer fact owner | 重复入口、引用闭合、下游 IR |
-| generator | 对应 `generation/*` owner | 确定性、staging、ownership、drift、consumer build/test |
+| generator | 对应 `generation/*` owner | typed input、replace-tree、direct tool、consumer build/test |
 | source release | Provider/source contract | immutable tree、selection、materialize/upgrade/detach |
 | runtime package | 对应 `runtime/*` package | import/constructor 选择、未选择时零要求 |
 | Nexa Skill | 同版本 Skill asset | owner 路由、实际 contract 链接、不得复制机器清单 |

@@ -25,7 +25,7 @@ Nexa 文档帮助人理解当前公开实现；它不替代 Go API、versioned s
 - 框架边界与变更影响：`developer/framework.md`；
 - 可依赖 surface 与同版本边界：`developer/stable-surface.md`；
 - authoring/typed facts：`contracts/business-facts.md`；
-- plan/check/write 与 generated/manual ownership：`contracts/controlled-generation.md`；
+- direct generation 与 generated/extensions 边界：`contracts/controlled-generation.md`；
 - generated manifest：`contracts/generated-manifests.md`；
 - source release、lock 与源码升级：`contracts/source-bundles.md`；
 - build-time Host/plugin composition：`plugins/nexactl-build-plugin.md`；

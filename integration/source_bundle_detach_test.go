@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,30 +20,6 @@ func assertDetachedSourceState(t *testing.T, repository string) {
 	}
 	if len(locks) != 0 {
 		t.Fatalf("detach retained source ownership snapshots: %#v", locks)
-	}
-}
-
-func assertDetachedNativeFactMutation(t *testing.T, consumer string, environment []string, generationTool, helper string) {
-	t.Helper()
-	fact := filepath.Join(consumer, "backend", "core", "desc", "core.api")
-	content := mustReadFile(t, fact)
-	updated := strings.Replace(string(content), "get /auth/providers", "get /auth/providers-detached", 1)
-	if updated == string(content) {
-		t.Fatal("Core native API fact did not contain the expected provider route")
-	}
-	before := generatedSnapshot(t, consumer)
-	if err := os.WriteFile(fact, []byte(updated), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runFrameworkConsumer(t, consumer, environment, generationTool, "--repo-root", consumer, "--helper", helper)
-	after := generatedSnapshot(t, consumer)
-	if snapshotDifference(before, after) == "" {
-		t.Fatal("consumer-owned native API change did not update generated projections")
-	}
-	runFrameworkConsumer(t, consumer, environment, generationTool, "--repo-root", consumer, "--helper", helper)
-	repeated := generatedSnapshot(t, consumer)
-	if difference := snapshotDifference(after, repeated); difference != "" {
-		t.Fatalf("consumer-owned native API change drifted on repeated generation: %s", difference)
 	}
 }
 

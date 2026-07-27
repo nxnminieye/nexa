@@ -78,7 +78,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	if err := json.Unmarshal(encodedResult, &inspection); err != nil {
 		t.Fatalf("decode inspection result: %v", err)
 	}
-	if len(inspection.Plugins) != 4 || len(inspection.Capabilities) != 8 || len(inspection.Commands) != 25 {
+	if len(inspection.Plugins) != 4 || len(inspection.Capabilities) != 5 || len(inspection.Commands) != 15 {
 		t.Fatalf("unexpected reference composition: %#v", inspection)
 	}
 	wantPlugins := []struct{ id, version string }{
@@ -94,11 +94,8 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 	}
 	wantGenerationProvides := []struct{ id, version string }{
-		{id: "generation.crud", version: "v1.0.0"},
-		{id: "generation.ent", version: "v1.0.0"},
 		{id: "generation.rpc", version: "v1.0.0"},
 		{id: "generation.api", version: "v1.0.0"},
-		{id: "generation.service-manifest", version: "v1.0.0"},
 	}
 	if len(inspection.Plugins[0].Provides) != len(wantGenerationProvides) ||
 		len(inspection.Plugins[1].Provides) != 1 || inspection.Plugins[1].Provides[0].ID != "governance.validation" ||
@@ -114,11 +111,8 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	}
 	wantCapabilities := []struct{ id, provider string }{
 		{id: "generation.api", provider: "generation"},
-		{id: "generation.crud", provider: "generation"},
-		{id: "generation.ent", provider: "generation"},
 		{id: "generation.rpc", provider: "generation"},
 		{id: "generation.sdk-python-assets", provider: "sdk-python-assets"},
-		{id: "generation.service-manifest", provider: "generation"},
 		{id: "governance.validation", provider: "governance"},
 		{id: "source.bundle", provider: "source"},
 	}
@@ -133,20 +127,10 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		flags                   []string
 		required                []bool
 	}{
-		{path: "gen ent", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation api check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "core-service"}, required: []bool{true, true, true}},
-		{path: "generation api plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "core-service"}, required: []bool{true, true, true}},
-		{path: "generation api write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "core-service", "plan-digest"}, required: []bool{true, true, true, true}},
-		{path: "generation crud check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
-		{path: "generation crud plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
-		{path: "generation crud write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic", "plan-digest", "lock-digest"}, required: []bool{true, true, true, false, true, false}},
-		{path: "generation rpc check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation rpc plan", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation rpc write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "plan-digest"}, required: []bool{true, true, true, true}},
+		{path: "generation api generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
+		{path: "generation rpc generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
 		{path: "generation sdk-python-assets check", owner: "sdk-python-assets", sideEffect: "repository-read", flags: []string{"repo-root"}, required: []bool{true}},
 		{path: "generation sdk-python-assets write", owner: "sdk-python-assets", sideEffect: "repository-write", flags: []string{"repo-root"}, required: []bool{true}},
-		{path: "generation service-manifest check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation service-manifest write", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "plan-digest"}, required: []bool{true, true, true, true}},
 		{path: "governance skill validate", owner: "governance", sideEffect: "repository-read", flags: []string{"root"}, required: []bool{true}},
 		{path: "inspect", owner: "nexactl.host", sideEffect: "none"},
 		{path: "skills sync", owner: "governance", sideEffect: "repository-write", flags: []string{"repo-root"}, required: []bool{true}},
@@ -169,11 +153,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		for flagIndex, flag := range command.Flags {
 			flagNames = append(flagNames, flag.Name)
 			required = append(required, flag.Required)
-			wantType := "string"
-			if flag.Name == "overwrite-logic" {
-				wantType = "bool"
-			}
-			if flag.Type != wantType {
+			if flag.Type != "string" {
 				t.Fatalf("command[%d] flag[%d] type = %q", index, flagIndex, flag.Type)
 			}
 		}
@@ -233,7 +213,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 func TestReferenceNexactlGenerationWithoutProviderIsUnavailable(t *testing.T) {
 	binary := buildNexactl(t)
 	stdout, stderr, exit := runBinary(t, binary,
-		"gen", "ent",
+		"generation", "rpc", "generate",
 		"--repo-root", t.TempDir(),
 		"--provider", "consumer",
 		"--service", "accounts",

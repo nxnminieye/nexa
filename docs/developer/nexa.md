@@ -15,7 +15,7 @@ Nexa 是面向业务后端的 AI-first Go framework。它让 AI 能从业务仓�
 Nexa 的公共能力分为四组：
 
 1. typed facts 与 strict loader，把 consumer authoring surface 投影为稳定模型；
-2. versioned IR、plan/check/write、staging validation 与 generated/manual ownership；
+2. versioned typed documents、direct generation、replace-tree 与 generated/extensions 隔离；
 3. Source Provider 与 source lifecycle，用于交付可复现的标准服务源码；
 4. 可独立 import 和 constructor 组合的 runtime contract 与 adapter。
 

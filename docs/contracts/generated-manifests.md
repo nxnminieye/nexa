@@ -1,7 +1,8 @@
 # 生成清单
 
-生成清单是受控生成的可重建状态投影。它记录输入 provenance、generator identity、artifact identity 和
-digest，用于 check、ownership 和 stale handling；它不保存业务配置，也不是人工 authoring surface。
+生成清单 package 是为已有 consumer 保留的可重建状态投影数据结构。它不保存业务配置，也不是人工
+authoring surface；当前 official RPC/API direct generation command 不创建、读取或依赖这些 manifest，
+下述 managed/write lifecycle 也不是当前 official generation 契约。
 
 ## Owner
 
@@ -22,7 +23,7 @@ digest 和 stale policy。Generator identity 独立包含 id 与 version。Canon
 Digest 使用标准 SHA-256 value，由 `provenance` public type 表达。普通 Git SHA、module checksum 和 release
 checksum 保留其各自用途，不被 manifest digest 替代。
 
-## Managed artifact
+## 冻结的 legacy managed artifact
 
 Generator 更新或删除文件前必须用 ownership probe 验证当前内容仍属于相同 generator/artifact/input。
 未知文件、业务方已修改且 ownership 不再成立的文件以及 manual logic 都不会被当作普通 generated artifact
@@ -33,9 +34,9 @@ Stale policy 由 artifact owner 明确选择：
 - `retain`：输出不再需要时仍保留；
 - `delete-if-unmodified`：只有 ownership probe 证明仍为对应 generated output 时才删除。
 
-Manual create/overwrite 不进入 Artifact Manifest，完整规则见[受控生成](controlled-generation.md)。
+当前 direct replace-tree 规则见[受控生成](controlled-generation.md)。
 
-## 写入顺序
+## 冻结的 legacy 写入顺序
 
 Plan 从 previous manifest 和当前 facts 计算 next manifest。Write 先验证并发布受控 artifact，最后才写 next
 manifest；如果中途失败，不能发布一份声称未完成 artifact 已存在的 manifest。再次执行必须从当前 repository

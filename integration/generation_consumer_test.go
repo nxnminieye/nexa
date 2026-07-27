@@ -39,11 +39,18 @@ func TestGenerationPluginExternalConsumer(t *testing.T) {
 	)
 	helper := filepath.Join(base, "generation-helper")
 	runGenerationConsumerCommand(t, consumer, environment, "go", "build", "-mod=readonly", "-o", helper, "./cmd/generation-helper")
-	output := runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper)
-	if strings.TrimSpace(string(output)) != "generation-consumer-ok" {
-		t.Fatalf("generation consumer output = %q", output)
+	runGenerationConsumerCommand(t, consumer, environment, "git", "init", "-q")
+	runGenerationConsumerCommand(t, consumer, environment, "git", "config", "user.name", "Nexa Test")
+	runGenerationConsumerCommand(t, consumer, environment, "git", "config", "user.email", "nexa-test@example.invalid")
+	runGenerationConsumerCommand(t, consumer, environment, "git", "add", ".")
+	runGenerationConsumerCommand(t, consumer, environment, "git", "commit", "-qm", "expected generation fixture")
+	for attempt := 1; attempt <= 2; attempt++ {
+		output := runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper)
+		if strings.TrimSpace(string(output)) != "generation-consumer-ok" {
+			t.Fatalf("generation consumer attempt %d output = %q", attempt, output)
+		}
+		runGenerationConsumerCommand(t, consumer, environment, "git", "diff", "--exit-code", "--ignore-submodules=dirty")
 	}
-	runGenerationConsumerCommand(t, consumer, environment, "go", "mod", "tidy")
 	runGenerationConsumerCommand(t, consumer, environment, "go", "test", "-mod=readonly", "./...")
 }
 

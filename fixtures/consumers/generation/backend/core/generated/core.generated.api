@@ -1,0 +1,6 @@
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+type GeneratedHealthRequest {}
+type GeneratedHealthResponse { OK bool }
+@server (nexaOperationId: "generated.health" nexaAuthMode: "none")
+service generated-api { @handler generatedHealth get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse) }

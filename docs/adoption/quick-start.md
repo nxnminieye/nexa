@@ -104,13 +104,13 @@ Consumer 在自己的工程工具入口中显式构造所需 plugin，并交给 
 对选定 generation command 使用固定顺序：
 
 ```text
-inspect -> plan -> review affected files and current inputs -> check -> bounded write
-        -> parse/typecheck/compile -> consumer build/test
+inspect -> validate typed inputs and declared scopes -> direct generate
+        -> review git diff -> parse/typecheck/compile -> consumer build/test
 ```
 
-`repo-root`、provider、service 等参数从当前 inspection 的 flag/schema 读取。Plan 和 check 是只读操作；
-write 前重新确认 facts、target、affected files 和 manual/generated ownership。当前 reference CLI 暴露
-CRUD Proto、RPC、API 和 Service Manifest 生成；统一 CRUD logic 不属于本 alpha 支持面。
+`repo-root`、provider、service 等参数从当前 inspection 的 flag/schema 读取。当前 official generation plugin
+只公开 RPC/API direct generate；Reference CLI 没有 consumer ProjectProvider，真实生成必须由 consumer
+composition 提供 typed facts、delegated tool 和 generated/extensions scopes。生成后用 Git diff 审阅。
 
 需要标准服务源码时，在 generation 前按[标准服务 starter](../starters/standard-services.md)执行 source plan 和
 materialize。完整检查见[验证矩阵](verification-matrix.md)。

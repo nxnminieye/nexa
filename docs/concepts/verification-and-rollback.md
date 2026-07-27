@@ -3,8 +3,8 @@
 “命令成功”不是充分证据。验证必须对应当前 module、输入、生成产物和 consumer composition，并根据变更类型
 执行解析、类型检查、编译、测试或真实行为检查。输入、commit、binary 或产物变化后，旧结果不能证明新候选。
 
-Manifest 可以记录来源、generator identity、input digest 和 content digest，用于判断 ownership 与 drift；
-它是生成状态的投影，不是业务配置或批准记录。物化后的 starter source、manual logic 和最终发布决定仍由
+当前 official direct generation 不依赖 ownership manifest。Consumer 以当前 typed facts、声明的
+generated/extensions scopes 和 Git diff 验证结果；物化后的 starter source、extensions 和最终发布决定仍由
 consumer 拥有。
 
 回退也要区分层级：

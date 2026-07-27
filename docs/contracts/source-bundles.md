@@ -65,7 +65,7 @@ old provider baseline + consumer local source + new provider baseline
 
 只有 provider changed 而 local unchanged 时可采用 new；只有 local changed 时保留 local；双方相同变化采用
 该结果；不同变化进入 merge/conflict。Conflict 不由目录 allowlist 或文本猜测自动批准。Clean result 仍需
-通过新 manifest recipe、generation check 和 consumer build/test。
+通过新 manifest recipe、当前 binary inspection、直接 generation、重复生成无 diff 和 consumer build/test。
 
 ## Detach 与 ownership
 

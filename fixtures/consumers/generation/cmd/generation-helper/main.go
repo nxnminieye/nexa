@@ -2,85 +2,28 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/gowebpki/jcs"
+	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 )
 
-const helperVersion = "nexa-generation-helper v1.0.0"
+const helperVersion = "consumer-generation-helper v1.0.0"
 
-type artifactWire struct {
-	Digest string `json:"digest"`
-	ID     string `json:"id"`
-	Path   string `json:"path"`
-	Role   string `json:"role"`
-}
-
-type rpcResult struct {
-	APIVersion   string         `json:"apiVersion"`
-	Artifacts    []artifactWire `json:"artifacts"`
-	GoTestPassed bool           `json:"goTestPassed"`
-	InputDigest  string         `json:"inputDigest"`
-	Kind         string         `json:"kind"`
-	ServiceID    string         `json:"serviceId"`
-}
-
-type apiResult struct {
-	APIVersion    string         `json:"apiVersion"`
-	Artifacts     []artifactWire `json:"artifacts"`
-	CoreServiceID string         `json:"coreServiceId"`
-	GoTestPassed  bool           `json:"goTestPassed"`
-	InputDigest   string         `json:"inputDigest"`
-	Kind          string         `json:"kind"`
-}
-
-type protocolDocument struct {
-	APIVersion string         `json:"apiVersion"`
-	Files      []protocolFile `json:"files"`
-	Kind       string         `json:"kind"`
-	ServiceID  string         `json:"serviceId"`
-}
-
-type protocolFile struct {
-	Enums    []protocolEnum    `json:"enums"`
-	Messages []protocolMessage `json:"messages"`
-	Path     string            `json:"path"`
-}
-
-type protocolEnum struct {
-	FullName string              `json:"fullName"`
-	Values   []protocolEnumValue `json:"values"`
-}
-
-type protocolEnumValue struct {
-	Name   string `json:"name"`
-	Number int    `json:"number"`
-}
-
-type protocolMessage struct {
-	Fields   []protocolField `json:"fields"`
-	FullName string          `json:"fullName"`
-}
-
-type protocolField struct {
-	Cardinality string       `json:"cardinality"`
-	FullName    string       `json:"fullName"`
-	Presence    string       `json:"presence"`
-	Type        protocolType `json:"type"`
-}
-
-type protocolType struct {
-	Kind string `json:"kind"`
-	Name string `json:"name,omitempty"`
+var outputs = map[string]map[string]string{
+	"rpc": {
+		"backend/account/generated/account.generated.proto": "syntax = \"proto3\";\npackage generated.account.v1;\nmessage Account { string name = 1; }\n",
+		"backend/account/generated/account.generated.go":    "package generated\n\ntype Account struct{ Name string }\n",
+	},
+	"api": {
+		"backend/core/generated/core.generated.api": "syntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-api/v1\")\ntype GeneratedHealthRequest {}\ntype GeneratedHealthResponse { OK bool }\n@server (nexaOperationId: \"generated.health\" nexaAuthMode: \"none\")\nservice generated-api { @handler generatedHealth get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse) }\n",
+		"backend/core/generated/core.generated.go":  "package generated\n\nconst HealthPath = \"/generated/health\"\n",
+	},
 }
 
 func main() {
@@ -88,253 +31,49 @@ func main() {
 		fmt.Println(helperVersion)
 		return
 	}
+	if len(os.Args) != 5 || os.Args[2] != "generate" || os.Args[3] != "--service" {
+		fatal("invalid arguments")
+	}
+	family, service := os.Args[1], os.Args[4]
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		panic(err)
+		fatal(err.Error())
 	}
-	root, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	if len(os.Args) == 4 && os.Args[1] == "generate" && os.Args[2] == "--service" {
-		if _, err := os.Stdout.Write(generateRPC(root, os.Args[3], input)); err != nil {
-			panic(err)
-		}
-		return
-	}
-	if len(os.Args) != 5 || os.Args[2] != "generate" {
-		panic("invalid helper arguments")
-	}
-	var output []byte
-	switch os.Args[1] {
-	case "rpc":
-		if os.Args[3] != "--service" {
-			panic("invalid RPC arguments")
-		}
-		output = generateRPC(root, os.Args[4], input)
-	case "api":
-		if os.Args[3] != "--core-service" {
-			panic("invalid API arguments")
-		}
-		output = generateAPI(root, os.Args[4], input)
-	default:
-		panic("unknown helper mode")
-	}
-	if _, err := os.Stdout.Write(output); err != nil {
-		panic(err)
-	}
-}
-
-func generateRPC(root, service string, input []byte) []byte {
 	canonical, err := jcs.Transform(input)
 	if err != nil || !bytes.Equal(canonical, input) {
-		panic("invalid protocol input")
+		fatal("facts are not canonical JSON")
 	}
-	var document protocolDocument
-	if err := json.Unmarshal(input, &document); err != nil || document.APIVersion != genprotocol.APIVersion || document.Kind != genprotocol.Kind || document.ServiceID != service {
-		panic("invalid protocol input")
+	var identity struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		ServiceID  string `json:"serviceId"`
 	}
-	if file, ok := crudProtocolFile(document, service); ok {
-		return generateCRUDRPC(root, service, input, file)
+	if err := json.Unmarshal(input, &identity); err != nil {
+		fatal("facts are invalid JSON")
 	}
-	files := map[string][]byte{
-		"backend/" + service + "/generated/" + service + ".proto":   []byte("syntax = \"proto3\";\npackage generated." + service + ".v1;\noption go_package = \"example.com/nexa-generation-consumer/backend/" + service + "/generated;generated\";\nmessage GeneratedContract {}\n"),
-		"backend/" + service + "/internal/pb/" + service + ".pb.go": []byte("// Code generated by the consumer RPC helper. DO NOT EDIT.\npackage accountpb\n\ntype GeneratedAccount struct { ID string }\n"),
-	}
-	artifacts := make([]artifactWire, 0, len(files))
-	for name, content := range files {
-		write(root, name, content)
-		artifacts = append(artifacts, artifactWire{Digest: digest(content), ID: "rpc." + strings.TrimPrefix(filepath.Ext(name), "."), Path: filepath.ToSlash(name), Role: "generated"})
-	}
-	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].ID < artifacts[j].ID })
-	return marshal(rpcResult{APIVersion: "nexa.dev/rpc-go-result/v1", Artifacts: artifacts, GoTestPassed: true, InputDigest: digest(input), Kind: "RPCGoResult", ServiceID: service})
-}
-
-func generateCRUDRPC(root, service string, input []byte, file protocolFile) []byte {
-	content := renderProtocolIRGo(file, crudPBPackage(service))
-	artifactPath := "backend/" + service + "/internal/pb/" + service + ".crud.generated.pb.go"
-	write(root, artifactPath, content)
-	return marshal(rpcResult{APIVersion: "nexa.dev/rpc-go-result/v1", Artifacts: []artifactWire{{Digest: digest(content), ID: "rpc.crud", Path: artifactPath, Role: "generated"}}, GoTestPassed: true, InputDigest: digest(input), Kind: "RPCGoResult", ServiceID: service})
-}
-
-func crudProtocolFile(document protocolDocument, service string) (protocolFile, bool) {
-	want := "backend/" + service + "/desc/" + service + ".crud.generated.proto"
-	for _, file := range document.Files {
-		if file.Path == want {
-			return file, true
+	switch family {
+	case "rpc":
+		if identity.APIVersion != genprotocol.APIVersion || identity.Kind != genprotocol.Kind || identity.ServiceID != service {
+			fatal("RPC facts do not match the selected service")
 		}
-	}
-	return protocolFile{}, false
-}
-
-func crudPBPackage(service string) string {
-	if service == "accounts" {
-		return "accountspb"
-	}
-	return strings.ReplaceAll(service, "-", "") + "pb"
-}
-
-func renderProtocolIRGo(file protocolFile, packageName string) []byte {
-	var result strings.Builder
-	result.WriteString("// Code generated by the consumer RPC helper. DO NOT EDIT.\n// source: " + file.Path + "\n\npackage " + packageName + "\n\n")
-	for _, enum := range file.Enums {
-		name := protocolGoName(enum.FullName)
-		fmt.Fprintf(&result, "type %s int32\n\nconst (\n", name)
-		for _, value := range enum.Values {
-			fmt.Fprintf(&result, "\t%s_%s %s = %d\n", name, value.Name, name, value.Number)
+	case "api":
+		if identity.APIVersion != httpapi.APIVersion || identity.Kind != httpapi.Kind || service != "core" {
+			fatal("API facts do not match the selected service")
 		}
-		result.WriteString(")\n\n")
-	}
-	for _, message := range file.Messages {
-		name := protocolGoName(message.FullName)
-		fmt.Fprintf(&result, "type %s struct {\n", name)
-		for _, field := range message.Fields {
-			fmt.Fprintf(&result, "\t%s %s\n", protoFieldGoName(field.FullName), protocolFieldType(field, false))
-		}
-		result.WriteString("}\n\n")
-		for _, field := range message.Fields {
-			fieldName := protoFieldGoName(field.FullName)
-			getterType := protocolFieldType(field, true)
-			fmt.Fprintf(&result, "func (x *%s) Get%s() %s {\n", name, fieldName, getterType)
-			if field.Presence == "explicit" && !strings.HasPrefix(getterType, "*") && !strings.HasPrefix(getterType, "[]") {
-				fmt.Fprintf(&result, "\tif x != nil && x.%s != nil { return *x.%s }\n", fieldName, fieldName)
-			} else {
-				fmt.Fprintf(&result, "\tif x != nil { return x.%s }\n", fieldName)
-			}
-			fmt.Fprintf(&result, "\treturn %s\n}\n\n", protocolZero(getterType))
-		}
-	}
-	return []byte(result.String())
-}
-
-func protocolFieldType(field protocolField, getter bool) string {
-	base := field.Type.Name
-	if field.Type.Kind == "message" {
-		base = "*" + protocolGoName(base)
-	} else if field.Type.Kind == "enum" {
-		base = protocolGoName(base)
-	} else if base == "bytes" {
-		base = "[]byte"
-	}
-	if field.Cardinality == "repeated" {
-		return "[]" + base
-	}
-	if !getter && field.Presence == "explicit" && !strings.HasPrefix(base, "*") && !strings.HasPrefix(base, "[]") {
-		return "*" + base
-	}
-	return base
-}
-
-func protocolGoName(name string) string {
-	if index := strings.LastIndexByte(name, '.'); index >= 0 {
-		name = name[index+1:]
-	}
-	return protoIdentifierGoName(name)
-}
-
-func protoFieldGoName(fullName string) string {
-	return protocolGoName(fullName)
-}
-
-func protoIdentifierGoName(name string) string {
-	var result strings.Builder
-	upper := true
-	for _, value := range name {
-		if value == '_' {
-			upper = true
-			continue
-		}
-		if upper && value >= 'a' && value <= 'z' {
-			value -= 'a' - 'A'
-		}
-		result.WriteRune(value)
-		upper = false
-	}
-	return result.String()
-}
-
-func protocolZero(typ string) string {
-	if strings.HasPrefix(typ, "*") || strings.HasPrefix(typ, "[]") {
-		return "nil"
-	}
-	if typ == "string" {
-		return `""`
-	}
-	if typ == "bool" {
-		return "false"
-	}
-	return "0"
-}
-
-func generateAPI(root, core string, input []byte) []byte {
-	artifacts := make([]artifactWire, 0)
-	err := filepath.WalkDir(root, func(name string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		extension := filepath.Ext(name)
-		if extension != ".go" && extension != ".api" {
-			return nil
-		}
-		relative, err := filepath.Rel(root, name)
-		if err != nil {
-			return err
-		}
-		relative = filepath.ToSlash(relative)
-		content, err := os.ReadFile(name)
-		if err != nil {
-			return err
-		}
-		artifacts = append(artifacts, artifactWire{Digest: digest(content), ID: apiArtifactID(relative, core), Path: relative, Role: "generated"})
-		return nil
-	})
-	if err != nil {
-		panic(err)
-	}
-	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].ID < artifacts[j].ID })
-	return marshal(apiResult{APIVersion: "nexa.dev/api-go-result/v1", Artifacts: artifacts, CoreServiceID: core, GoTestPassed: true, InputDigest: digest(input), Kind: "APIGoResult"})
-}
-
-func apiArtifactID(name, core string) string {
-	switch {
-	case name == "backend/"+core+"/desc/generated/"+core+".generated.api":
-		return "api.aggregate." + core
-	case strings.Contains(name, "/desc/generated/") && strings.HasSuffix(name, ".generated.api"):
-		return "api." + strings.TrimSuffix(filepath.Base(name), ".generated.api")
-	case strings.HasSuffix(name, "/client.generated.go"):
-		return "client." + filepath.Base(filepath.Dir(name))
-	case strings.HasSuffix(name, "/errors.generated.go"):
-		return "errors." + filepath.Base(filepath.Dir(name))
-	case strings.HasSuffix(name, "/mapper.generated.go"):
-		return "mapper." + filepath.Base(filepath.Dir(name))
-	case strings.Contains(name, "/internal/logic/rpcproxy/"):
-		return "logic." + strings.ReplaceAll(strings.TrimSuffix(filepath.Base(name), ".generated.go"), "-", ".")
-	case strings.HasSuffix(name, "/internal/rpcproxy/generated/register.generated.go"):
-		return "register"
 	default:
-		panic("unrecognized staged API artifact: " + name)
+		fatal("unknown generation family")
+	}
+	for name, content := range outputs[family] {
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			fatal(err.Error())
+		}
+		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
+			fatal(err.Error())
+		}
 	}
 }
 
-func write(root, name string, content []byte) {
-	filename := filepath.Join(root, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(filename), 0o700); err != nil {
-		panic(err)
-	}
-	if err := os.WriteFile(filename, content, 0o600); err != nil {
-		panic(err)
-	}
-}
-
-func digest(content []byte) string {
-	value := sha256.Sum256(content)
-	return "sha256:" + hex.EncodeToString(value[:])
-}
-
-func marshal(value any) []byte {
-	data, err := json.Marshal(value)
-	if err != nil {
-		panic(err)
-	}
-	return data
+func fatal(message string) {
+	fmt.Fprintln(os.Stderr, message)
+	os.Exit(1)
 }

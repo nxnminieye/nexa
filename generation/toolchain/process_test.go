@@ -68,6 +68,44 @@ func TestExecRunnerProjectsStableNonzeroErrorWithoutPollutedOutput(t *testing.T)
 	}
 }
 
+func TestExecRunnerRunDirectUsesRepositoryAndKeepsPartialFailure(t *testing.T) {
+	request := validDirectRequest(t)
+	request.Args = []string{"report", "direct-arg"}
+	request.Stdin = []byte("direct-input")
+	result, err := toolchain.NewExecRunner().RunDirect(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report publicRunnerReport
+	if err := json.Unmarshal(result.Stdout, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Cwd != request.RepositoryRoot || report.Stdin != "direct-input" || len(report.Args) != 1 || report.Args[0] != "direct-arg" {
+		t.Fatalf("direct process report = %#v", report)
+	}
+
+	request.Args = []string{"write-exit", "partial.go", "9"}
+	result, err = toolchain.NewExecRunner().RunDirect(context.Background(), request)
+	if err != nil || result.ExitCode != 9 {
+		t.Fatalf("direct partial result = %#v, %v", result, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(request.RepositoryRoot, "partial.go")); err != nil || string(content) != "partial" {
+		t.Fatalf("partial output = %q, %v", content, err)
+	}
+}
+
+func TestExecRunnerRunDirectProjectsProbeCancellation(t *testing.T) {
+	request := validDirectRequest(t)
+	request.Tool.Probe.Args = publicHelperArgs("block")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := toolchain.NewExecRunner().RunDirect(ctx, request)
+	var got *toolchain.Error
+	if !errors.As(err, &got) || got.Code() != "tool_canceled" || got.Stage() != "probe" || got.Reason() != "cancelled" {
+		t.Fatalf("probe cancellation = %#v", err)
+	}
+}
+
 func validPublicRequest(t *testing.T) toolchain.Request {
 	t.Helper()
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -101,6 +139,18 @@ func validPublicRequest(t *testing.T) toolchain.Request {
 	}
 }
 
+func validDirectRequest(t *testing.T) toolchain.Request {
+	t.Helper()
+	request := validPublicRequest(t)
+	request.StagingRoot = request.RepositoryRoot
+	request.WorkDir = request.RepositoryRoot
+	request.Tool.InputScopes = []string{"repository"}
+	request.Tool.WriteScopes = []string{"repository"}
+	request.Tool.Environment = []toolchain.EnvironmentRule{{Name: "NEXA_PUBLIC_RUNNER_HELPER", Source: toolchain.EnvironmentFixed, FixedValue: "1"}}
+	request.Environment = []toolchain.EnvVar{{Name: "NEXA_PUBLIC_RUNNER_HELPER", Value: "1"}}
+	return request
+}
+
 type publicRunnerReport struct {
 	Args    []string `json:"args"`
 	Ambient string   `json:"ambient"`
@@ -128,6 +178,12 @@ func runPublicRunnerHelper() int {
 		}
 		code, _ := strconv.Atoi(args[1])
 		return code
+	case "write-exit":
+		_ = os.WriteFile(args[1], []byte("partial"), 0o644)
+		code, _ := strconv.Atoi(args[2])
+		return code
+	case "block":
+		select {}
 	default:
 		return 91
 	}

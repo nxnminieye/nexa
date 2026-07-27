@@ -9,7 +9,7 @@ Nexa 使用不同层次的测试证明不同主张。任何单一测试都不能
 | Unit | constructor、value object、错误和局部算法 | 外部 module 可用或生成物可编译 | owner package 的 `*_test.go` |
 | Strict parser/schema | version、字段闭合、canonical round-trip 和无效输入拒绝 | 业务语义选择正确 | contract package tests |
 | External consumer | public import 不依赖 `internal`，最小调用可编译运行 | 特定业务仓目录和配置正确 | `fixtures/consumers/*`、`integration/*external*` |
-| Generated output | 生成结果可 parse、typecheck、compile，ownership 可验证 | 生成前的业务决定正确 | `generation/*` 与 generation integration tests |
+| Generated output | 直接生成结果可 parse、typecheck、compile，扩展目录不受影响 | 生成前的业务决定正确 | `generation/*` 与 generation integration tests |
 | Optional composition | 缺席 package/plugin/provider 时基础组合仍成立 | 被选择能力的线上依赖可用 | unlinked/minimum/optional tests |
 | Integration | facts、CLI、source、generation 和 runtime 的跨包行为 | 部署、数据库和远端系统健康 | `integration` |
 
@@ -31,13 +31,14 @@ Nexa 使用不同层次的测试证明不同主张。任何单一测试都不能
 
 ## 生成验证
 
-Generator 应在独立 staging 中验证完整候选：
+Generator 的完整闭环应验证：
 
 1. owner facts 和 versioned IR 可 strict load；
 2. rendered Proto/`.api`/Go 可由真实 parser 或 toolchain 接受；
-3. generated Go 在隔离 module context 中 typecheck/compile；
-4. plan 中的 sources、target 和 ownership 在发布前仍未漂移；
-5. manual file 默认不被重复生成覆盖，显式 overwrite 绑定旧内容。
+3. 只清空并重建声明的 generated scopes，extensions scopes 保持不变；
+4. delegated tool 失败返回非零，已经产生的部分变更留给 Git diff 审阅或 Git restore 恢复；
+5. generated Go 在 consumer module context 中 typecheck/compile；
+6. 第二次生成不产生 Git diff。
 
 测试不把一次成功写入解释为部署成功，也不建立同一 worktree 并发生成的支持承诺。
 

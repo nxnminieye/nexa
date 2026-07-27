@@ -39,10 +39,11 @@ projection。具体 ownership 见[业务事实](../contracts/business-facts.md)�
 
 ## IR 与 generation
 
-`generation/*` 把 owner facts 投影为 Entity、Protocol、HTTP API、Composition 和 CRUD 等 versioned IR，
-然后形成普通源码和 manifest。Project provider 只定位 consumer 入口并绑定受控工具，不复制业务事实。
+当前 official generation 把 typed RPC/API owner facts 投影为 Protocol、HTTP API 和 Composition IR，再通过
+受信任 direct tool 形成普通源码。Project provider 只定位 consumer 入口、声明 generated/extensions scopes
+并绑定工具，不复制业务事实。
 
-生成生命周期、staging、manual/generated ownership 与 CRUD 行为由
+直接生成、replace-tree、generated/extensions 路径隔离与失败语义由
 [受控生成](../contracts/controlled-generation.md)统一说明。架构层不维护命令或 flag 清单。
 
 ## Source 与 starter

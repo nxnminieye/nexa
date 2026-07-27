@@ -47,14 +47,14 @@ Machine document 的 owner package 同时拥有 Go type、strict parse、schema 
 Consumer 应保存并校验 `apiVersion`，拒绝 unknown field、错误类型和不完整 document；不能根据 Markdown
 重建 schema。Schema accessor 返回的 bytes 只描述协议，不授权 repository write 或业务决策。
 
-## Generated 与 manual source
+## Generated 与 extensions source
 
-Generated artifact 的稳定身份来自 owner、artifact id、input digest、content digest 和 manifest。Generator
-只能更新能证明归属的 generated file。Manual logic 默认只在文件缺失时创建；显式 overwrite 是直接覆盖，
-且必须绑定 plan 时看到的旧内容，写入前发现漂移就停止。
+当前 official generation 的稳定边界是 typed input、声明的 generated/extensions scopes、direct tool 协议
+和确定性输出。Generator 校验路径边界后直接清空并重建 generated 目录，不维护 ownership manifest、plan、
+staging、manual create-once 或 overwrite 契约。
 
-Materialized starter source 与 manual logic 都归 consumer。框架不会解释 Git diff，也不会自动决定业务方
-是否接受新版本差异。
+Materialized starter source、generated output 和 extensions 都归 consumer。Extensions 必须位于 generated
+scopes 外且不受 generator 影响；框架不会解释 Git diff，也不会自动决定业务方是否接受新版本差异。
 
 ## 可选与实验性组合
 

@@ -3,16 +3,14 @@
 AI 从业务事实走到文件写入，中间必须经过能力发现、输入验证、影响分析和写后验证。一次受控生成的基本方向是：
 
 ```text
-owner facts -> strict load -> versioned IR -> complete plan
-            -> isolated staging and validation -> input/target recheck
-            -> bounded file publish -> manifest written last
+owner facts -> strict load -> canonical typed document
+            -> generated/extensions scope validation
+            -> replace generated tree -> direct tool -> Git diff and tests
 ```
 
-IR 用来隔离 parser 与 generator，是可重建投影，不是第二份业务配置。Plan 应让调用方看清 create、update、
-delete 和 conflict；写入前必须重新确认输入、目标与 generated/manual ownership。生成器只能更新能够证明由
-自己管理的文件，未知文件和 consumer 已接管的 manual logic 不能被顺手覆盖。
+IR 用来隔离 parser 与 generator，是可重建投影，不是第二份业务配置。整个声明 generated 目录是唯一替换
+单元；extensions 和其他人工源码必须位于其外部。
 
-发布采用普通文件写入语义。若中途失败，保留真实错误并从当前工作树重新计算；不把部分完成解释为成功，
-也不依靠隐藏的流程状态继续推进。
+生成采用普通文件写入语义。若中途失败，返回非零并保留部分变化；使用方通过 Git diff 审阅和恢复。
 
-精确 plan/check/write 和 staging 行为见[受控生成契约](../contracts/controlled-generation.md)。
+精确 direct generation 和 replace-tree 行为见[受控生成契约](../contracts/controlled-generation.md)。

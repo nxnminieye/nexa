@@ -31,11 +31,11 @@ Service Source Provider 也是工程期对象：它发布 immutable source tree�
 
 ## Strict schema 与受控生成
 
-Machine contracts 使用 versioned、closed schema 和 canonical JSON。生成采用 plan/check/write：先从当前
-facts 建立完整候选，在 invocation-local staging 中 parse/typecheck/compile，再检查输入和目标未漂移，
-最后按文件发布。失败报告真实错误并清理本次 staging；下次从当前工作树重新计划。
+Machine contracts 使用 versioned、closed schema 和 canonical JSON。生成器校验 typed facts 和声明路径后，
+直接清空并重建整个 generated scope，再由 consumer 选择的本地 tool 写入普通源码。失败返回非零并保留
+部分变化；使用方通过 Git diff 审阅，通过 Git restore 恢复。
 
-同一 worktree 的生成由调用方串行调度。Nexa 不为该低频本地流程提供事务锁、旧事务重放或自动恢复。
+Nexa 不为该低频本地流程提供 staging、事务锁、旧事务重放、ownership 跟踪或自动恢复。
 
 ## Behavior tests
 
