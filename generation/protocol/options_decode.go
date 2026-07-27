@@ -60,6 +60,15 @@ func decodeHTTPProxy(value protoreflect.Message, method protoreflect.MethodDescr
 	boundFields := make(map[string]struct{}, len(state.requestFields))
 	for _, binding := range state.requestFields {
 		boundFields[binding.httpField] = struct{}{}
+		field, fieldErr := resolveRPCField(method.Input(), rpcPathName(method.Input(), binding.rpcPath))
+		if fieldErr != nil {
+			return nil, optionError(method, "rpc_field_unresolved")
+		}
+		complex := field.Cardinality() == protoreflect.Repeated || field.Kind() == protoreflect.MessageKind
+		_, pathBound := pathVariables[binding.httpField]
+		if complex && (pathBound || state.method == MethodGET || state.method == MethodDELETE) {
+			return nil, optionError(method, "body_binding_required")
+		}
 	}
 	if !pathVariablesBound(pathVariables, boundFields) {
 		return nil, optionError(method, "path_binding_mismatch")
@@ -137,6 +146,13 @@ func decodeRequestFields(value protoreflect.Message, method protoreflect.MethodD
 		binding := &requestFieldState{httpField: stringValue(item, "http_field")}
 		if !httpFieldName.MatchString(binding.httpField) {
 			return nil, optionError(method, "http_field_invalid")
+		}
+		terminal, terminalErr := resolveRPCField(method.Input(), stringValue(item, "rpc_field"))
+		if terminalErr != nil {
+			return nil, optionError(method, "rpc_field_unresolved")
+		}
+		if !supportedBindingTerminal(terminal) {
+			return nil, optionError(method, "binding_terminal_unsupported")
 		}
 		var err error
 		binding.rpcPath, err = resolveRPCPath(method.Input(), stringValue(item, "rpc_field"))
@@ -238,6 +254,13 @@ func decodeResponseFields(value protoreflect.Message, method protoreflect.Method
 		if !httpFieldName.MatchString(binding.httpField) {
 			return nil, optionError(method, "http_field_invalid")
 		}
+		terminal, terminalErr := resolveRPCField(method.Output(), stringValue(item, "rpc_field"))
+		if terminalErr != nil {
+			return nil, optionError(method, "rpc_field_unresolved")
+		}
+		if !supportedBindingTerminal(terminal) {
+			return nil, optionError(method, "binding_terminal_unsupported")
+		}
 		var err error
 		binding.rpcPath, err = resolveRPCPath(method.Output(), stringValue(item, "rpc_field"))
 		if err != nil {
@@ -312,11 +335,49 @@ func resolveRPCPath(root protoreflect.MessageDescriptor, value string) ([]string
 				return nil, errProtocolInvalid
 			}
 			current = field.Message()
-		} else if field.Cardinality() == protoreflect.Repeated || field.IsMap() || field.Message() != nil {
+		} else if !supportedBindingTerminal(field) {
 			return nil, errProtocolInvalid
 		}
 	}
 	return result, nil
+}
+
+func supportedBindingTerminal(field protoreflect.FieldDescriptor) bool {
+	if field == nil || field.IsMap() {
+		return false
+	}
+	if oneof := field.ContainingOneof(); oneof != nil && !oneof.IsSynthetic() {
+		return false
+	}
+	switch field.Kind() {
+	case protoreflect.BoolKind, protoreflect.EnumKind, protoreflect.StringKind, protoreflect.BytesKind,
+		protoreflect.DoubleKind, protoreflect.FloatKind, protoreflect.Int32Kind, protoreflect.Sint32Kind,
+		protoreflect.Sfixed32Kind, protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
+		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.Uint64Kind, protoreflect.Fixed64Kind,
+		protoreflect.MessageKind:
+		return true
+	default:
+		return false
+	}
+}
+
+func rpcPathName(root protoreflect.MessageDescriptor, path []string) string {
+	current := root
+	segments := make([]string, 0, len(path))
+	for _, typed := range path {
+		_, numberText, ok := strings.Cut(typed, "#")
+		number, err := strconv.Atoi(numberText)
+		if !ok || err != nil || current == nil {
+			return ""
+		}
+		field := current.Fields().ByNumber(protoreflect.FieldNumber(number))
+		if field == nil {
+			return ""
+		}
+		segments = append(segments, string(field.Name()))
+		current = field.Message()
+	}
+	return strings.Join(segments, ".")
 }
 
 func parseRouteVariables(value string) (map[string]struct{}, bool) {

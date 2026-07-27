@@ -180,6 +180,61 @@ service core-api { @handler health get /health (HealthRequest) returns (HealthRe
 	}
 }
 
+func TestGeneratedRequiredObjectCollectionsSurviveRenderAndManifest(t *testing.T) {
+	method := source(t, "rpc/account.proto", "method:account.v1.Account.Replace", "method")
+	message := source(t, "rpc/account.proto", "message:account.v1.Member", "message")
+	derived := generatedProvenance(t, method, message)
+	stringValue := httpapi.ValueTypeSpec{Kind: httpapi.ValueScalar, Name: "string"}
+	memberRef := httpapi.ValueTypeSpec{Kind: httpapi.ValueRef, Name: "Member"}
+	document, err := httpapi.NewGeneratedDocument(httpapi.GeneratedDocumentSpec{
+		Types: []httpapi.GeneratedTypeSpec{
+			{Name: "Member", Shape: httpapi.ValueTypeSpec{Kind: httpapi.ValueObject}, Provenance: derived, Fields: []httpapi.GeneratedFieldSpec{
+				{Path: []string{"ID"}, Required: true, ValueType: stringValue, Provenance: derived},
+				{Path: []string{"RoleCodes"}, Required: true, ValueType: httpapi.ValueTypeSpec{Kind: httpapi.ValueArray, Element: &stringValue}, Provenance: derived},
+			}},
+			{Name: "ReplaceRequest", Shape: httpapi.ValueTypeSpec{Kind: httpapi.ValueObject}, Provenance: derived, Fields: []httpapi.GeneratedFieldSpec{
+				{Path: []string{"Items"}, Required: true, ValueType: httpapi.ValueTypeSpec{Kind: httpapi.ValueArray, Element: &memberRef}, Binding: &httpapi.BindingSpec{Location: api.RequestBindingBody, Name: "items"}, Provenance: derived},
+				{Path: []string{"RoleCodes"}, Required: true, ValueType: httpapi.ValueTypeSpec{Kind: httpapi.ValueArray, Element: &stringValue}, Binding: &httpapi.BindingSpec{Location: api.RequestBindingBody, Name: "roleCodes"}, Provenance: derived},
+			}},
+			{Name: "ReplaceResponse", Shape: httpapi.ValueTypeSpec{Kind: httpapi.ValueObject}, Provenance: derived, Fields: []httpapi.GeneratedFieldSpec{
+				{Path: []string{"Items"}, Required: true, ValueType: httpapi.ValueTypeSpec{Kind: httpapi.ValueArray, Element: &memberRef}, Provenance: derived},
+			}},
+		},
+		Operations: []httpapi.GeneratedOperationSpec{{ID: "account.replace", Method: api.MethodPOST, Path: "/accounts/replace", RequestType: "ReplaceRequest", ResponseBody: api.ResponseBodyJSON, ResponseType: "ReplaceResponse", Auth: httpapi.AuthSpec{Mode: api.AuthNone}, Provenance: derived}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := httpapi.RenderGenerated(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(rendered, []byte("[]Member `json:\"items\"`")) || !bytes.Contains(rendered, []byte("[]string `json:\"roleCodes\"`")) || bytes.Contains(rendered, []byte("items,optional")) || bytes.Contains(rendered, []byte("roleCodes,optional")) {
+		t.Fatalf("required collection rendering drifted:\n%s", rendered)
+	}
+	if err := httpapi.VerifyRenderedGenerated("generated.api", rendered, document); err != nil {
+		t.Fatal(err)
+	}
+	manifestSpec, err := httpapi.ManifestSpec(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := api.NewManifest(manifestSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, ok := manifest.Schema("replace-request")
+	if !ok {
+		t.Fatal("replace request schema missing")
+	}
+	for _, name := range []string{"Items", "RoleCodes"} {
+		field, exists := request.Field(name)
+		if !exists || !field.Required() {
+			t.Fatalf("manifest field %s = %#v, %v", name, field, exists)
+		}
+	}
+}
+
 func TestManifestSpecRejectsMapWithoutChangingWireShape(t *testing.T) {
 	a := source(t, "rpc/sample.proto", "message:A", "a")
 	b := source(t, "project/services.yaml", "service:sample.capability:nexa.dev/sample", "b")

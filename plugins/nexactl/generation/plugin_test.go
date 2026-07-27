@@ -84,6 +84,45 @@ func TestDirectRPCGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T
 	if got.Status != "generated" || got.GeneratedScope != "generated/rpc" {
 		t.Fatalf("result = %#v", got)
 	}
+	wantArgs := []string{"generate", "--service", "sample", "--generated-scope", "generated/rpc"}
+	if !reflect.DeepEqual(runner.request.Args, wantArgs) {
+		t.Fatalf("delegated args = %#v, want %#v", runner.request.Args, wantArgs)
+	}
+	wantStdin, err := genprotocol.CanonicalJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runner.request.Stdin, wantStdin) {
+		t.Fatal("delegated RPC stdin is not canonical ProtocolIR")
+	}
+}
+
+func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
+	repository := t.TempDir()
+	tool := directTool("consumer.api")
+	document := apiDocument(t, repository)
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			Facts: document, Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
+		}}}},
+	}
+	runner := &testRunner{writePath: "generated/api/sample.go", writeData: []byte("package apigenerated\n")}
+	command := generationCommand(t, provider, runner, "api")
+	if _, err := command.Run(context.Background(), invocation(repository)); err != nil {
+		t.Fatal(err)
+	}
+	wantArgs := []string{"generate", "--service", "sample", "--generated-scope", "generated/api"}
+	if !reflect.DeepEqual(runner.request.Args, wantArgs) {
+		t.Fatalf("delegated args = %#v, want %#v", runner.request.Args, wantArgs)
+	}
+	wantStdin, err := httpapi.CanonicalJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runner.request.Stdin, wantStdin) {
+		t.Fatal("delegated API stdin is not canonical HTTP API IR")
+	}
 }
 
 func TestDirectGenerationFailureKeepsPartialChanges(t *testing.T) {
@@ -142,9 +181,11 @@ type testRunner struct {
 	writePath string
 	writeData []byte
 	exitCode  int
+	request   toolchain.Request
 }
 
 func (r *testRunner) Run(_ context.Context, request toolchain.Request) (toolchain.Result, error) {
+	r.request = request
 	if r.writePath != "" {
 		if err := os.WriteFile(filepath.Join(request.RepositoryRoot, filepath.FromSlash(r.writePath)), r.writeData, 0o644); err != nil {
 			return toolchain.Result{}, err

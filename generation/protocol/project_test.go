@@ -150,6 +150,115 @@ func TestRouteVariablesAllowAdditionalRequestFields(t *testing.T) {
 	}
 }
 
+func TestCompileAcceptsBodyCollectionsAndObjectTerminals(t *testing.T) {
+	source := `syntax = "proto3";
+package sample.v1;
+import "nexa/protocol/v1/options.proto";
+message Settings { string locale = 1; repeated string groups = 2; }
+message Item { string id = 1; repeated string role_codes = 2; Settings settings = 3; }
+message Request { repeated string role_codes = 1; Settings settings = 2; repeated Item items = 3; }
+message Response { int64 total = 1; repeated Item items = 2; }
+service SampleService {
+  rpc Replace(Request) returns (Response) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "sample.replace" method: POST path: "/samples"
+      auth: { mode: NONE }
+      request_fields: { http_field: "roleCodes" rpc_field: "role_codes" }
+      request_fields: { http_field: "settings" rpc_field: "settings" }
+      request_fields: { http_field: "items" rpc_field: "items" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+    };
+  }
+}`
+	document := compileProtocol(t, source)
+	method, ok := document.Method("sample.v1.SampleService.Replace")
+	if !ok {
+		t.Fatal("method missing")
+	}
+	proxy, ok := method.HTTPProxy()
+	if !ok || len(proxy.RequestFields()) != 3 || len(proxy.ResponseFields()) != 2 {
+		t.Fatalf("HTTP proxy = %#v, %v", proxy, ok)
+	}
+}
+
+func TestCompileRejectsCollectionAndObjectOutsideBody(t *testing.T) {
+	base := `syntax = "proto3";
+package sample.v1;
+import "nexa/protocol/v1/options.proto";
+message Item { string id = 1; }
+message Request { repeated string values = 1; Item item = 2; }
+message Response { string ok = 1; }
+service SampleService {
+  rpc Get(Request) returns (Response) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "sample.get" method: GET path: "/samples"
+      auth: { mode: NONE }
+      request_fields: { http_field: "values" rpc_field: "values" }
+      request_fields: { http_field: "item" rpc_field: "item" }
+      response_fields: { rpc_field: "ok" http_field: "ok" }
+    };
+  }
+}`
+	_, err := protocol.Compile(context.Background(), compileOptions(base))
+	owner, ok := err.(*protocol.Error)
+	if !ok || owner.Reason() != "body_binding_required" {
+		t.Fatalf("query collection error = %#v", err)
+	}
+	pathSource := strings.Replace(base, `method: GET path: "/samples"`, `method: POST path: "/samples/{values}"`, 1)
+	_, err = protocol.Compile(context.Background(), compileOptions(pathSource))
+	owner, ok = err.(*protocol.Error)
+	if !ok || owner.Reason() != "body_binding_required" {
+		t.Fatalf("path collection error = %#v", err)
+	}
+}
+
+func TestCompileRejectsUnsupportedBindingTerminals(t *testing.T) {
+	for name, declaration := range map[string]string{
+		"map":   "map<string, string> value = 1;",
+		"oneof": "oneof choice { string value = 1; int64 other = 2; }",
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := `syntax = "proto3";
+package sample.v1;
+import "nexa/protocol/v1/options.proto";
+message Request { ` + declaration + ` }
+message Response { string ok = 1; }
+service SampleService { rpc Put(Request) returns (Response) {
+  option (nexa.protocol.v1.http_proxy) = { operation_id: "sample.put" method: POST path: "/samples" auth: { mode: NONE }
+    request_fields: { http_field: "value" rpc_field: "value" }
+    response_fields: { rpc_field: "ok" http_field: "ok" }
+  };
+} }`
+			_, err := protocol.Compile(context.Background(), compileOptions(source))
+			owner, ok := err.(*protocol.Error)
+			if !ok || owner.Reason() != "binding_terminal_unsupported" {
+				t.Fatalf("Compile() error = %#v", err)
+			}
+		})
+	}
+}
+
+func TestCompileRejectsRepeatedIntermediateTraversal(t *testing.T) {
+	source := `syntax = "proto3";
+package sample.v1;
+import "nexa/protocol/v1/options.proto";
+message Item { string id = 1; }
+message Request { repeated Item items = 1; }
+message Response { string ok = 1; }
+service SampleService { rpc Put(Request) returns (Response) {
+  option (nexa.protocol.v1.http_proxy) = { operation_id: "sample.put" method: POST path: "/samples" auth: { mode: NONE }
+    request_fields: { http_field: "id" rpc_field: "items.id" }
+    response_fields: { rpc_field: "ok" http_field: "ok" }
+  };
+} }`
+	_, err := protocol.Compile(context.Background(), compileOptions(source))
+	owner, ok := err.(*protocol.Error)
+	if !ok || owner.Reason() != "rpc_field_unresolved" {
+		t.Fatalf("Compile() error = %#v", err)
+	}
+}
+
 func TestCompileRejectsInvalidHTTPProxySemantics(t *testing.T) {
 	tests := []struct {
 		name, source, reason string

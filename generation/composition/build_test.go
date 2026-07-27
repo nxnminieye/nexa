@@ -267,6 +267,174 @@ service AccountService {
 	assertCompositionError(t, err, "generated_identifier_collision")
 }
 
+func TestBuildProjectsAcyclicNamedObjectAndCollectionClosure(t *testing.T) {
+	document, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, objectProtocolSource())}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	generated, err := composition.GeneratedAPI(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"AccountAccountV1Member", "AccountAccountV1Settings"} {
+		if _, ok := generated.Type(name); !ok {
+			t.Fatalf("projected type %q missing", name)
+		}
+	}
+	counts := map[string]int{}
+	for _, value := range generated.Types() {
+		counts[value.Name()]++
+	}
+	if counts["AccountAccountV1Member"] != 1 || counts["AccountAccountV1Settings"] != 1 {
+		t.Fatalf("projected identity counts = %#v", counts)
+	}
+	operation, ok := generated.Operation("account.replace")
+	if !ok {
+		t.Fatal("operation missing")
+	}
+	request, _ := generated.Type(operation.RequestType())
+	roles, ok := request.Field("RoleCodes")
+	if !ok || !roles.Required() || roles.ValueType().Kind() != httpapi.ValueArray {
+		t.Fatalf("required roleCodes = %#v, %v", roles, ok)
+	}
+	settings, ok := request.Field("Settings")
+	if !ok || !settings.Required() || settings.ValueType().Kind() != httpapi.ValueRef || settings.ValueType().Name() != "AccountAccountV1Settings" {
+		t.Fatalf("required settings = %#v, %v", settings, ok)
+	}
+	response, _ := generated.Type(operation.ResponseType())
+	items, ok := response.Field("Items")
+	itemType, itemOK := items.ValueType().Element()
+	if !ok || !items.Required() || items.ValueType().Kind() != httpapi.ValueArray || !itemOK || itemType.Kind() != httpapi.ValueRef || itemType.Name() != "AccountAccountV1Member" {
+		t.Fatalf("items = %#v, %v", items, ok)
+	}
+	member, _ := generated.Type("AccountAccountV1Member")
+	roleCodes, ok := member.Field("RoleCodes")
+	roleCodeType, roleCodeOK := roleCodes.ValueType().Element()
+	if !ok || roleCodes.ValueType().Kind() != httpapi.ValueArray || !roleCodeOK || roleCodeType.Name() != "string" {
+		t.Fatalf("member roleCodes = %#v, %v", roleCodes, ok)
+	}
+	memberSettings, ok := member.Field("Settings")
+	settingsType, settingsOK := memberSettings.ValueType().Element()
+	if !ok || memberSettings.ValueType().Kind() != httpapi.ValueOptional || !settingsOK || settingsType.Kind() != httpapi.ValueRef || settingsType.Name() != "AccountAccountV1Settings" {
+		t.Fatalf("member settings = %#v, %v", memberSettings, ok)
+	}
+}
+
+func TestBuildRejectsRecursiveProjectedMessageGraph(t *testing.T) {
+	source := strings.Replace(objectProtocolSource(), "message Settings { string locale = 1; }", "message Settings { string locale = 1; Settings child = 2; }", 1)
+	_, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, source)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	assertCompositionError(t, err, "message_graph_recursive")
+}
+
+func TestBuildRejectsProjectedTypeCollisionWithOperationType(t *testing.T) {
+	source := strings.ReplaceAll(objectProtocolSource(), "Member", "MemberRequest")
+	source = strings.Replace(source, `operation_id: "account.replace"`, `operation_id: "account.account-v1.member"`, 1)
+	_, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, source)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	assertCompositionError(t, err, "native_type_collision")
+}
+
+func TestBuildRejectsAncestorDescendantProjectedNameCollision(t *testing.T) {
+	source := `syntax = "proto3";
+package account.v1;
+import "nexa/protocol/v1/options.proto";
+message AB { string value = 1; }
+message A_B { AB child = 1; }
+message ReplaceRequest { A_B item = 1; }
+message ReplaceResponse { string result = 1; }
+service AccountService {
+  rpc Replace(ReplaceRequest) returns (ReplaceResponse) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "account.replace" method: POST path: "/accounts/replace"
+      auth: { mode: NONE }
+      request_fields: { http_field: "item" rpc_field: "item" }
+      response_fields: { rpc_field: "result" http_field: "result" }
+    };
+  }
+}`
+	_, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, source)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	assertCompositionError(t, err, "projected_type_collision")
+}
+
+func TestBuildRejectsProjectedTypeCollisionWithNativeType(t *testing.T) {
+	root := t.TempDir()
+	nativeSource := `syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+type AccountAccountV1Settings { Locale string }
+type HealthRequest {}
+type HealthResponse { OK bool }
+@server (nexaOperationId: "health.get" nexaAuthMode: "none")
+service core-api { @handler health get /health (HealthRequest) returns (HealthResponse) }`
+	if err := os.WriteFile(filepath.Join(root, "core.api"), []byte(nativeSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "core.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, objectProtocolSource())}, native, composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	assertCompositionError(t, err, "projected_type_collision")
+}
+
+func TestBuildIsolatesSameProtoIdentityAcrossServices(t *testing.T) {
+	source := func(serviceName, operationID, route string) string {
+		return fmt.Sprintf(`syntax = "proto3";
+package shared.v1;
+import "nexa/protocol/v1/options.proto";
+message Payload { repeated string values = 1; }
+message ReplaceRequest { Payload payload = 1; }
+message ReplaceResponse { Payload payload = 1; }
+service %s {
+  rpc Replace(ReplaceRequest) returns (ReplaceResponse) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: %q method: POST path: %q
+      auth: { mode: NONE }
+      request_fields: { http_field: "payload" rpc_field: "payload" }
+      response_fields: { rpc_field: "payload" http_field: "payload" }
+    };
+  }
+}`, serviceName, operationID, route)
+	}
+	account := compileProtocolForService(t, "account", source("AccountService", "account.replace", "/accounts/replace"))
+	billing := compileProtocolForService(t, "billing", source("BillingService", "billing.replace", "/billing/replace"))
+	document, err := composition.Build(objectCatalog(t), []protocol.Document{account, billing}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, err := composition.GeneratedAPI(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"AccountSharedV1Payload", "BillingSharedV1Payload"} {
+		if _, ok := generated.Type(name); !ok {
+			t.Fatalf("isolated projected type %q missing", name)
+		}
+	}
+}
+
+func objectProtocolSource() string {
+	return `syntax = "proto3";
+package account.v1;
+import "nexa/protocol/v1/options.proto";
+message Settings { string locale = 1; }
+message Member { string id = 1; repeated string role_codes = 2; Settings settings = 3; }
+message ReplaceRequest { repeated string role_codes = 1; Settings settings = 2; repeated Member items = 3; }
+message ReplaceResponse { int64 total = 1; repeated Member items = 2; }
+service AccountService {
+  rpc Replace(ReplaceRequest) returns (ReplaceResponse) {
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "account.replace" method: POST path: "/accounts/replace"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "account.replace"
+      request_fields: { http_field: "roleCodes" rpc_field: "role_codes" }
+      request_fields: { http_field: "settings" rpc_field: "settings" }
+      request_fields: { http_field: "items" rpc_field: "items" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+    };
+  }
+}`
+}
+
 func parseCatalog(t *testing.T, selected bool) servicecatalog.Catalog {
 	t.Helper()
 	binding := " []"

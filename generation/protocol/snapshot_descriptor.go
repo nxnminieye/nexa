@@ -124,7 +124,7 @@ func validateSnapshotRPCPath(root string, path []string, index *snapshotDescript
 			return false
 		}
 		if position == len(path)-1 {
-			return field.Cardinality == CardinalitySingular && field.Type.Kind != TypeMap && field.Type.Kind != TypeMessage
+			return field.Type.Kind != TypeMap && field.Presence != PresenceMap && field.Presence != PresenceOneof
 		}
 		if field.Cardinality != CardinalitySingular || field.Type.Kind != TypeMessage || index.messages[field.Type.Name] == nil {
 			return false
@@ -132,4 +132,21 @@ func validateSnapshotRPCPath(root string, path []string, index *snapshotDescript
 		current = field.Type.Name
 	}
 	return false
+}
+
+func snapshotRPCPathTerminal(root string, path []string, index *snapshotDescriptorIndex) (canonicalField, bool) {
+	if !validateSnapshotRPCPath(root, path, index) {
+		return canonicalField{}, false
+	}
+	current := root
+	var terminal canonicalField
+	for _, segment := range path {
+		_, numberText, _ := strings.Cut(segment, "#")
+		number, _ := strconv.Atoi(numberText)
+		terminal = index.messages[current].fields[number]
+		if terminal.Type.Kind == TypeMessage {
+			current = terminal.Type.Name
+		}
+	}
+	return terminal, true
 }

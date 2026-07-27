@@ -8,31 +8,41 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-const schemaURL = "https://nexa.dev/schemas/generation/composition/composition-ir-v1.schema.json"
+const schemaURLV1 = "https://nexa.dev/schemas/generation/composition/composition-ir-v1.schema.json"
+const schemaURLV2 = "https://nexa.dev/schemas/generation/composition/composition-ir-v2.schema.json"
 
 //go:embed composition-ir-v1.schema.json
-var embeddedSchema []byte
+var embeddedSchemaV1 []byte
 
-var schemaOnce sync.Once
-var compiledSchema *jsonschema.Schema
-var schemaError error
+//go:embed composition-ir-v2.schema.json
+var embeddedSchemaV2 []byte
 
-func Schema() []byte { return append([]byte(nil), embeddedSchema...) }
+var schemaOnceV1, schemaOnceV2 sync.Once
+var compiledSchemaV1, compiledSchemaV2 *jsonschema.Schema
+var schemaErrorV1, schemaErrorV2 error
 
-func validateSnapshotSchema(value any) error {
-	schemaOnce.Do(func() {
+func Schema() []byte   { return SchemaV2() }
+func SchemaV1() []byte { return append([]byte(nil), embeddedSchemaV1...) }
+func SchemaV2() []byte { return append([]byte(nil), embeddedSchemaV2...) }
+
+func validateSnapshotSchema(version string, value any) error {
+	embedded, schemaURL, once, compiled, schemaErr := embeddedSchemaV1, schemaURLV1, &schemaOnceV1, &compiledSchemaV1, &schemaErrorV1
+	if version == APIVersionV2 {
+		embedded, schemaURL, once, compiled, schemaErr = embeddedSchemaV2, schemaURLV2, &schemaOnceV2, &compiledSchemaV2, &schemaErrorV2
+	}
+	once.Do(func() {
 		var document any
-		if schemaError = json.Unmarshal(embeddedSchema, &document); schemaError != nil {
+		if *schemaErr = json.Unmarshal(embedded, &document); *schemaErr != nil {
 			return
 		}
 		compiler := jsonschema.NewCompiler()
-		if schemaError = compiler.AddResource(schemaURL, document); schemaError != nil {
+		if *schemaErr = compiler.AddResource(schemaURL, document); *schemaErr != nil {
 			return
 		}
-		compiledSchema, schemaError = compiler.Compile(schemaURL)
+		*compiled, *schemaErr = compiler.Compile(schemaURL)
 	})
-	if schemaError != nil {
-		return schemaError
+	if *schemaErr != nil {
+		return *schemaErr
 	}
-	return compiledSchema.Validate(value)
+	return (*compiled).Validate(value)
 }

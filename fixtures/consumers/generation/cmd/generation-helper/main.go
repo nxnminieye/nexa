@@ -17,12 +17,12 @@ const helperVersion = "consumer-generation-helper v1.0.0"
 
 var outputs = map[string]map[string]string{
 	"rpc": {
-		"backend/account/generated/account.generated.proto": "syntax = \"proto3\";\npackage generated.account.v1;\nmessage Account { string name = 1; }\n",
-		"backend/account/generated/account.generated.go":    "package generated\n\ntype Account struct{ Name string }\n",
+		"account.generated.proto": "syntax = \"proto3\";\npackage generated.account.v1;\nmessage Account { string name = 1; }\n",
+		"account.generated.go":    "package generated\n\ntype Account struct{ Name string }\n",
 	},
 	"api": {
-		"backend/core/generated/core.generated.api": "syntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-api/v1\")\ntype GeneratedHealthRequest {}\ntype GeneratedHealthResponse { OK bool }\n@server (nexaOperationId: \"generated.health\" nexaAuthMode: \"none\")\nservice generated-api { @handler generatedHealth get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse) }\n",
-		"backend/core/generated/core.generated.go":  "package generated\n\nconst HealthPath = \"/generated/health\"\n",
+		"core.generated.api": "syntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-api/v1\")\ntype GeneratedHealthRequest {}\ntype GeneratedHealthResponse { OK bool }\n@server (nexaOperationId: \"generated.health\" nexaAuthMode: \"none\")\nservice generated-api { @handler generatedHealth get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse) }\n",
+		"core.generated.go":  "package generated\n\nconst HealthPath = \"/generated/health\"\n",
 	},
 }
 
@@ -31,10 +31,13 @@ func main() {
 		fmt.Println(helperVersion)
 		return
 	}
-	if len(os.Args) != 5 || os.Args[2] != "generate" || os.Args[3] != "--service" {
+	if len(os.Args) != 7 || os.Args[2] != "generate" || os.Args[3] != "--service" || os.Args[5] != "--generated-scope" {
 		fatal("invalid arguments")
 	}
-	family, service := os.Args[1], os.Args[4]
+	family, service, scope := os.Args[1], os.Args[4], os.Args[6]
+	if scope == "" || filepath.IsAbs(scope) || filepath.Clean(scope) != scope || !filepath.IsLocal(scope) {
+		fatal("invalid generated scope")
+	}
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fatal(err.Error())
@@ -64,6 +67,7 @@ func main() {
 		fatal("unknown generation family")
 	}
 	for name, content := range outputs[family] {
+		name = filepath.Join(scope, name)
 		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 			fatal(err.Error())
 		}

@@ -8,7 +8,10 @@ import (
 	"github.com/nxnminieye/nexa/provenance"
 )
 
-const APIVersion = "nexa.dev/composition-ir/v1"
+const APIVersionV1 = "nexa.dev/composition-ir/v1"
+const APIVersionV2 = "nexa.dev/composition-ir/v2"
+const CurrentAPIVersion = APIVersionV2
+const APIVersion = APIVersionV2
 const Kind = "CompositionIR"
 const CapabilityID = "nexa.dev/generation-api-proxy"
 const CapabilityVersion = "nexa.dev/generation-api-proxy/v1"
@@ -33,6 +36,7 @@ type RenderOptions struct{ CoreRoot string }
 type documentState struct {
 	coreServiceID, consumerModulePath string
 	operations                        []*operationState
+	types                             []*projectedTypeState
 }
 type snapshotState struct{ canonical []byte }
 type snapshotMarker struct{ _ [0]func() }
@@ -57,4 +61,20 @@ type resolvedBinding struct {
 	fields    []protocol.Field
 	valueType httpapi.ValueTypeSpec
 	required  bool
+}
+
+type projectedTypeState struct {
+	name, serviceID, messageFullName string
+	message                          protocol.Message
+	fields                           []*projectedFieldState
+	provenance                       httpapi.NodeProvenance
+}
+
+type projectedFieldState struct {
+	id, protoName, jsonName string
+	number                  int
+	valueType               httpapi.ValueTypeSpec
+	required                bool
+	field                   protocol.Field
+	provenance              httpapi.NodeProvenance
 }

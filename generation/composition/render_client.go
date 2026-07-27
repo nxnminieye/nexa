@@ -32,7 +32,8 @@ func Render(document Document, options RenderOptions) ([]RenderedArtifact, error
 	artifacts := make([]RenderedArtifact, 0)
 	for _, serviceID := range serviceIDs {
 		operations := byService[serviceID]
-		partial := Document{state: &documentState{coreServiceID: document.state.coreServiceID, consumerModulePath: document.state.consumerModulePath, operations: operations}}
+		types := reachableProjectedTypes(document.state.types, operations)
+		partial := Document{state: &documentState{coreServiceID: document.state.coreServiceID, consumerModulePath: document.state.consumerModulePath, operations: operations, types: types}}
 		generated, err := GeneratedAPI(partial)
 		if err != nil {
 			return nil, err
@@ -45,8 +46,9 @@ func Render(document Document, options RenderOptions) ([]RenderedArtifact, error
 		if serviceID == document.state.coreServiceID {
 			apiFile = serviceID + ".proxy.generated.api"
 		}
-		artifacts = append(artifacts, artifact("api."+serviceID, path.Join(options.CoreRoot, "desc/generated", apiFile), apiBytes, sourcesFromHTTP(generated)))
-		client, err := renderClient(serviceID, operations)
+		sources := unionSources(operationSources(operations), typeSources(types))
+		artifacts = append(artifacts, artifact("api."+serviceID, path.Join(options.CoreRoot, "desc/generated", apiFile), apiBytes, sources))
+		client, err := renderClient(serviceID, operations, types)
 		if err != nil {
 			return nil, err
 		}
@@ -59,25 +61,25 @@ func Render(document Document, options RenderOptions) ([]RenderedArtifact, error
 			return nil, err
 		}
 		base := path.Join(options.CoreRoot, "internal/serviceclients", serviceID)
-		sources := operationSources(operations)
 		artifacts = append(artifacts,
 			artifact("client."+serviceID, path.Join(base, "client.generated.go"), client, sources),
 			artifact("mapper."+serviceID, path.Join(base, "mapper.generated.go"), mapper, sources),
-			artifact("errors."+serviceID, path.Join(base, "errors.generated.go"), errors, sources),
+			artifact("errors."+serviceID, path.Join(base, "errors.generated.go"), errors, operationSources(operations)),
 		)
 		for _, operation := range operations {
 			logic, err := renderLogic(document.state.consumerModulePath, options.CoreRoot, operation)
 			if err != nil {
 				return nil, err
 			}
-			artifacts = append(artifacts, artifact("logic."+operation.proxy.OperationID(), path.Join(options.CoreRoot, "internal/logic/rpcproxy", fileID(operation.proxy.OperationID())+".generated.go"), logic, operationSources([]*operationState{operation})))
+			operationTypes := reachableProjectedTypes(document.state.types, []*operationState{operation})
+			artifacts = append(artifacts, artifact("logic."+operation.proxy.OperationID(), path.Join(options.CoreRoot, "internal/logic/rpcproxy", fileID(operation.proxy.OperationID())+".generated.go"), logic, unionSources(operationSources([]*operationState{operation}), typeSources(operationTypes))))
 		}
 	}
 	register, err := renderRegister(document.state.operations)
 	if err != nil {
 		return nil, err
 	}
-	artifacts = append(artifacts, artifact("register", path.Join(options.CoreRoot, "internal/rpcproxy/generated/register.generated.go"), register, operationSources(document.state.operations)))
+	artifacts = append(artifacts, artifact("register", path.Join(options.CoreRoot, "internal/rpcproxy/generated/register.generated.go"), register, unionSources(operationSources(document.state.operations), typeSources(document.state.types))))
 	sort.Slice(artifacts, func(i, j int) bool { return artifacts[i].Path < artifacts[j].Path })
 	return artifacts, nil
 }
@@ -94,11 +96,18 @@ func formatted(source string) ([]byte, error) {
 	return result, nil
 }
 
-func renderClient(serviceID string, operations []*operationState) ([]byte, error) {
+func renderClient(serviceID string, operations []*operationState, types []*projectedTypeState) ([]byte, error) {
 	var source strings.Builder
 	source.WriteString("package " + packageName(serviceID) + "\n\nimport \"context\"\n\n")
 	source.WriteString("type RequestContext struct { SubjectID string; TenantID int64; RequestID string; TraceID string }\n")
 	source.WriteString("type ContextReader interface { Read(context.Context) (RequestContext, error) }\n")
+	for _, projected := range types {
+		source.WriteString("type " + projected.name + " struct {\n")
+		for _, field := range projected.fields {
+			source.WriteString(exportedIdentifier(field.jsonName) + " " + goType(field.valueType) + " `json:\"" + field.jsonName + "\"`\n")
+		}
+		source.WriteString("}\n")
+	}
 	for _, operation := range operations {
 		prefix := exportedIdentifier(operation.proxy.OperationID())
 		source.WriteString("type " + prefix + "RPCRequest struct {\n")
@@ -141,9 +150,83 @@ func goType(value httpapi.ValueTypeSpec) string {
 			return "[]byte"
 		}
 		return value.Name
+	case httpapi.ValueRef:
+		return value.Name
 	default:
 		return "any"
 	}
+}
+
+func reachableProjectedTypes(all []*projectedTypeState, operations []*operationState) []*projectedTypeState {
+	index := make(map[string]*projectedTypeState, len(all))
+	for _, projected := range all {
+		index[projected.name] = projected
+	}
+	reachable := map[string]bool{}
+	var visit func(httpapi.ValueTypeSpec)
+	visit = func(value httpapi.ValueTypeSpec) {
+		if value.Kind == httpapi.ValueRef && !reachable[value.Name] {
+			projected := index[value.Name]
+			if projected == nil {
+				return
+			}
+			reachable[value.Name] = true
+			for _, field := range projected.fields {
+				visit(field.valueType)
+			}
+		}
+		if value.Element != nil {
+			visit(*value.Element)
+		}
+	}
+	for _, operation := range operations {
+		for _, bindings := range [][]resolvedBinding{operation.requestFields, operation.responseFields} {
+			for _, binding := range bindings {
+				visit(binding.valueType)
+			}
+		}
+	}
+	result := make([]*projectedTypeState, 0, len(reachable))
+	for _, projected := range all {
+		if reachable[projected.name] {
+			result = append(result, projected)
+		}
+	}
+	return result
+}
+
+func typeSources(types []*projectedTypeState) []provenance.SourceRef {
+	set := map[string]provenance.SourceRef{}
+	for _, projected := range types {
+		for _, source := range projected.provenance.Sources() {
+			set[source.Ref.String()] = source.Ref
+		}
+		for _, field := range projected.fields {
+			for _, source := range field.provenance.Sources() {
+				set[source.Ref.String()] = source.Ref
+			}
+		}
+	}
+	return sortedSourceSet(set)
+}
+
+func unionSources(values ...[]provenance.SourceRef) []provenance.SourceRef {
+	set := map[string]provenance.SourceRef{}
+	for _, refs := range values {
+		for _, ref := range refs {
+			set[ref.String()] = ref
+		}
+	}
+	return sortedSourceSet(set)
+}
+
+func sortedSourceSet(set map[string]provenance.SourceRef) []provenance.SourceRef {
+	result := make([]provenance.SourceRef, 0, len(set))
+	for _, ref := range set {
+		result = append(result, ref)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].String() < result[j].String() })
+	return result
 }
 func operationSources(operations []*operationState) []provenance.SourceRef {
 	set := map[string]provenance.SourceRef{}
@@ -159,18 +242,5 @@ func operationSources(operations []*operationState) []provenance.SourceRef {
 			}
 		}
 	}
-	result := make([]provenance.SourceRef, 0, len(set))
-	for _, ref := range set {
-		result = append(result, ref)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].String() < result[j].String() })
-	return result
-}
-func sourcesFromHTTP(document httpapi.Document) []provenance.SourceRef {
-	values := document.Sources()
-	result := make([]provenance.SourceRef, len(values))
-	for index, source := range values {
-		result[index] = source.Ref
-	}
-	return result
+	return sortedSourceSet(set)
 }

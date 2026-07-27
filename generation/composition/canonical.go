@@ -24,13 +24,20 @@ type wireValue struct {
 	Name    string            `json:"name,omitempty"`
 	Element *wireValue        `json:"element,omitempty"`
 }
+type wireProtoType struct {
+	Kind protocol.TypeKind `json:"kind"`
+	Name string            `json:"name"`
+}
 type wirePathSegment struct {
-	ID        string            `json:"id"`
-	FullName  string            `json:"fullName"`
-	SourceRef string            `json:"sourceRef"`
-	Number    int               `json:"number"`
-	TypeKind  protocol.TypeKind `json:"typeKind"`
-	TypeName  string            `json:"typeName,omitempty"`
+	ID          string               `json:"id"`
+	FullName    string               `json:"fullName"`
+	SourceRef   string               `json:"sourceRef"`
+	Number      int                  `json:"number"`
+	JSONName    string               `json:"jsonName,omitempty"`
+	Cardinality protocol.Cardinality `json:"cardinality,omitempty"`
+	Presence    protocol.Presence    `json:"presence,omitempty"`
+	TypeKind    protocol.TypeKind    `json:"typeKind"`
+	TypeName    string               `json:"typeName,omitempty"`
 }
 type wireFieldBinding struct {
 	HTTPField  string            `json:"httpField"`
@@ -89,7 +96,37 @@ type wireOperation struct {
 	RequestProvenance   wireProvenance       `json:"requestProvenance"`
 	ResponseProvenance  wireProvenance       `json:"responseProvenance"`
 }
+type wireProjectedField struct {
+	ID             string         `json:"id"`
+	ProtoName      string         `json:"protoName"`
+	JSONName       string         `json:"jsonName"`
+	Number         int            `json:"number"`
+	ProtoType      wireProtoType  `json:"protoType"`
+	ValueType      wireValue      `json:"valueType"`
+	Required       bool           `json:"required"`
+	FieldSourceRef string         `json:"fieldSourceRef"`
+	Provenance     wireProvenance `json:"provenance"`
+}
+type wireProjectedType struct {
+	Name             string               `json:"name"`
+	ServiceID        string               `json:"serviceId"`
+	MessageFullName  string               `json:"messageFullName"`
+	MessageSourceRef string               `json:"messageSourceRef"`
+	Fields           []wireProjectedField `json:"fields"`
+	Provenance       wireProvenance       `json:"provenance"`
+}
 type wireDocument struct {
+	APIVersion         string               `json:"apiVersion"`
+	Kind               string               `json:"kind"`
+	CoreServiceID      string               `json:"coreServiceId"`
+	ConsumerModulePath string               `json:"consumerModulePath"`
+	SourceDigest       string               `json:"sourceDigest"`
+	Sources            []wireSource         `json:"sources"`
+	Operations         []wireOperation      `json:"operations"`
+	Types              *[]wireProjectedType `json:"types,omitempty"`
+}
+
+type wireDocumentV1 struct {
 	APIVersion         string          `json:"apiVersion"`
 	Kind               string          `json:"kind"`
 	CoreServiceID      string          `json:"coreServiceId"`
@@ -97,6 +134,34 @@ type wireDocument struct {
 	SourceDigest       string          `json:"sourceDigest"`
 	Sources            []wireSource    `json:"sources"`
 	Operations         []wireOperation `json:"operations"`
+}
+
+type wireDocumentV2 struct {
+	APIVersion         string              `json:"apiVersion"`
+	Kind               string              `json:"kind"`
+	CoreServiceID      string              `json:"coreServiceId"`
+	ConsumerModulePath string              `json:"consumerModulePath"`
+	SourceDigest       string              `json:"sourceDigest"`
+	Sources            []wireSource        `json:"sources"`
+	Operations         []wireOperation     `json:"operations"`
+	Types              []wireProjectedType `json:"types"`
+}
+
+func (value wireDocumentV1) document() wireDocument {
+	return wireDocument{
+		APIVersion: value.APIVersion, Kind: value.Kind, CoreServiceID: value.CoreServiceID,
+		ConsumerModulePath: value.ConsumerModulePath, SourceDigest: value.SourceDigest,
+		Sources: value.Sources, Operations: value.Operations,
+	}
+}
+
+func (value wireDocumentV2) document() wireDocument {
+	types := value.Types
+	return wireDocument{
+		APIVersion: value.APIVersion, Kind: value.Kind, CoreServiceID: value.CoreServiceID,
+		ConsumerModulePath: value.ConsumerModulePath, SourceDigest: value.SourceDigest,
+		Sources: value.Sources, Operations: value.Operations, Types: &types,
+	}
 }
 
 func CanonicalJSON(document Document) ([]byte, error) {
@@ -111,10 +176,22 @@ func CanonicalJSON(document Document) ([]byte, error) {
 }
 
 func compositionWire(document Document) (wireDocument, error) {
-	result := wireDocument{APIVersion: APIVersion, Kind: Kind, CoreServiceID: document.state.coreServiceID, ConsumerModulePath: document.state.consumerModulePath, Operations: make([]wireOperation, len(document.state.operations))}
+	types := make([]wireProjectedType, len(document.state.types))
+	result := wireDocument{APIVersion: CurrentAPIVersion, Kind: Kind, CoreServiceID: document.state.coreServiceID, ConsumerModulePath: document.state.consumerModulePath, Operations: make([]wireOperation, len(document.state.operations)), Types: &types}
 	sourceSet := map[string]provenance.Source{}
+	for index, projected := range document.state.types {
+		item := wireProjectedType{Name: projected.name, ServiceID: projected.serviceID, MessageFullName: projected.messageFullName, MessageSourceRef: projected.message.Source().Ref.String(), Provenance: wireProvenanceOf(projected.provenance), Fields: make([]wireProjectedField, len(projected.fields))}
+		addNodeSources(sourceSet, projected.provenance)
+		for fieldIndex, field := range projected.fields {
+			item.Fields[fieldIndex] = wireProjectedField{ID: field.id, ProtoName: field.protoName, JSONName: field.jsonName, Number: field.number, ProtoType: wireProtoType{Kind: field.field.Type().Kind(), Name: field.field.Type().Name()}, ValueType: wireValueOf(field.valueType), Required: field.required, FieldSourceRef: field.field.Source().Ref.String(), Provenance: wireProvenanceOf(field.provenance)}
+			addNodeSources(sourceSet, field.provenance)
+		}
+		resultTypes := *result.Types
+		resultTypes[index] = item
+		*result.Types = resultTypes
+	}
 	for index, operation := range document.state.operations {
-		item := wireOperation{ID: operation.proxy.OperationID(), ServiceID: operation.serviceID, MethodFullName: operation.methodName, InputName: operation.inputName, OutputName: operation.outputName, RequestType: operation.requestType, ResponseType: operation.responseType, Method: operation.proxy.Method(), Path: operation.proxy.Path(), Permission: operation.proxy.Permission(), OperationProvenance: wireProvenanceOf(operation.operationProvenance), RequestProvenance: wireProvenanceOf(operation.requestProvenance), ResponseProvenance: wireProvenanceOf(operation.responseProvenance)}
+		item := wireOperation{ID: operation.proxy.OperationID(), ServiceID: operation.serviceID, MethodFullName: operation.methodName, InputName: operation.inputName, OutputName: operation.outputName, RequestType: operation.requestType, ResponseType: operation.responseType, Method: operation.proxy.Method(), Path: operation.proxy.Path(), Permission: operation.proxy.Permission(), Auth: wireAuth{Credentials: []wireCredential{}}, RequestFields: []wireFieldBinding{}, ContextFields: []wireContextBinding{}, ResponseFields: []wireFieldBinding{}, Errors: []wireError{}, OperationProvenance: wireProvenanceOf(operation.operationProvenance), RequestProvenance: wireProvenanceOf(operation.requestProvenance), ResponseProvenance: wireProvenanceOf(operation.responseProvenance)}
 		addNodeSources(sourceSet, operation.operationProvenance)
 		addNodeSources(sourceSet, operation.requestProvenance)
 		addNodeSources(sourceSet, operation.responseProvenance)
@@ -190,7 +267,7 @@ func wireFieldBindingOf(operation *operationState, binding resolvedBinding) (wir
 func wirePathOf(binding resolvedBinding) []wirePathSegment {
 	result := make([]wirePathSegment, len(binding.fields))
 	for index, field := range binding.fields {
-		result[index] = wirePathSegment{ID: binding.typedPath[index], FullName: field.FullName(), Number: field.Number(), SourceRef: field.Source().Ref.String(), TypeKind: field.Type().Kind(), TypeName: field.Type().Name()}
+		result[index] = wirePathSegment{ID: binding.typedPath[index], FullName: field.FullName(), Number: field.Number(), SourceRef: field.Source().Ref.String(), JSONName: field.JSONName(), Cardinality: field.Cardinality(), Presence: field.Presence(), TypeKind: field.Type().Kind(), TypeName: field.Type().Name()}
 	}
 	return result
 }

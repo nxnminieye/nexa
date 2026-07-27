@@ -2,8 +2,12 @@ package composition_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,11 +15,52 @@ import (
 	"strings"
 	"testing"
 
+	generationapi "github.com/nxnminieye/nexa/generation/api"
 	"github.com/nxnminieye/nexa/generation/composition"
 	"github.com/nxnminieye/nexa/generation/protocol"
+	"github.com/nxnminieye/nexa/project/servicecatalog"
 	"github.com/nxnminieye/nexa/provenance"
 	goctlparser "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/parser"
 )
+
+func TestRenderScalarArtifactCompatibilityOracle(t *testing.T) {
+	document, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, validProtocolSource(false))}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"backend/core/desc/generated/account.generated.api":                "397e99cffeea3e956a494a02c16fe66640c27b8dd6961bde05285133261942ef",
+		"backend/core/internal/logic/rpcproxy/account-get.generated.go":    "ee03b2d086728a2d9d5ee9f49bcb98384f3505956e297bb3d68f21ea90b4bc45",
+		"backend/core/internal/rpcproxy/generated/register.generated.go":   "42d9d3bf2b07732b3d4fa2deb91e0290aeeece75ffe7eeaff48f9f54199fdfa9",
+		"backend/core/internal/serviceclients/account/client.generated.go": "a79ce1e37c791b148768ddd77125d3b3dd9fceb24ddd6a76f6cf59ee9791c778",
+		"backend/core/internal/serviceclients/account/errors.generated.go": "f9f172050448c78245f5b2e945d1b75fddec14ac0f0aff8036cc202f9f874835",
+		"backend/core/internal/serviceclients/account/mapper.generated.go": "152d07dc2e341b5d81e0f897939c7dee07d00626ae548b1074916a64ecedf52b",
+	}
+	if len(artifacts) != len(want) {
+		t.Fatalf("scalar artifact count = %d, want %d", len(artifacts), len(want))
+	}
+	seen := make(map[string]bool, len(artifacts))
+	for _, artifact := range artifacts {
+		expected, ok := want[artifact.Path]
+		if !ok {
+			t.Fatalf("unexpected scalar artifact %q", artifact.Path)
+		}
+		digest := sha256.Sum256(artifact.Content)
+		if actual := fmt.Sprintf("%x", digest); actual != expected {
+			t.Fatalf("scalar artifact %q SHA-256 = %s, want %s", artifact.Path, actual, expected)
+		}
+		seen[artifact.Path] = true
+	}
+	for artifactPath := range want {
+		if !seen[artifactPath] {
+			t.Fatalf("missing scalar artifact %q", artifactPath)
+		}
+	}
+}
 
 func TestRenderProducesParseableAndExecutableStaticSources(t *testing.T) {
 	document, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, validProtocolSource(false))}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
@@ -122,6 +167,236 @@ service AccountService {`, 1)
 		t.Fatal(err)
 	}
 	compileGeneratedModule(t, artifacts)
+}
+
+func TestRenderProjectsObjectCollectionsAndServiceScopedSources(t *testing.T) {
+	account := compileProtocolForService(t, "account", objectProtocolSource())
+	billingSource := strings.ReplaceAll(objectProtocolSource(), "account.v1", "billing.v1")
+	billingSource = strings.ReplaceAll(billingSource, "account.replace", "billing.replace")
+	billingSource = strings.ReplaceAll(billingSource, "/accounts/replace", "/billing/replace")
+	billingSource = strings.ReplaceAll(billingSource, "AccountService", "BillingService")
+	billing := compileProtocolForService(t, "billing", billingSource)
+	catalog := objectCatalog(t)
+	document, err := composition.Build(catalog, []protocol.Document{account, billing}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountAPI := renderedByID(t, artifacts, "api.account")
+	accountClient := renderedByID(t, artifacts, "client.account")
+	accountMapper := renderedByID(t, artifacts, "mapper.account")
+	accountLogic := renderedByID(t, artifacts, "logic.account.replace")
+	accountErrors := renderedByID(t, artifacts, "errors.account")
+	for _, artifact := range []composition.RenderedArtifact{accountAPI, accountClient, accountMapper, accountLogic} {
+		assertSourceFragments(t, artifact.Sources,
+			"field:account.v1.Member.id", "field:account.v1.Member.role_codes", "field:account.v1.Member.settings",
+			"field:account.v1.ReplaceRequest.items", "field:account.v1.ReplaceRequest.role_codes", "field:account.v1.ReplaceRequest.settings",
+			"field:account.v1.ReplaceResponse.items", "field:account.v1.ReplaceResponse.total", "field:account.v1.Settings.locale",
+			"message:account.v1.Member", "message:account.v1.Settings", "method:account.v1.AccountService.Replace",
+			"service:account/binding:"+composition.CapabilityID+"@"+composition.CapabilityVersion,
+		)
+	}
+	assertSourceFragments(t, accountErrors.Sources,
+		"field:account.v1.ReplaceRequest.items", "field:account.v1.ReplaceRequest.role_codes", "field:account.v1.ReplaceRequest.settings",
+		"field:account.v1.ReplaceResponse.items", "field:account.v1.ReplaceResponse.total", "method:account.v1.AccountService.Replace",
+		"service:account/binding:"+composition.CapabilityID+"@"+composition.CapabilityVersion,
+	)
+	for _, artifact := range artifacts {
+		if strings.Contains(artifact.ID, "billing") {
+			for _, ref := range artifact.Sources {
+				if strings.Contains(ref.Fragment(), "account.v1") || strings.Contains(ref.Fragment(), "service:account/") {
+					t.Fatalf("%s contains account source %s", artifact.ID, ref.String())
+				}
+			}
+		}
+	}
+	if !bytes.Contains(accountAPI.Content, []byte("[]AccountAccountV1Member")) || !bytes.Contains(accountClient.Content, []byte("type AccountAccountV1Member struct")) {
+		t.Fatalf("object projection missing from rendered sources:\n%s\n%s", accountAPI.Content, accountClient.Content)
+	}
+	executeObjectGeneratedModule(t, artifacts)
+
+	changedAccountSource := strings.Replace(objectProtocolSource(), "message Settings { string locale = 1; }", "message Settings { string locale = 1; string timezone = 2; }", 1)
+	changedAccount := compileProtocolForService(t, "account", changedAccountSource)
+	changedDocument, err := composition.Build(catalog, []protocol.Document{changedAccount, billing}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedArtifacts, err := composition.Render(changedDocument, composition.RenderOptions{CoreRoot: "backend/core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"api.billing", "client.billing", "mapper.billing", "logic.billing.replace", "errors.billing"} {
+		assertArtifactStable(t, renderedByID(t, artifacts, id), renderedByID(t, changedArtifacts, id), catalog, []protocol.Document{account, billing}, []protocol.Document{changedAccount, billing})
+	}
+	assertArtifactStable(t, accountErrors, renderedByID(t, changedArtifacts, "errors.account"), catalog, []protocol.Document{account, billing}, []protocol.Document{changedAccount, billing})
+	for _, id := range []string{"api.account", "client.account"} {
+		before, after := renderedByID(t, artifacts, id), renderedByID(t, changedArtifacts, id)
+		if bytes.Equal(before.Content, after.Content) || resolvedArtifactDigest(t, before, catalog, account, billing) == resolvedArtifactDigest(t, after, catalog, changedAccount, billing) {
+			t.Fatalf("%s did not change for nested shape mutation", id)
+		}
+	}
+	for _, id := range []string{"mapper.account", "logic.account.replace", "register"} {
+		before, after := renderedByID(t, artifacts, id), renderedByID(t, changedArtifacts, id)
+		if !bytes.Equal(before.Content, after.Content) || resolvedArtifactDigest(t, before, catalog, account, billing) == resolvedArtifactDigest(t, after, catalog, changedAccount, billing) {
+			t.Fatalf("%s content/digest behavior is invalid", id)
+		}
+	}
+}
+
+func compileProtocolForService(t *testing.T, serviceID, source string) protocol.Document {
+	t.Helper()
+	entry := serviceID + "/v1/" + serviceID + ".proto"
+	resolver := protocolResolver(func(_ context.Context, path string) (io.ReadCloser, error) {
+		if path != entry {
+			return nil, os.ErrNotExist
+		}
+		return io.NopCloser(strings.NewReader(source)), nil
+	})
+	document, err := protocol.Compile(context.Background(), protocol.CompileOptions{ServiceID: serviceID, EntryFiles: []string{entry}, Resolver: resolver})
+	if err != nil {
+		t.Fatalf("Compile %s protocol: %v", serviceID, err)
+	}
+	return document
+}
+
+func objectCatalog(t *testing.T) servicecatalog.Catalog {
+	t.Helper()
+	source := fmt.Sprintf(`apiVersion: nexa.dev/service-catalog/v1
+kind: ServiceCatalog
+services:
+  - id: core
+    root: backend/core
+    capabilityBindings: []
+  - id: account
+    root: backend/account
+    capabilityBindings:
+      - id: %s
+        apiVersion: %s
+  - id: billing
+    root: backend/billing
+    capabilityBindings:
+      - id: %s
+        apiVersion: %s
+`, composition.CapabilityID, composition.CapabilityVersion, composition.CapabilityID, composition.CapabilityVersion)
+	catalog, err := servicecatalog.Parse("project/services.yaml", []byte(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func renderedByID(t *testing.T, artifacts []composition.RenderedArtifact, id string) composition.RenderedArtifact {
+	t.Helper()
+	for _, artifact := range artifacts {
+		if artifact.ID == id {
+			return artifact
+		}
+	}
+	t.Fatalf("rendered artifact %q missing", id)
+	return composition.RenderedArtifact{}
+}
+
+func assertSourceFragments(t *testing.T, refs []provenance.SourceRef, want ...string) {
+	t.Helper()
+	got := make([]string, len(refs))
+	for index, ref := range refs {
+		got[index] = ref.Fragment()
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if !equalStrings(got, want) {
+		t.Fatalf("source fragments = %#v, want %#v", got, want)
+	}
+}
+
+func resolvedArtifactDigest(t *testing.T, artifact composition.RenderedArtifact, catalog servicecatalog.Catalog, protocols ...protocol.Document) provenance.Digest {
+	t.Helper()
+	index := map[string]provenance.Source{}
+	for _, source := range catalog.Sources() {
+		index[source.Ref.String()] = source
+	}
+	for _, document := range protocols {
+		for _, source := range document.Sources() {
+			index[source.Ref.String()] = source
+		}
+	}
+	resolved := make([]provenance.Source, len(artifact.Sources))
+	for itemIndex, ref := range artifact.Sources {
+		source, ok := index[ref.String()]
+		if !ok {
+			t.Fatalf("source %s cannot be resolved", ref.String())
+		}
+		resolved[itemIndex] = source
+	}
+	digest, err := generationapi.ComputeSourceDigest(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
+func assertArtifactStable(t *testing.T, before, after composition.RenderedArtifact, catalog servicecatalog.Catalog, beforeProtocols, afterProtocols []protocol.Document) {
+	t.Helper()
+	if !bytes.Equal(before.Content, after.Content) || !equalSourceRefs(before.Sources, after.Sources) || resolvedArtifactDigest(t, before, catalog, beforeProtocols...) != resolvedArtifactDigest(t, after, catalog, afterProtocols...) {
+		t.Fatalf("artifact %s changed across unrelated nested mutation", before.ID)
+	}
+}
+
+func equalSourceRefs(left, right []provenance.SourceRef) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func executeObjectGeneratedModule(t *testing.T, artifacts []composition.RenderedArtifact) {
+	t.Helper()
+	root := t.TempDir()
+	repository, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := "module example.com/consumer\n\ngo 1.25.0\n\nrequire github.com/nxnminieye/nexa v0.0.0\nreplace github.com/nxnminieye/nexa => " + filepath.ToSlash(repository) + "\n"
+	writeGeneratedFile(t, root, "go.mod", []byte(module))
+	for _, artifact := range artifacts {
+		if filepath.Ext(artifact.Path) == ".go" {
+			writeGeneratedFile(t, root, artifact.Path, artifact.Content)
+		}
+	}
+	testSource := []byte(`package accountclient
+
+import "testing"
+
+func TestObjectCollectionMapper(t *testing.T) {
+  empty := MapAccountReplaceRequest(AccountReplaceHTTPRequest{
+    RoleCodes: []string{},
+    Settings: AccountAccountV1Settings{Locale: "en"},
+    Items: []AccountAccountV1Member{},
+  }, RequestContext{})
+  if empty.RoleCodes == nil || len(empty.RoleCodes) != 0 || empty.Items == nil || len(empty.Items) != 0 {
+    t.Fatalf("empty request = %#v", empty)
+  }
+  items := []AccountAccountV1Member{{Id: "member-1", RoleCodes: []string{"admin", "reader"}, Settings: &AccountAccountV1Settings{Locale: "zh"}}}
+  request := MapAccountReplaceRequest(AccountReplaceHTTPRequest{RoleCodes: []string{"owner", "auditor"}, Settings: AccountAccountV1Settings{Locale: "en"}, Items: items}, RequestContext{})
+  if len(request.RoleCodes) != 2 || request.RoleCodes[0] != "owner" || request.RoleCodes[1] != "auditor" || len(request.Items) != 1 || request.Items[0].RoleCodes[1] != "reader" || request.Items[0].Settings.Locale != "zh" {
+    t.Fatalf("request = %#v", request)
+  }
+  response := MapAccountReplaceResponse(AccountReplaceRPCResponse{Total: 1, Items: items})
+  if response.Total != 1 || len(response.Items) != 1 || response.Items[0].Id != "member-1" || response.Items[0].RoleCodes[0] != "admin" {
+    t.Fatalf("response = %#v", response)
+  }
+}
+`)
+	writeGeneratedFile(t, root, "backend/core/internal/serviceclients/account/object_behavior_test.go", testSource)
+	runGeneratedModule(t, root)
 }
 
 func executeGeneratedModule(t *testing.T, artifacts []composition.RenderedArtifact) {
