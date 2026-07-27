@@ -87,3 +87,61 @@ func TestSnapshotRejectsContextBindingUniquenessTampering(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotRoundTripsCollectionAndObjectTerminals(t *testing.T) {
+	source := `syntax = "proto3";
+package sample.v1;
+import "nexa/protocol/v1/options.proto";
+message Item { string id = 1; repeated string roles = 2; }
+message Request { repeated Item items = 1; }
+message Response { repeated Item items = 1; }
+service SampleService { rpc Replace(Request) returns (Response) {
+  option (nexa.protocol.v1.http_proxy) = { operation_id: "sample.replace" method: POST path: "/samples" auth: { mode: NONE }
+    request_fields: { http_field: "items" rpc_field: "items" }
+    response_fields: { rpc_field: "items" http_field: "items" }
+  };
+} }`
+	canonical, err := protocol.CanonicalJSON(compileProtocol(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	domain, _ := provenance.ParseDomainSource("generated/protocol-object.json")
+	snapshot, err := protocol.ParseSnapshot(domain, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := snapshot.CanonicalJSON()
+	if err != nil || !bytes.Equal(roundTrip, canonical) {
+		t.Fatalf("round trip = %s, %v", roundTrip, err)
+	}
+}
+
+func TestSnapshotRejectsRepeatedIntermediateTraversalTamper(t *testing.T) {
+	source := `syntax = "proto3";
+package sample.v1;
+import "nexa/protocol/v1/options.proto";
+message Item { string id = 1; }
+message Request { Item item = 1; repeated Item items = 2; }
+message Response { string ok = 1; }
+service SampleService { rpc Put(Request) returns (Response) {
+  option (nexa.protocol.v1.http_proxy) = { operation_id: "sample.put" method: POST path: "/samples" auth: { mode: NONE }
+    request_fields: { http_field: "id" rpc_field: "item.id" }
+    response_fields: { rpc_field: "ok" http_field: "ok" }
+  };
+} }`
+	canonical, err := protocol.CanonicalJSON(compileProtocol(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(canonical, &root); err != nil {
+		t.Fatal(err)
+	}
+	method := firstMethod(root)
+	binding := method["httpProxy"].(map[string]any)["requestFields"].([]any)[0].(map[string]any)
+	binding["rpcPath"].([]any)[0] = "sample.v1.Request#2"
+	domain, _ := provenance.ParseDomainSource("generated/protocol-repeated-intermediate.json")
+	if _, err := protocol.ParseSnapshot(domain, recanonicalizeProtocolSnapshot(t, root)); err == nil {
+		t.Fatal("ParseSnapshot() accepted a repeated intermediate traversal")
+	}
+}

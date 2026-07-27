@@ -51,7 +51,8 @@ func Build(catalog servicecatalog.Catalog, protocols []protocol.Document, native
 		nativeTypes[value.Name()] = true
 	}
 	operationIDs, routes, typeNames, methodNames := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	state := &documentState{coreServiceID: options.CoreServiceID, consumerModulePath: options.ConsumerModulePath, operations: []*operationState{}}
+	state := &documentState{coreServiceID: options.CoreServiceID, consumerModulePath: options.ConsumerModulePath, operations: []*operationState{}, types: []*projectedTypeState{}}
+	projector := &typeProjector{state: state, byKey: map[string]*projectedTypeState{}, visiting: map[string]bool{}, reserved: typeNames, native: nativeTypes}
 	for _, service := range catalog.Services() {
 		binding, selected := selectedBinding(service)
 		if !selected {
@@ -72,7 +73,7 @@ func Build(catalog servicecatalog.Catalog, protocols []protocol.Document, native
 						return Document{}, invalid("method_duplicate", method.FilePath(), "", "proxy method is duplicated")
 					}
 					methodNames[method.FullName()] = true
-					operation, err := buildOperation(service.ID(), binding.Source(), protocolDocument, method, proxy)
+					operation, err := buildOperation(service.ID(), binding.Source(), protocolDocument, method, proxy, projector)
 					if err != nil {
 						return Document{}, err
 					}
@@ -93,6 +94,7 @@ func Build(catalog servicecatalog.Catalog, protocols []protocol.Document, native
 	sort.Slice(state.operations, func(i, j int) bool {
 		return state.operations[i].proxy.OperationID() < state.operations[j].proxy.OperationID()
 	})
+	sort.Slice(state.types, func(i, j int) bool { return state.types[i].name < state.types[j].name })
 	return Document{state: state}, nil
 }
 
@@ -105,7 +107,7 @@ func selectedBinding(service servicecatalog.Service) (servicecatalog.CapabilityB
 	return servicecatalog.CapabilityBinding{}, false
 }
 
-func buildOperation(serviceID string, binding provenance.Source, document protocol.Document, method protocol.Method, proxy protocol.HTTPProxy) (*operationState, error) {
+func buildOperation(serviceID string, binding provenance.Source, document protocol.Document, method protocol.Method, proxy protocol.HTTPProxy, projector *typeProjector) (*operationState, error) {
 	if method.ClientStreaming() || method.ServerStreaming() {
 		return nil, invalid("streaming_proxy_unsupported", method.FilePath(), "", "streaming RPC methods cannot be projected")
 	}
@@ -136,7 +138,7 @@ func buildOperation(serviceID string, binding provenance.Source, document protoc
 	requestHTTPFields := map[string]bool{}
 	contextSources := map[protocol.ContextValue]bool{}
 	for _, item := range proxy.RequestFields() {
-		resolved, err := resolveBinding(document, request, item.RPCPath(), item.HTTPField(), "")
+		resolved, err := resolveBinding(serviceID, binding, document, request, item.RPCPath(), item.HTTPField(), "", projector)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +151,7 @@ func buildOperation(serviceID string, binding provenance.Source, document protoc
 		boundRequest[resolved.fields[0].FullName()] = true
 	}
 	for _, item := range method.RPCContext().ContextFields() {
-		resolved, err := resolveBinding(document, request, item.RPCPath(), "", item.Source())
+		resolved, err := resolveBinding(serviceID, binding, document, request, item.RPCPath(), "", item.Source(), projector)
 		if err != nil {
 			return nil, err
 		}
@@ -181,7 +183,7 @@ func buildOperation(serviceID string, binding provenance.Source, document protoc
 	responseDestinations := map[string]bool{}
 	responseHTTPFields := map[string]bool{}
 	for _, item := range proxy.ResponseFields() {
-		resolved, err := resolveBinding(document, response, item.RPCPath(), item.HTTPField(), "")
+		resolved, err := resolveBinding(serviceID, binding, document, response, item.RPCPath(), item.HTTPField(), "", projector)
 		if err != nil {
 			return nil, err
 		}
@@ -228,7 +230,7 @@ func generatedIdentifierCollision(bindings []resolvedBinding, rpc bool) bool {
 	return false
 }
 
-func resolveBinding(document protocol.Document, root protocol.Message, path []string, httpField string, context protocol.ContextValue) (resolvedBinding, error) {
+func resolveBinding(serviceID string, bindingSource provenance.Source, document protocol.Document, root protocol.Message, path []string, httpField string, context protocol.ContextValue, projector *typeProjector) (resolvedBinding, error) {
 	if len(path) == 0 {
 		return resolvedBinding{}, invalid("field_path_invalid", root.FilePath(), "", "RPC field path is empty")
 	}
@@ -250,7 +252,7 @@ func resolveBinding(document protocol.Document, root protocol.Message, path []st
 		}
 		result.fields = append(result.fields, found)
 		if index+1 < len(path) {
-			if found.Type().Kind() != protocol.TypeMessage {
+			if found.Cardinality() != protocol.CardinalitySingular || found.Type().Kind() != protocol.TypeMessage {
 				return resolvedBinding{}, invalid("field_path_unresolved", found.FilePath(), "", "RPC field path crosses a non-message field")
 			}
 			var ok bool
@@ -261,13 +263,114 @@ func resolveBinding(document protocol.Document, root protocol.Message, path []st
 		}
 	}
 	last := result.fields[len(result.fields)-1]
-	value, err := apiValueType(last)
+	value, err := bindingValueType(serviceID, bindingSource, document, last, projector)
 	if err != nil {
 		return resolvedBinding{}, err
 	}
 	result.valueType = value
-	result.required = last.Presence() != protocol.PresenceExplicit
+	result.required = last.Presence() != protocol.PresenceExplicit || last.Type().Kind() == protocol.TypeMessage || last.Cardinality() == protocol.CardinalityRepeated
 	return result, nil
+}
+
+type typeProjector struct {
+	state            *documentState
+	byKey            map[string]*projectedTypeState
+	visiting         map[string]bool
+	reserved, native map[string]bool
+}
+
+func bindingValueType(serviceID string, binding provenance.Source, document protocol.Document, field protocol.Field, projector *typeProjector) (httpapi.ValueTypeSpec, error) {
+	if field.Type().Kind() != protocol.TypeMessage {
+		return apiValueType(field)
+	}
+	projected, err := projector.project(serviceID, binding, document, field.Type().Name())
+	if err != nil {
+		return httpapi.ValueTypeSpec{}, err
+	}
+	value := httpapi.ValueTypeSpec{Kind: httpapi.ValueRef, Name: projected.name}
+	if field.Cardinality() == protocol.CardinalityRepeated {
+		item := value
+		value = httpapi.ValueTypeSpec{Kind: httpapi.ValueArray, Element: &item}
+	}
+	return value, nil
+}
+
+func (p *typeProjector) project(serviceID string, binding provenance.Source, document protocol.Document, fullName string) (*projectedTypeState, error) {
+	key := serviceID + "\x00" + fullName
+	if p.visiting[key] {
+		return nil, invalid("message_graph_recursive", "", "", "projected message graph is recursive")
+	}
+	if existing := p.byKey[key]; existing != nil {
+		return existing, nil
+	}
+	message, ok := document.Message(fullName)
+	if !ok {
+		return nil, invalid("message_reference_unresolved", "", "", "projected message reference is missing")
+	}
+	name := exportedIdentifier(serviceID + "." + fullName)
+	if p.native[name] || p.reserved[name] {
+		return nil, invalid("projected_type_collision", message.FilePath(), "", "projected message type name collides")
+	}
+	p.reserved[name] = true
+	owner, err := httpapi.NewGeneratedProvenance([]provenance.Source{binding, message.Source()})
+	if err != nil {
+		return nil, invalid("provenance_invalid", message.FilePath(), "", "projected message provenance is invalid")
+	}
+	state := &projectedTypeState{name: name, serviceID: serviceID, messageFullName: fullName, message: message, provenance: owner}
+	p.visiting[key] = true
+	for _, field := range message.Fields() {
+		if field.Type().Kind() == protocol.TypeMap || field.Presence() == protocol.PresenceMap {
+			delete(p.visiting, key)
+			return nil, invalid("map_mapping_unrepresentable", field.FilePath(), "", "map field cannot enter projected object closure")
+		}
+		if field.Presence() == protocol.PresenceOneof {
+			delete(p.visiting, key)
+			return nil, invalid("oneof_mapping_unsupported", field.FilePath(), "", "oneof field cannot enter projected object closure")
+		}
+		value, valueErr := p.projectedFieldValue(serviceID, binding, document, field)
+		if valueErr != nil {
+			delete(p.visiting, key)
+			return nil, valueErr
+		}
+		fieldOwner, ownerErr := httpapi.NewGeneratedProvenance([]provenance.Source{binding, message.Source(), field.Source()})
+		if ownerErr != nil {
+			delete(p.visiting, key)
+			return nil, invalid("provenance_invalid", field.FilePath(), "", "projected field provenance is invalid")
+		}
+		state.fields = append(state.fields, &projectedFieldState{id: typedFieldID(field), protoName: field.Name(), jsonName: field.JSONName(), number: field.Number(), valueType: value, required: field.Presence() != protocol.PresenceExplicit, field: field, provenance: fieldOwner})
+	}
+	delete(p.visiting, key)
+	sort.Slice(state.fields, func(i, j int) bool { return state.fields[i].number < state.fields[j].number })
+	p.byKey[key] = state
+	p.state.types = append(p.state.types, state)
+	return state, nil
+}
+
+func (p *typeProjector) projectedFieldValue(serviceID string, binding provenance.Source, document protocol.Document, field protocol.Field) (httpapi.ValueTypeSpec, error) {
+	var value httpapi.ValueTypeSpec
+	if field.Type().Kind() == protocol.TypeMessage {
+		nested, err := p.project(serviceID, binding, document, field.Type().Name())
+		if err != nil {
+			return httpapi.ValueTypeSpec{}, err
+		}
+		value = httpapi.ValueTypeSpec{Kind: httpapi.ValueRef, Name: nested.name}
+	} else {
+		var err error
+		value, err = apiValueType(field)
+		if err != nil {
+			return httpapi.ValueTypeSpec{}, err
+		}
+		// apiValueType already applies repeated/optional wrappers for scalar fields.
+		return value, nil
+	}
+	if field.Cardinality() == protocol.CardinalityRepeated {
+		item := value
+		value = httpapi.ValueTypeSpec{Kind: httpapi.ValueArray, Element: &item}
+	} else if field.Presence() == protocol.PresenceExplicit {
+		item := value
+		value = httpapi.ValueTypeSpec{Kind: httpapi.ValueOptional, Element: &item}
+	}
+	return value, nil
 }
 
 func apiValueType(field protocol.Field) (httpapi.ValueTypeSpec, error) {

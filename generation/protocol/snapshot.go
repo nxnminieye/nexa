@@ -235,6 +235,12 @@ func validateSnapshotProxy(method canonicalMethod, state *snapshotState, filePat
 		if !validateSnapshotRPCPath(method.Input, binding.RPCPath, state.descriptors) {
 			return protocolError("protocol_snapshot_invalid", "rpc_path_invalid", filePath, "", "Protocol snapshot request path is invalid")
 		}
+		terminal, _ := snapshotRPCPathTerminal(method.Input, binding.RPCPath, state.descriptors)
+		_, pathBound := pathVariables[binding.HTTPField]
+		complex := terminal.Cardinality == CardinalityRepeated || terminal.Type.Kind == TypeMessage
+		if complex && (pathBound || proxy.Method == MethodGET || proxy.Method == MethodDELETE) {
+			return protocolError("protocol_snapshot_invalid", "body_binding_required", filePath, "", "Protocol snapshot object or collection binding requires an HTTP body")
+		}
 	}
 	for _, binding := range proxy.ResponseFields {
 		if !validateSnapshotRPCPath(method.Output, binding.RPCPath, state.descriptors) {

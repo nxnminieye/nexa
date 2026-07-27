@@ -12,6 +12,13 @@ func GeneratedAPI(document Document) (httpapi.Document, error) {
 		return httpapi.Document{}, invalid("document_invalid", "", "/document", "composition document is invalid")
 	}
 	spec := httpapi.GeneratedDocumentSpec{}
+	for _, projected := range document.state.types {
+		value := httpapi.GeneratedTypeSpec{Name: projected.name, Shape: httpapi.ValueTypeSpec{Kind: httpapi.ValueObject}, Provenance: projected.provenance}
+		for _, field := range projected.fields {
+			value.Fields = append(value.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(field.jsonName)}, Required: field.required, ValueType: field.valueType, Provenance: field.provenance})
+		}
+		spec.Types = append(spec.Types, value)
+	}
 	for _, operation := range document.state.operations {
 		request := httpapi.GeneratedTypeSpec{Name: operation.requestType, Shape: httpapi.ValueTypeSpec{Kind: httpapi.ValueObject}, Provenance: operation.requestProvenance}
 		for _, binding := range operation.requestFields {
