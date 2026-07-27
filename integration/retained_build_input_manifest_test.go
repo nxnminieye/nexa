@@ -99,7 +99,7 @@ func TestRetainedBuildInputManifestExternalReadbackRoundTrip(t *testing.T) {
 		t.Fatalf("snapshot modules = %#v, %v", modules, err)
 	}
 	inputs, err := snapshot.Inputs()
-	if err != nil || len(inputs) != 3 {
+	if err != nil || len(inputs) != 2 {
 		t.Fatalf("snapshot inputs = %#v, %v", inputs, err)
 	}
 	paths := make([]string, len(inputs))
@@ -112,7 +112,7 @@ func TestRetainedBuildInputManifestExternalReadbackRoundTrip(t *testing.T) {
 		}
 		paths[index] = identity.Path + ":" + path
 	}
-	if got := strings.Join(paths, ","); !strings.Contains(got, "example.com/external/consumer:go.mod") || !strings.Contains(got, "example.com/external/consumer:schema/models/schema.go") || !strings.Contains(got, "example.com/external/helper:go.mod") {
+	if got := strings.Join(paths, ","); !strings.Contains(got, "example.com/external/consumer:go.mod") || !strings.Contains(got, "example.com/external/consumer:schema/models/schema.go") || strings.Contains(got, "example.com/external/helper:go.mod") {
 		t.Fatalf("snapshot input closure = %q", got)
 	}
 	inputs[0] = toolchain.RetainedBuildInput{}
