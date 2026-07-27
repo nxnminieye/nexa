@@ -17,6 +17,56 @@
 - Make target 和文档只能消费公开 CLI/schema，不得成为并行命令事实源。
 - 当前二进制实际包含的命令、flag、schema、capability 和副作用以 `nexactl inspect --json` 为准。
 
+## 生成简化原则
+
+本节是 Nexa 所有代码生成能力的最高优先级约束。现有 Skill、设计文档、历史分支或实现与本节冲突时，
+一律以本节为准；冲突内容只能作为历史证据，不得继续集成或作为新实现的基础。
+
+生成器只负责以下最小闭包：
+
+1. 解析并校验版本化输入契约；
+2. 校验声明的生成目录位于 consumer repository 内，且不指向 `.git` 或其大小写别名；
+3. 以声明的 generated 目录为唯一 replacement unit，直接清空并重建整个目录；
+4. 失败时返回非零结果和稳定错误，不掩盖已经发生的文件变化。
+
+生成失败允许保留部分变更。生成器不负责恢复工作区；使用方通过 `git diff` 审阅实际变化，通过
+`git restore` 恢复，并在同一 Git worktree 中决定是否接受生成结果。用户代码已经由 Git 管理，
+不得在生成链中重复实现一套 staging、恢复、合并或 ownership 系统。
+
+生成路径只保留必要的正确性检查：
+
+- 所有输出必须位于当前 repository 边界内；
+- `.git` 及其大小写别名永远禁止写入；
+- generated 目录与显式声明的 consumer-owned extensions、hooks、slots 和 actions 目录必须分离；
+- 生成器只能清空并重建声明的 generated 目录；声明目录之外的所有文件都必须因不在写集内而保持不变；
+- 禁止扫描、分类或推断人工代码和 stale ownership，也不提供 file-set、action-list 或逐文件 ownership 模式；
+- 首次写入前只执行普通路径检查：拒绝 repository lexical escape、越出声明 generated scope 的 traversal、
+  `.git` 大小写别名、输出范围重叠、generated/extensions 重叠、exact/case-fold path collision，以及路径
+  component 中的 symlink；这些检查不得演变为 FD/inode identity 或跨时间缓存跟踪。
+
+严禁为生成器增加以下机制。未来确需改变本边界时，必须先单独修改本节并完成治理评审，不能在实现中
+增加例外：
+
+- repository staging、scratch repository、generation sandbox 或仓库副本；
+- 自动回滚、事务协议、两阶段发布、plan/check/write 状态机或恢复日志；
+- ownership manifest、ownership digest、plan digest、冲突合并或 stale ownership 推断；
+- 文件描述符身份链、缓存目录身份跟踪、私有构建缓存或 OS 级隔离；
+- 自动 merge、diff3、`git apply`、Git staging、Git commit 或任何隐藏工作区变化的行为。
+
+生成验收只围绕契约和输出行为：
+
+1. 契约输入正确，非法输入在写入前失败；
+2. 输出内容和目录符合预期；
+3. 声明的 generated 目录被直接覆盖；
+4. extensions 和其他人工代码不受影响；
+5. E2E fixture 预先提交期望生成物并从 clean tree 开始；第一次和第二次使用相同输入生成后
+   `git diff` 均为空，证明重复生成不会引入额外变化；
+6. format、compile、定向 test 和真实 E2E 通过。
+
+DG1 只建设满足上述验收的最小生成闭环。DG1 通过后立即进入 DG2，不得以“安全加固”、未来扩展、
+通用 ownership 或事务完整性为由继续延长生成器建设。只有明确属于输入契约或输出正确性的代码才能
+从历史实现中重新采用，并且必须在干净基线的独立 worktree 中重新证明。
+
 ## 事实源治理
 
 - 同一事实必须归属于最接近其语法节点的权威源，放置优先级固定为：节点上的强类型 metadata、同一事实文件或 package 中的结构化声明、领域 owner 定义的强类型 relation document、只表达跨事实关系或服务拓扑的全局 catalog。更近层能够完整表达时，禁止另建远端配置或重复人工入口。
