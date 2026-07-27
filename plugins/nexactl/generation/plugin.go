@@ -36,12 +36,19 @@ type ProviderTool struct {
 	Tool plugin.DelegatedToolSpec
 }
 
+// UserLogicFile declares one exact create-once file outside generated scopes.
+type UserLogicFile struct {
+	Path    string
+	Content []byte
+}
+
 // RPCProject contains the typed RPC facts and explicit consumer-owned path boundaries.
 type RPCProject struct {
 	Facts           genprotocol.Document
 	Tool            toolchain.Tool
 	GeneratedScope  string
 	ExtensionScopes []string
+	UserLogic       []UserLogicFile
 }
 
 // APIProject contains the typed API facts and explicit consumer-owned path boundaries.
@@ -50,6 +57,7 @@ type APIProject struct {
 	Tool            toolchain.Tool
 	GeneratedScope  string
 	ExtensionScopes []string
+	UserLogic       []UserLogicFile
 }
 
 // ServiceProject closes the consumer-owned facts for one service.
@@ -113,8 +121,8 @@ func directCommand(owner string, tools []plugin.DelegatedToolSpec, run plugin.Ha
 		Path:           []string{"generation", owner, "generate"},
 		Summary:        "directly generate " + owner + " source",
 		Flags:          selectorFlags(),
-		InputSchema:    json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"}}}`),
-		OutputSchema:   json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service","generatedScope"],"properties":{"apiVersion":{"const":"nexa.dev/generation-result/v1"},"kind":{"const":"GenerationResult"},"status":{"const":"generated"},"service":{"type":"string"},"generatedScope":{"type":"string"}}}`),
+		InputSchema:    json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"},"overwrite-logic":{"type":"boolean","default":false}}}`),
+		OutputSchema:   json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service","generatedScope","userLogic"],"properties":{"apiVersion":{"const":"nexa.dev/generation-result/v2"},"kind":{"const":"GenerationResult"},"status":{"const":"generated"},"service":{"type":"string"},"generatedScope":{"type":"string"},"userLogic":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","action"],"properties":{"path":{"type":"string"},"action":{"enum":["created","skipped","overwritten"]}}}}}}`),
 		SideEffect:     plugin.SideEffectRepositoryWrite,
 		DelegatedTools: cloneDelegatedTools(tools),
 		Run:            run,
@@ -126,6 +134,7 @@ func selectorFlags() []plugin.FlagSpec {
 		{Name: "repo-root", Type: plugin.FlagString, Summary: "repository root", Required: true},
 		{Name: "provider", Type: plugin.FlagString, Summary: "project provider id", Required: true},
 		{Name: "service", Type: plugin.FlagString, Summary: "selected service id", Required: true},
+		{Name: "overwrite-logic", Type: plugin.FlagBool, Summary: "overwrite declared user-logic files", Default: json.RawMessage(`false`)},
 	}
 }
 

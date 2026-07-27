@@ -127,8 +127,8 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		flags                   []string
 		required                []bool
 	}{
-		{path: "generation api generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
-		{path: "generation rpc generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
+		{path: "generation api generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
+		{path: "generation rpc generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
 		{path: "generation sdk-python-assets check", owner: "sdk-python-assets", sideEffect: "repository-read", flags: []string{"repo-root"}, required: []bool{true}},
 		{path: "generation sdk-python-assets write", owner: "sdk-python-assets", sideEffect: "repository-write", flags: []string{"repo-root"}, required: []bool{true}},
 		{path: "governance skill validate", owner: "governance", sideEffect: "repository-read", flags: []string{"root"}, required: []bool{true}},
@@ -150,12 +150,16 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 		var flagNames []string
 		var required []bool
-		for flagIndex, flag := range command.Flags {
-			flagNames = append(flagNames, flag.Name)
-			required = append(required, flag.Required)
-			if flag.Type != "string" {
-				t.Fatalf("command[%d] flag[%d] type = %q", index, flagIndex, flag.Type)
-			}
+			for flagIndex, flag := range command.Flags {
+				flagNames = append(flagNames, flag.Name)
+				required = append(required, flag.Required)
+				wantType := "string"
+				if flag.Name == "overwrite-logic" {
+					wantType = "bool"
+				}
+				if flag.Type != wantType {
+					t.Fatalf("command[%d] flag[%d] type = %q", index, flagIndex, flag.Type)
+				}
 		}
 		if !reflect.DeepEqual(flagNames, want.flags) || !reflect.DeepEqual(required, want.required) {
 			t.Fatalf("command[%d] flags = %v required=%v, want %v required=%v", index, flagNames, required, want.flags, want.required)

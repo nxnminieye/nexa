@@ -26,30 +26,33 @@ unavailable。Ent、CRUD、Service Manifest、plan/check/write、plan digest、o
 consumer typed facts
   -> strict parse and validation
   -> canonical Proto/API document
-  -> validate generated/extensions scopes
+  -> validate generated/extensions/user-logic paths
   -> clear and recreate the declared generated scope
   -> run the consumer-selected tool in the consumer repository
+  -> create missing user logic, skip existing logic, or overwrite declared logic with explicit `--overwrite-logic`
   -> parse, format, compile, test and review Git diff
 ```
 
 `ProjectProvider` 为选中 service 返回 typed RPC/API document、与 provider descriptor 一致的 delegated tool、
-唯一 generated scope，以及显式的 consumer-owned extensions、hooks、slots 或 actions scopes。Provider 只定位和
-组合事实，不复制 Proto/API 节点 metadata。
+唯一 generated scope、显式的 consumer-owned extensions、hooks、slots 或 actions scopes，以及可选的准确
+user-logic 初始文件。Provider 只定位和组合事实，不复制 Proto/API 节点 metadata。
 
 ## Replace-tree
 
 整个声明的 generated scope 是唯一 replacement unit。每次 generate 在启动 delegated tool 前清空并重建该
-目录；不维护 file-set、action list、previous manifest、stale ownership 或逐文件 merge。
+目录；不维护 file-set、action list、previous manifest、stale ownership 或逐文件 merge。声明的 user-logic
+文件是 create-once 输出：缺失时创建，已存在时默认跳过且字节不变，只有显式 `--overwrite-logic` 才覆盖准确目标。
 
 首次写入前拒绝：
 
 - repository escape 和 traversal；
 - `.git` 及其大小写别名；
 - generated/extensions overlap 或 case-fold collision；
+- user-logic 与 generated/extensions overlap 或 user-logic exact/case-fold collision；
 - 已存在路径 component 中的 symlink。
 
-Extensions 和其他人工源码位于 generated scope 之外，因不在写集内保持不变。Generator 不扫描或推断人工
-ownership。
+Extensions 和未声明人工源码位于 generated scope 之外，因不在写集内保持不变。Generator 不扫描或推断人工
+ownership；overwrite 也不会扩展到声明目标以外。
 
 ## Delegated tool
 
@@ -69,9 +72,10 @@ consumer repository 中直接执行 version-pinned tool，同时通过
 1. typed Proto/API 输入由正式 parser 读取；
 2. 输出位于声明 generated scope，stale tree 被完整替换；
 3. extensions 和其他人工源码字节不变；
-4. delegated tool 非零退出保留 partial change；
-5. 预提交期望生成物的 clean fixture 第一次和第二次生成后 `git diff` 都为空；
-6. generated Proto/API/Go 通过 parser、format、compile、unit test 和 external-consumer E2E。
+4. 缺失 user-logic 被创建，已有 user-logic 默认字节不变，显式 overwrite 只覆盖声明目标；
+5. delegated tool 非零退出保留 partial change；
+6. 预提交期望生成物的 clean fixture 第一次和第二次生成后 `git diff` 都为空；
+7. generated Proto/API/Go 通过 parser、format、compile、unit test 和 external-consumer E2E。
 
 Artifact/API/Service Manifest package 的独立数据结构见[生成清单](generated-manifests.md)。这些 package 的
 存在不表示当前 direct generation command 会创建或消费 manifest。

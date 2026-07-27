@@ -23,11 +23,17 @@ var (
 )
 
 type generationResult struct {
-	APIVersion     string `json:"apiVersion"`
-	Kind           string `json:"kind"`
-	Status         string `json:"status"`
-	Service        string `json:"service"`
-	GeneratedScope string `json:"generatedScope"`
+	APIVersion     string            `json:"apiVersion"`
+	Kind           string            `json:"kind"`
+	Status         string            `json:"status"`
+	Service        string            `json:"service"`
+	GeneratedScope string            `json:"generatedScope"`
+	UserLogic      []userLogicResult `json:"userLogic"`
+}
+
+type userLogicResult struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
 }
 
 func newCommandRunner(options Options) (*commandRunner, error) {
@@ -105,7 +111,7 @@ func (r *commandRunner) generateRPC(ctx context.Context, invocation plugin.Invoc
 	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
 		return nil, inputError("fact_source_invalid", "provider", "rpc_facts_invalid", "/project/services/rpc/facts", "")
 	}
-	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleRPCGo, service.RPC.Tool, service.RPC.GeneratedScope, service.RPC.ExtensionScopes, stdin)
+	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleRPCGo, service.RPC.Tool, service.RPC.GeneratedScope, service.RPC.ExtensionScopes, service.RPC.UserLogic, stdin, invocation)
 }
 
 func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invocation) (any, error) {
@@ -120,10 +126,10 @@ func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invoc
 	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
 		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api/facts", "")
 	}
-	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, stdin)
+	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, stdin, invocation)
 }
 
-func (r *commandRunner) generate(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, stdin []byte) (any, error) {
+func (r *commandRunner) generate(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, userLogic []UserLogicFile, stdin []byte, invocation plugin.Invocation) (any, error) {
 	if err := r.requireProviderTool(providerID, role, tool); err != nil {
 		return nil, err
 	}
@@ -134,13 +140,17 @@ func (r *commandRunner) generate(ctx context.Context, repository, providerID, se
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := replacetree.Prepare(repository, generated, extensions)
+	logicTargets := make([]replacetree.UserLogicFile, len(userLogic))
+	for index, value := range userLogic {
+		logicTargets[index] = replacetree.UserLogicFile{Path: value.Path, Content: append([]byte(nil), value.Content...)}
+	}
+	prepared, err := replacetree.Prepare(repository, generated, extensions, logicTargets)
 	if err != nil {
 		return nil, projectOwnerError(err)
 	}
 	result, err := toolchain.RunDirect(ctx, r.runner, toolchain.Request{
 		RepositoryRoot: repository, StagingRoot: repository, WorkDir: repository,
-		Tool: tool, Args: []string{"generate", "--service", serviceID, "--generated-scope", prepared}, Environment: environment, Stdin: append([]byte(nil), stdin...),
+		Tool: tool, Args: []string{"generate", "--service", serviceID, "--generated-scope", prepared.GeneratedScope()}, Environment: environment, Stdin: append([]byte(nil), stdin...),
 	})
 	if err != nil {
 		return nil, projectOwnerError(err)
@@ -151,7 +161,19 @@ func (r *commandRunner) generate(ctx context.Context, repository, providerID, se
 	if result.ExitCode != 0 {
 		return nil, delegatedToolFailure(tool.ID, result.ExitCode, result.Diagnostic)
 	}
-	return generationResult{APIVersion: "nexa.dev/generation-result/v1", Kind: "GenerationResult", Status: "generated", Service: serviceID, GeneratedScope: prepared}, nil
+	overwrite, ok := invocation.Flags["overwrite-logic"].(bool)
+	if !ok {
+		return nil, inputError("request_invalid", "input", "overwrite_logic_invalid", "/flags/overwrite-logic", "")
+	}
+	logic, err := prepared.WriteUserLogic(overwrite)
+	if err != nil {
+		return nil, projectOwnerError(err)
+	}
+	resultLogic := make([]userLogicResult, len(logic))
+	for index, value := range logic {
+		resultLogic[index] = userLogicResult{Path: value.Path, Action: string(value.Action)}
+	}
+	return generationResult{APIVersion: "nexa.dev/generation-result/v2", Kind: "GenerationResult", Status: "generated", Service: serviceID, GeneratedScope: prepared.GeneratedScope(), UserLogic: resultLogic}, nil
 }
 
 func (r *commandRunner) resolve(ctx context.Context, invocation plugin.Invocation) (string, string, ServiceProject, error) {

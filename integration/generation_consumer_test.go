@@ -45,12 +45,42 @@ func TestGenerationPluginExternalConsumer(t *testing.T) {
 	runGenerationConsumerCommand(t, consumer, environment, "git", "add", ".")
 	runGenerationConsumerCommand(t, consumer, environment, "git", "commit", "-qm", "expected generation fixture")
 	for attempt := 1; attempt <= 2; attempt++ {
-		output := runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper)
+		output := runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper, "--expect-action", "skipped")
 		if strings.TrimSpace(string(output)) != "generation-consumer-ok" {
 			t.Fatalf("generation consumer attempt %d output = %q", attempt, output)
 		}
 		runGenerationConsumerCommand(t, consumer, environment, "git", "diff", "--exit-code", "--ignore-submodules=dirty")
 	}
+	for _, name := range []string{"backend/account/internal/logic/account.go", "backend/core/internal/logic/health.go"} {
+		if err := os.Remove(filepath.Join(consumer, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("remove logic %s: %v", name, err)
+		}
+	}
+	output := runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper, "--expect-action", "created")
+	if strings.TrimSpace(string(output)) != "generation-consumer-ok" {
+		t.Fatalf("create-once generation output = %q", output)
+	}
+	runGenerationConsumerCommand(t, consumer, environment, "git", "diff", "--exit-code", "--ignore-submodules=dirty")
+	for path, value := range map[string]string{
+		"backend/account/internal/logic/account.go": "package logic\n\nconst AccountLogic = false\n",
+		"backend/core/internal/logic/health.go":     "package logic\n\nconst HealthLogic = false\n",
+	} {
+		if err := os.WriteFile(filepath.Join(consumer, filepath.FromSlash(path)), []byte(value), 0o644); err != nil {
+			t.Fatalf("mutate logic: %v", err)
+		}
+	}
+	output = runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper, "--expect-action", "skipped")
+	if strings.TrimSpace(string(output)) != "generation-consumer-ok" {
+		t.Fatalf("skip existing logic output = %q", output)
+	}
+	if data, err := os.ReadFile(filepath.Join(consumer, "backend/account/internal/logic/account.go")); err != nil || string(data) != "package logic\n\nconst AccountLogic = false\n" {
+		t.Fatalf("existing RPC logic changed: %q %v", data, err)
+	}
+	output = runGenerationConsumerCommand(t, consumer, environment, "go", "run", "-mod=readonly", "./cmd/verify", "--repo-root", consumer, "--helper", helper, "--overwrite-logic", "--expect-action", "overwritten")
+	if strings.TrimSpace(string(output)) != "generation-consumer-ok" {
+		t.Fatalf("explicit overwrite output = %q", output)
+	}
+	runGenerationConsumerCommand(t, consumer, environment, "git", "diff", "--exit-code", "--ignore-submodules=dirty")
 	runGenerationConsumerCommand(t, consumer, environment, "go", "test", "-mod=readonly", "./...")
 }
 

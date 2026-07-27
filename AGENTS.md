@@ -40,7 +40,9 @@
 1. 解析并校验版本化输入契约；
 2. 校验声明的生成目录位于 consumer repository 内，且不指向 `.git` 或其大小写别名；
 3. 以声明的 generated 目录为唯一 replacement unit，直接清空并重建整个目录；
-4. 失败时返回非零结果和稳定错误，不掩盖已经发生的文件变化。
+4. 对声明在 generated scope 之外的 user-logic 文件，缺失时创建一次，已存在时默认跳过，只有公开
+   `overwrite-logic` 参数为 true 时才覆盖这些准确目标；
+5. 失败时返回非零结果和稳定错误，不掩盖已经发生的文件变化。
 
 生成失败允许保留部分变更。生成器不负责恢复工作区；使用方通过 `git diff` 审阅实际变化，通过
 `git restore` 恢复，并在同一 Git worktree 中决定是否接受生成结果。用户代码已经由 Git 管理，
@@ -51,7 +53,9 @@
 - 所有输出必须位于当前 repository 边界内；
 - `.git` 及其大小写别名永远禁止写入；
 - generated 目录与显式声明的 consumer-owned extensions、hooks、slots 和 actions 目录必须分离；
-- 生成器只能清空并重建声明的 generated 目录；声明目录之外的所有文件都必须因不在写集内而保持不变；
+- user-logic 文件必须位于 generated 和 extension scopes 之外，且 overwrite 只能作用于这些声明的准确文件；
+- 生成器只能清空并重建声明的 generated 目录；声明的 user-logic 文件按 create-once 规则处理，其他声明目录之外的
+  文件都必须因不在写集内而保持不变；
 - 禁止扫描、分类或推断人工代码和 stale ownership，也不提供 file-set、action-list 或逐文件 ownership 模式；
 - 首次写入前只执行普通路径检查：拒绝 repository lexical escape、越出声明 generated scope 的 traversal、
   `.git` 大小写别名、输出范围重叠、generated/extensions 重叠、exact/case-fold path collision，以及路径
@@ -71,11 +75,12 @@
 1. 契约输入正确，非法输入在写入前失败；
 2. 输出内容和目录符合预期；
 3. 声明的 generated 目录被直接覆盖；
-4. extensions 和其他人工代码不受影响；
-5. 最小 generation consumer fixture 通过公开生成入口消费真实 typed contract，并产生预期源码；
-6. fixture 预先提交期望生成物并从 clean tree 开始；第一次和第二次使用相同输入生成后 `git diff` 均为空，
+4. extensions 和未声明人工代码不受影响；
+5. 缺失 user-logic 被创建一次，已有 user-logic 默认字节不变，显式 overwrite 只覆盖声明目标；
+6. 最小 generation consumer fixture 通过公开生成入口消费真实 typed contract，并产生预期源码；
+7. fixture 预先提交期望生成物并从 clean tree 开始；第一次和第二次使用相同输入生成后 `git diff` 均为空，
    证明直接生成和重复生成不会引入额外变化；
-7. 生成结果通过 format、compile 和与生成产物直接相关的定向 test。
+8. 生成结果通过 format、compile 和与生成产物直接相关的定向 test。
 
 DG1 的 E2E 到“真实 consumer 调用生成入口、得到预期源码并成功编译”为止。它明确不包含 Source Bundle
 materialize/detach、Core 应用启动、HTTP/RPC health、IAM 或 session 流程、数据库、前端、容器、部署和

@@ -43,6 +43,7 @@ consumer 的 `ProjectProvider` 返回 `ServiceProject`。每个被选择的 RPC/
 - 与 provider descriptor 完全一致的 delegated tool identity；
 - 唯一 generated scope；
 - consumer-owned extensions、hooks、slots 或 actions scopes。
+- 可选的准确 user-logic 初始文件；缺失时创建一次，已存在时默认跳过。
 
 Provider 只定位和组合事实，不复制节点 metadata。delegated tool 是 consumer 明确选择的受信任本地进程，
 直接在 consumer repository 写入；Nexa 不提供 OS sandbox，也不推导 tool 的业务写集。
@@ -50,13 +51,15 @@ Provider 只定位和组合事实，不复制节点 metadata。delegated tool �
 ## Replace-Tree
 
 每次 generate 在工具执行前清空并重建整个声明 generated scope。没有 file-set、action list、stale ownership
-扫描或历史 manifest。generated scope 之外的内容因不在写集内保持不变。
+扫描或历史 manifest。声明的 user-logic 文件缺失时创建、已存在时默认跳过且字节不变；只有公开的
+`--overwrite-logic` 参数为 true 时覆盖这些准确目标。其他 generated scope 之外的内容因不在写集内保持不变。
 
 首次写入前必须完成普通路径检查：
 
 - repository lexical boundary 和 traversal；
 - `.git` 及其大小写别名；
 - generated/extensions overlap；
+- user-logic 与 generated/extensions overlap，以及 user-logic exact/case-fold collision；
 - exact 与 case-fold scope collision；
 - 已存在路径 component 中的 symlink。
 
@@ -71,9 +74,10 @@ Provider 只定位和组合事实，不复制节点 metadata。delegated tool �
 2. 非法路径在首次写入前失败；
 3. stale generated tree 被完整替换；
 4. extensions 和其他人工源码字节不变；
-5. delegated tool 失败返回非零并保留 partial change；
-6. fixture 预提交期望生成物，从 clean Git tree 开始，第一次和第二次相同生成后 `git diff` 均为空；
-7. 生成 Proto/API/Go 通过 parser、format、compile、unit 和真实 external-consumer E2E。
+5. 缺失 user-logic 被创建，已有 user-logic 默认字节不变，显式 overwrite 只覆盖声明目标；
+6. delegated tool 失败返回非零并保留 partial change；
+7. fixture 预提交期望生成物，从 clean Git tree 开始，第一次和第二次相同生成后 `git diff` 均为空；
+8. 生成 Proto/API/Go 通过 parser、format、compile、unit 和真实 external-consumer E2E。
 
 禁止用源码字符串、文件位置、目录 allowlist 或行数门禁代替公开协议和生成行为验证。
 

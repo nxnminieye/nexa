@@ -27,6 +27,13 @@ const providerID = "consumer"
 
 type consumerProvider struct{ helper string }
 
+const (
+	rpcLogicPath = "backend/account/internal/logic/account.go"
+	apiLogicPath = "backend/core/internal/logic/health.go"
+	rpcLogic     = "package logic\n\nconst AccountLogic = true\n"
+	apiLogic     = "package logic\n\nconst HealthLogic = true\n"
+)
+
 func (provider consumerProvider) Descriptor() generation.ProviderDescriptor {
 	return generation.ProviderDescriptor{ID: providerID, Version: "v1.0.0", Tools: []generation.ProviderTool{
 		{Role: generation.ToolRoleRPCGo, Tool: delegated("consumer.rpc")},
@@ -46,8 +53,8 @@ func (provider consumerProvider) Resolve(ctx context.Context, repository string)
 		return generation.Project{}, err
 	}
 	return generation.Project{Services: []generation.ServiceProject{
-		{ServiceID: "account", RPC: &generation.RPCProject{Facts: rpc, Tool: directTool("consumer.rpc", "rpc", provider.helper), GeneratedScope: "backend/account/generated", ExtensionScopes: []string{"backend/account/extensions"}}},
-		{ServiceID: "core", API: &generation.APIProject{Facts: api, Tool: directTool("consumer.api", "api", provider.helper), GeneratedScope: "backend/core/generated", ExtensionScopes: []string{"backend/core/extensions"}}},
+		{ServiceID: "account", RPC: &generation.RPCProject{Facts: rpc, Tool: directTool("consumer.rpc", "rpc", provider.helper), GeneratedScope: "backend/account/generated", ExtensionScopes: []string{"backend/account/extensions"}, UserLogic: []generation.UserLogicFile{{Path: rpcLogicPath, Content: []byte(rpcLogic)}}}},
+		{ServiceID: "core", API: &generation.APIProject{Facts: api, Tool: directTool("consumer.api", "api", provider.helper), GeneratedScope: "backend/core/generated", ExtensionScopes: []string{"backend/core/extensions"}, UserLogic: []generation.UserLogicFile{{Path: apiLogicPath, Content: []byte(apiLogic)}}}},
 	}}, nil
 }
 
@@ -68,6 +75,8 @@ func directTool(id, family, helper string) toolchain.Tool {
 func main() {
 	repository := flag.String("repo-root", "", "consumer repository root")
 	helper := flag.String("helper", "", "direct generation helper")
+	overwrite := flag.Bool("overwrite-logic", false, "overwrite declared logic files")
+	expectAction := flag.String("expect-action", "skipped", "expected user-logic result action")
 	flag.Parse()
 	if *repository == "" || *helper == "" {
 		panic("repo-root and helper are required")
@@ -80,18 +89,42 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	requireOK(cli, []string{"generation", "rpc", "generate", "--repo-root", *repository, "--provider", providerID, "--service", "account", "--json"})
-	requireOK(cli, []string{"generation", "api", "generate", "--repo-root", *repository, "--provider", providerID, "--service", "core", "--json"})
+	rpcArgs := []string{"generation", "rpc", "generate", "--repo-root", *repository, "--provider", providerID, "--service", "account"}
+	apiArgs := []string{"generation", "api", "generate", "--repo-root", *repository, "--provider", providerID, "--service", "core"}
+	if *overwrite {
+		rpcArgs = append(rpcArgs, "--overwrite-logic")
+		apiArgs = append(apiArgs, "--overwrite-logic")
+	}
+	rpcArgs = append(rpcArgs, "--json")
+	apiArgs = append(apiArgs, "--json")
+	requireOK(cli, rpcArgs, *expectAction)
+	requireOK(cli, apiArgs, *expectAction)
 	verifyGenerated(*repository)
 	fmt.Println("generation-consumer-ok")
 }
 
-func requireOK(cli *host.Host, args []string) {
+func requireOK(cli *host.Host, args []string, want string) {
 	var stdout, stderr bytes.Buffer
 	exit := cli.Execute(context.Background(), args, &stdout, &stderr)
 	var envelope cliprotocol.Envelope
 	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil || exit != 0 || !envelope.OK || stderr.Len() != 0 {
 		panic(fmt.Sprintf("command %v failed: exit=%d envelope=%#v stderr=%q decode=%v", args, exit, envelope, stderr.String(), err))
+	}
+	resultBytes, err := json.Marshal(envelope.Result)
+	if err != nil {
+		panic(fmt.Sprintf("command %v result encode: %v", args, err))
+	}
+	var result struct {
+		UserLogic []struct {
+			Path   string `json:"path"`
+			Action string `json:"action"`
+		} `json:"userLogic"`
+	}
+	if err := json.Unmarshal(resultBytes, &result); err != nil || len(result.UserLogic) != 1 {
+		panic(fmt.Sprintf("command %v missing user logic result: %v %s", args, err, resultBytes))
+	}
+	if result.UserLogic[0].Action != want {
+		panic(fmt.Sprintf("command %v user logic action = %q, want %q", args, result.UserLogic[0].Action, want))
 	}
 }
 

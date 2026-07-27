@@ -33,7 +33,7 @@ func TestNewExposesOnlyDirectRPCAndAPIGeneration(t *testing.T) {
 	paths := make([]string, len(spec.Commands))
 	for index, command := range spec.Commands {
 		paths[index] = strings.Join(command.Path, " ")
-		if command.SideEffect != plugin.SideEffectRepositoryWrite || len(command.Flags) != 3 || len(command.DelegatedTools) != 1 {
+		if command.SideEffect != plugin.SideEffectRepositoryWrite || len(command.Flags) != 4 || len(command.DelegatedTools) != 1 {
 			t.Fatalf("command = %#v", command)
 		}
 	}
@@ -81,7 +81,7 @@ func TestDirectRPCGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T
 	if err := json.Unmarshal(encoded, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != "generated" || got.GeneratedScope != "generated/rpc" {
+	if got.APIVersion != "nexa.dev/generation-result/v2" || got.Status != "generated" || got.GeneratedScope != "generated/rpc" {
 		t.Fatalf("result = %#v", got)
 	}
 	wantArgs := []string{"generate", "--service", "sample", "--generated-scope", "generated/rpc"}
@@ -125,6 +125,49 @@ func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	}
 }
 
+func TestDirectGenerationSkipsExistingLogicAndOverwritesOnlyDeclaredTarget(t *testing.T) {
+	repository := t.TempDir()
+	tool := directTool("consumer.rpc")
+	logic := []byte("package logic\n\nconst Value = 1\n")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleRPCGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", RPC: &generation.RPCProject{
+			Facts: rpcDocument(t), Tool: tool, GeneratedScope: "generated/rpc", UserLogic: []generation.UserLogicFile{{Path: "logic/sample.go", Content: logic}},
+		}}}},
+	}
+	path := filepath.Join(repository, "logic/sample.go")
+	other := filepath.Join(repository, "logic/other.go")
+	mustWrite(t, path, []byte("package logic\n\nconst Value = 2\n"))
+	mustWrite(t, other, []byte("package logic\n\nconst Other = 3\n"))
+	runner := &testRunner{writePath: "generated/rpc/sample.go", writeData: []byte("package rpcgenerated\n")}
+	command := generationCommand(t, provider, runner, "rpc")
+	result, err := command.Run(context.Background(), invocation(repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, readErr := os.ReadFile(path); readErr != nil || string(data) != "package logic\n\nconst Value = 2\n" {
+		t.Fatalf("default generation changed logic: %q, %v", data, readErr)
+	}
+	if data, readErr := os.ReadFile(other); readErr != nil || string(data) != "package logic\n\nconst Other = 3\n" {
+		t.Fatalf("default generation changed unrelated logic: %q, %v", data, readErr)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || !strings.Contains(string(encoded), `"action":"skipped"`) {
+		t.Fatalf("skip result = %s, %v", encoded, err)
+	}
+	overwrite := invocation(repository)
+	overwrite.Flags["overwrite-logic"] = true
+	if _, err := command.Run(context.Background(), overwrite); err != nil {
+		t.Fatal(err)
+	}
+	if data, readErr := os.ReadFile(path); readErr != nil || string(data) != string(logic) {
+		t.Fatalf("explicit overwrite content: %q, %v", data, readErr)
+	}
+	if data, readErr := os.ReadFile(other); readErr != nil || string(data) != "package logic\n\nconst Other = 3\n" {
+		t.Fatalf("explicit overwrite changed unrelated logic: %q, %v", data, readErr)
+	}
+}
+
 func TestDirectGenerationFailureKeepsPartialChanges(t *testing.T) {
 	repository := t.TempDir()
 	mustWrite(t, filepath.Join(repository, "generated/rpc/stale.go"), []byte("stale"))
@@ -164,7 +207,7 @@ func generationCommand(t *testing.T, provider testProvider, runner toolchain.Run
 }
 
 func invocation(repository string) plugin.Invocation {
-	return plugin.Invocation{Flags: map[string]any{"repo-root": repository, "provider": "consumer", "service": "sample"}}
+	return plugin.Invocation{Flags: map[string]any{"repo-root": repository, "provider": "consumer", "service": "sample", "overwrite-logic": false}}
 }
 
 type testProvider struct {
