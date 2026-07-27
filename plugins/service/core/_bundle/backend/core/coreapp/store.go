@@ -38,14 +38,32 @@ type LocalCredential struct {
 }
 
 type TenantMember struct {
-	ID                TenantMemberID
-	TenantID          string
-	TenantCode        string
-	AccountID         IdentityAccountID
-	Status            IAMStatus
-	ManualRoleCodes   []string
-	ManagedOwnerGrant bool
-	Version           uint64
+	ID                     TenantMemberID
+	TenantID               string
+	TenantCode             string
+	AccountID              IdentityAccountID
+	AccountUsername        string
+	AccountEmail           string
+	AccountDisplayName     string
+	AccountSourceCode      string
+	AccountExternalSubject string
+	Status                 IAMStatus
+	ManualRoleCodes        []string
+	ManagedOwnerGrant      bool
+	Version                uint64
+}
+
+type ListQuery struct {
+	Keyword string
+	Status  IAMStatus
+	Limit   uint32
+	Offset  uint32
+}
+
+type ListIdentityAccountsInput struct{ ListQuery }
+type IdentityAccountPage struct {
+	Total uint64
+	Items []IdentityAccount
 }
 
 type LocalAccountKey struct {
@@ -111,6 +129,21 @@ type IdentityStore interface {
 	SessionStore
 }
 
+type AccessPrincipal struct {
+	SessionID       SessionID
+	TenantID        string
+	TenantCode      string
+	MemberID        TenantMemberID
+	Account         IdentityAccount
+	RoleCodes       []string
+	PermissionCodes []string
+	MenuCodes       []string
+}
+
+type AccessSessionStore interface {
+	FindAccessPrincipal(context.Context, string, time.Time) (AccessPrincipal, error)
+}
+
 type ExternalIdentityLookup interface {
 	FindExternalAccount(context.Context, ExternalIdentityKey) (IdentityAccount, error)
 }
@@ -143,6 +176,24 @@ type TenantMemberKey struct {
 
 type ListTenantMembersInput struct {
 	TenantID string
+	ListQuery
+}
+
+type TenantMemberPage struct {
+	Total uint64
+	Items []TenantMember
+}
+
+type ListTenantsInput struct{ ListQuery }
+type TenantPage struct {
+	Total uint64
+	Items []Tenant
+}
+
+type UpdateTenantStoreInput struct {
+	TenantID        string
+	DisplayName     string
+	ExpectedVersion uint64
 }
 
 type SetTenantMemberStatusStoreInput struct {
@@ -168,6 +219,28 @@ type SetTenantStatusStoreInput struct {
 type TenantRoleKey struct {
 	TenantID string
 	RoleID   TenantRoleID
+}
+
+type ListTenantRolesInput struct {
+	TenantID string
+	ListQuery
+}
+
+type TenantRolePage struct {
+	Total uint64
+	Items []TenantRole
+}
+
+type ListMenusInput struct{ ListQuery }
+type MenuPage struct {
+	Total uint64
+	Items []Menu
+}
+
+type ListPermissionsInput struct{ ListQuery }
+type PermissionPage struct {
+	Total uint64
+	Items []Permission
 }
 
 type CreateTenantRoleStoreInput struct {
@@ -220,18 +293,28 @@ type ResetLocalPasswordStoreInput struct {
 // status and grant methods must enforce the boolean guard carried by each
 // command in the same transaction as the mutation.
 type IAMStore interface {
+	ListIdentityAccounts(context.Context, ListIdentityAccountsInput) (IdentityAccountPage, error)
+	GetIdentityAccount(context.Context, IdentityAccountID) (IdentityAccount, error)
 	ProvisionTenant(context.Context, ProvisionTenantStoreInput) (ProvisionTenantResult, error)
+	ListTenants(context.Context, ListTenantsInput) (TenantPage, error)
+	GetTenant(context.Context, string) (Tenant, error)
+	UpdateTenant(context.Context, UpdateTenantStoreInput) (Tenant, error)
 	SetTenantStatus(context.Context, SetTenantStatusStoreInput) (Tenant, error)
-	ListTenantMembers(context.Context, ListTenantMembersInput) ([]TenantMember, error)
+	ListTenantMembers(context.Context, ListTenantMembersInput) (TenantMemberPage, error)
 	GetTenantMember(context.Context, TenantMemberKey) (TenantMember, error)
 	SetTenantMemberStatus(context.Context, SetTenantMemberStatusStoreInput) (TenantMember, error)
 	ReplaceManualRoleGrants(context.Context, ReplaceManualRolesStoreInput) (TenantMember, error)
+	ListTenantRoles(context.Context, ListTenantRolesInput) (TenantRolePage, error)
 	GetTenantRole(context.Context, TenantRoleKey) (TenantRole, error)
 	CreateTenantRole(context.Context, CreateTenantRoleStoreInput) (TenantRole, error)
 	UpdateTenantRole(context.Context, UpdateTenantRoleStoreInput) (TenantRole, error)
 	SetTenantRoleStatus(context.Context, SetTenantRoleStatusStoreInput) (TenantRole, error)
 	ReplaceRolePermissions(context.Context, ReplaceRolePermissionsStoreInput) (TenantRole, error)
 	ReplaceRoleMenus(context.Context, ReplaceRoleMenusStoreInput) (TenantRole, error)
+	ListMenus(context.Context, ListMenusInput) (MenuPage, error)
+	GetMenu(context.Context, string) (Menu, error)
+	ListPermissions(context.Context, ListPermissionsInput) (PermissionPage, error)
+	GetPermission(context.Context, string) (Permission, error)
 	SetIdentityAccountStatus(context.Context, SetAccountStatusStoreInput) (IdentityAccount, error)
 	ResetLocalPassword(context.Context, ResetLocalPasswordStoreInput) error
 }

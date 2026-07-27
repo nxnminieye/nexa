@@ -109,8 +109,9 @@ inspect -> validate typed inputs and declared scopes -> direct generate
 ```
 
 `repo-root`、provider、service 等参数从当前 inspection 的 flag/schema 读取。当前 official generation plugin
-只公开 RPC/API direct generate；Reference CLI 没有 consumer ProjectProvider，真实生成必须由 consumer
-composition 提供 typed facts、delegated tool 和 generated/extensions scopes。生成后用 Git diff 审阅。
+公开 RPC、API 与 frontend direct generate；Reference CLI 没有 consumer ProjectProvider，真实生成必须由
+consumer composition 提供 typed facts、delegated tool 和 generated/extensions scopes。Frontend 还必须提供
+PageSpec、canonical FrontendIR 与 exact frontend source lock digest。生成后用 Git diff 审阅。
 
 需要标准服务源码时，在 generation 前按[标准服务 starter](../starters/standard-services.md)执行 source plan 和
 materialize。完整检查见[验证矩阵](verification-matrix.md)。

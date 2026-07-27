@@ -139,6 +139,85 @@ func TestCompositionInjectsInt64TenantWithoutExposingHTTPField(t *testing.T) {
 	}
 }
 
+func TestCompositionRendersStringTenantRequestContext(t *testing.T) {
+	source := strings.Replace(validProtocolSource(false), "int64 tenant_id = 2;", "string tenant_id = 2;", 1)
+	document, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, source)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := renderedByID(t, artifacts, "client.account")
+	mapper := renderedByID(t, artifacts, "mapper.account")
+	if !bytes.Contains(client.Content, []byte("TenantID  string")) || !bytes.Contains(client.Content, []byte("TenantId  string")) {
+		t.Fatalf("generated client does not use string tenant: %s", client.Content)
+	}
+	if !bytes.Contains(mapper.Content, []byte("TenantId:  values.TenantID")) {
+		t.Fatalf("generated mapper omits string tenant context: %s", mapper.Content)
+	}
+	compileGeneratedModule(t, artifacts)
+}
+
+func TestCompositionPreservesIndependentTenantTypesAcrossServices(t *testing.T) {
+	accountSource := strings.Replace(validProtocolSource(false), "int64 tenant_id = 2;", "string tenant_id = 2;", 1)
+	billingSource := strings.ReplaceAll(validProtocolSource(false), "account.v1", "billing.v1")
+	billingSource = strings.ReplaceAll(billingSource, "account.get", "billing.get")
+	billingSource = strings.ReplaceAll(billingSource, "/accounts/{id}", "/billing/{id}")
+	billingSource = strings.ReplaceAll(billingSource, "AccountService", "BillingService")
+	account := compileProtocolForService(t, "account", accountSource)
+	billing := compileProtocolForService(t, "billing", billingSource)
+
+	for serviceID, document := range map[string]protocol.Document{"account": account, "billing": billing} {
+		canonical, err := protocol.CanonicalJSON(document)
+		if err != nil {
+			t.Fatalf("CanonicalJSON(%s): %v", serviceID, err)
+		}
+		source, err := provenance.ParseDomainSource("generated/protocol-" + serviceID + ".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot, err := protocol.ParseSnapshot(source, canonical)
+		if err != nil {
+			t.Fatalf("ParseSnapshot(%s): %v", serviceID, err)
+		}
+		roundTrip, err := snapshot.CanonicalJSON()
+		if err != nil || !bytes.Equal(roundTrip, canonical) {
+			t.Fatalf("Protocol snapshot %s changed canonical bytes: %v", serviceID, err)
+		}
+	}
+
+	document, err := composition.Build(objectCatalog(t), []protocol.Document{account, billing}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := composition.CanonicalJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compositionSource, _ := provenance.ParseDomainSource("generated/composition-independent-tenants.json")
+	snapshot, err := composition.ParseSnapshot(compositionSource, canonical)
+	if err != nil {
+		t.Fatalf("ParseSnapshot(composition): %v", err)
+	}
+	roundTrip, err := snapshot.CanonicalJSON()
+	if err != nil || !bytes.Equal(roundTrip, canonical) {
+		t.Fatalf("Composition snapshot changed canonical bytes: %v", err)
+	}
+
+	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountClient := renderedByID(t, artifacts, "client.account")
+	billingClient := renderedByID(t, artifacts, "client.billing")
+	if !bytes.Contains(accountClient.Content, []byte("TenantID  string")) || !bytes.Contains(billingClient.Content, []byte("TenantID  int64")) {
+		t.Fatalf("generated RequestContext tenant types are wrong:\n%s\n%s", accountClient.Content, billingClient.Content)
+	}
+	compileGeneratedModule(t, artifacts)
+}
+
 func TestRenderUsesOperationScopedRPCClientMethods(t *testing.T) {
 	second := strings.Replace(validProtocolSource(false), "service AccountService {", `service LookupService {
   rpc Get(GetAccountRequest) returns (GetAccountResponse) {

@@ -52,9 +52,18 @@ PostgreSQL consumer gate 的环境变量、容器和 CI 启动方式由 applicat
 
 ## 公开操作
 
-首批管理面包含账号状态和密码重置、成员列表/状态/人工角色替换、租户创建/状态，以及
-角色创建/更新/状态/权限/菜单操作。既有注册、登录、刷新、撤销、健康检查和鉴权消息的
-wire number 与 route 保持不变。
+首批管理面包含：
+
+- 身份账号 list/get、状态更新和密码重置；
+- 租户成员 list/get、状态更新和人工角色替换；
+- 租户 list/get、创建、显示名称更新和状态更新；
+- 角色 list/get、创建、更新、状态、权限和菜单操作；
+- 菜单与权限目录 list/get。
+
+List 使用统一 `keyword/status/limit/offset`，默认 limit 为 50、最大 200，并返回 `total/items`。成员和角色
+查询严格使用认证上下文中的 numeric tenant ID；角色 readback 返回 permission/menu codes，成员 readback
+区分人工角色授权并保留账户 username、email、display name、identity source 与 external subject。既有注册、
+登录、刷新、撤销、健康检查和鉴权消息的 wire number 与 route 保持不变。
 
 账号禁用必须撤销活动 session，公开操作不提供保留 session 的开关。密码重置必须在同一
 store operation 中递增 `credential_version` 并撤销活动 session，这些失效规则不可由
@@ -63,8 +72,21 @@ store operation 中递增 `credential_version` 并撤销活动 session，这些�
 登录和刷新对租户、账号和租户成员执行相同的 enabled-state 检查。任一层被禁用时统一
 投影为 `invalid_credentials` 和 HTTP 401，不向调用方泄露具体禁用层级。
 
-本契约不暴露删除生命周期、租户 settings、身份提供方配置或目录同步。菜单与权限目录
-记录是只读 generated CRUD projection，写入只发生在 application 同步路径。
+## Access Principal
+
+受保护请求通过独立的 `AccessAuthenticator` 将不透明 access token 解析为当前 `AccessPrincipal`。框架只把
+原始 token 的 SHA-256 摘要和同一次 `Clock.Now()` 传给 `AccessSessionStore`；不裁剪、记录或返回原始 token
+及摘要。空 token、未知、过期、撤销、租户/账号/成员禁用或三元组错配统一返回 `invalid_credentials`，取消
+返回 `canceled`，真实存储故障返回不携带底层细节的 `store_failure`。
+
+PostgreSQL store 以单条 statement 从同一 snapshot 读取 session identity、人工与托管角色并集、角色绑定的
+enabled permission action/resource，以及角色绑定的 enabled menu 和 enabled 祖先。角色、权限和菜单 code 均
+按字典序去重；菜单递归显式防环，且 `MenuCodes` 只用于导航投影，不作为 API 授权依据。HTTP adapter 必须以
+principal 的 numeric tenant ID 作为服务调用上下文；请求显式携带的 header、path 或 body tenant 只能用于
+一致性校验，不匹配返回 403。路由权限缺失同样返回 403，认证失败保持 401。
+
+本契约不暴露删除生命周期、租户 settings、身份资料更新、身份提供方配置或目录同步。菜单与权限目录
+记录是只读 projection，写入只发生在 application 同步路径。
 
 新增 IAM 操作只使用稳定错误码 `invalid_input`、`not_found`、`conflict`、
 `concurrent_write`、`permission_denied` 和 `failed_precondition`；`invalid_argument`

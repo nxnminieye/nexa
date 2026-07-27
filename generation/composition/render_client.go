@@ -98,8 +98,14 @@ func formatted(source string) ([]byte, error) {
 
 func renderClient(serviceID string, operations []*operationState, types []*projectedTypeState) ([]byte, error) {
 	var source strings.Builder
+	tenantType := "int64"
+	if byService, err := tenantTypesByService(operations); err != nil {
+		return nil, err
+	} else if value := byService[serviceID]; value != "" {
+		tenantType = value
+	}
 	source.WriteString("package " + packageName(serviceID) + "\n\nimport \"context\"\n\n")
-	source.WriteString("type RequestContext struct { SubjectID string; TenantID int64; RequestID string; TraceID string }\n")
+	source.WriteString("type RequestContext struct { SubjectID string; TenantID " + tenantType + "; RequestID string; TraceID string }\n")
 	source.WriteString("type ContextReader interface { Read(context.Context) (RequestContext, error) }\n")
 	for _, projected := range types {
 		source.WriteString("type " + projected.name + " struct {\n")

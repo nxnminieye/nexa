@@ -84,9 +84,19 @@ func TestCompileRejectsLegacyHTTPProxyContextFields(t *testing.T) {
 	}
 }
 
-func TestTenantContextRequiresSingularInt64(t *testing.T) {
+func TestTenantContextAcceptsSingularStringOrInt64(t *testing.T) {
+	for _, declaration := range []string{"string tenant_id = 2;", "int64 tenant_id = 2;"} {
+		t.Run(strings.Fields(declaration)[0], func(t *testing.T) {
+			source := replaceOnce(validProxyProto(""), "int64 tenant_id = 2;", declaration)
+			if _, err := protocol.Compile(context.Background(), compileOptions(source)); err != nil {
+				t.Fatalf("Compile() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestTenantContextRejectsUnsupportedShapeOrScalar(t *testing.T) {
 	for name, declaration := range map[string]string{
-		"string":   "string tenant_id = 2;",
 		"int32":    "int32 tenant_id = 2;",
 		"repeated": "repeated int64 tenant_id = 2;",
 		"optional": "optional int64 tenant_id = 2;",
@@ -99,6 +109,22 @@ func TestTenantContextRequiresSingularInt64(t *testing.T) {
 				t.Fatalf("Compile() error = %#v", err)
 			}
 		})
+	}
+}
+
+func TestCompileRejectsMixedTenantTypesIncludingMethodWithoutHTTPProxy(t *testing.T) {
+	source := strings.Replace(validProxyProto(""), "service SampleService {", `message AuditRequest { string tenant_id = 1; }
+message AuditResponse {}
+service SampleService {
+  rpc Audit(AuditRequest) returns (AuditResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: TENANT_ID rpc_field: "tenant_id" }
+    };
+  }`, 1)
+	_, err := protocol.Compile(context.Background(), compileOptions(source))
+	owner, ok := err.(*protocol.Error)
+	if !ok || owner.Code() != "protocol_ir_invalid" || owner.Reason() != "tenant_context_type_mixed" {
+		t.Fatalf("Compile() error = %#v", err)
 	}
 }
 

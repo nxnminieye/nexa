@@ -54,8 +54,11 @@ Proto 是 RPC/message/method 的 owner，并可通过 typed custom option 表达
 credential 和 RPC context binding。`.api` 是 Core native HTTP contract 的 owner。Composition 可以合并两类
 projection，但不能把生成 route 写回 Proto 或 `.api`。
 
-跨服务 context 在协议层保持明确的 wire type；需要 tenant context 时，CRUD projection 使用内部
-`tenant_id` binding，不凭字段名猜测或向公开 item/mutation 暴露该字段。
+跨服务 context 在协议层保持明确的 wire type；`TENANT_ID` 是 opaque identifier，只允许绑定到 singular、
+implicit 的 `string` 或 `int64` scalar，同一 service 必须统一使用一种 wire type。Composition 按 service
+推导 `RequestContext.TenantID` 的具体 Go 类型；其他 context 仍只允许 singular、implicit 的 `string`。
+需要 tenant context 时，CRUD projection 使用内部 `tenant_id` binding，不凭字段名猜测或向公开
+item/mutation 暴露该字段。
 
 ## Service Catalog
 

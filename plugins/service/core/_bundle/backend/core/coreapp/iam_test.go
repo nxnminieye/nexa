@@ -152,6 +152,80 @@ func TestIAMSetTenantStatusRequiresSystemActorAndReconciles(t *testing.T) {
 	}
 }
 
+func TestIAMManagementQueriesNormalizeFiltersAndPreserveStructuredReadback(t *testing.T) {
+	account := IdentityAccount{ID: "account-a", SourceCode: "local", Username: "alice", Email: "alice@example.test", DisplayName: "Alice", Status: IAMStatusEnabled}
+	member := TenantMember{
+		ID: "member-a", TenantID: "101", TenantCode: "tenant-a", AccountID: account.ID,
+		AccountUsername: account.Username, AccountEmail: account.Email, AccountDisplayName: account.DisplayName,
+		AccountSourceCode: account.SourceCode, AccountExternalSubject: account.ExternalSubject,
+		Status: IAMStatusEnabled, ManualRoleCodes: []string{"operator"}, Version: 3,
+	}
+	role := TenantRole{ID: "role-a", TenantID: "101", Code: "operator", DisplayName: "Operator", Status: IAMStatusEnabled, PermissionCodes: []string{"read"}, MenuCodes: []string{"home"}, Version: 2}
+	store := &fakeIAMStore{
+		accountPage: IdentityAccountPage{Total: 1, Items: []IdentityAccount{account}},
+		tenantPage:  TenantPage{Total: 1, Items: []Tenant{{ID: "101", Code: "tenant-a", DisplayName: "Tenant A", Status: IAMStatusEnabled, Version: 1}}},
+		memberPage:  TenantMemberPage{Total: 1, Items: []TenantMember{member}}, member: member,
+		rolePage: TenantRolePage{Total: 1, Items: []TenantRole{role}}, role: role,
+		menuPage:       MenuPage{Total: 1, Items: []Menu{{Code: "home", DisplayName: "Home", Status: IAMStatusEnabled}}},
+		permissionPage: PermissionPage{Total: 1, Items: []Permission{{Code: "read", DisplayName: "read", Status: IAMStatusEnabled}}},
+	}
+	service := newTestIAMService(t, store, &recordingReconciler{})
+
+	accounts, err := service.ListIdentityAccounts(context.Background(), ListIdentityAccountsInput{ListQuery: ListQuery{Keyword: " alice ", Status: IAMStatusEnabled, Offset: 4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts.Total != 1 || !reflect.DeepEqual(accounts.Items, []IdentityAccount{account}) || store.lastAccountList.Keyword != "alice" || store.lastAccountList.Limit != 50 || store.lastAccountList.Offset != 4 {
+		t.Fatalf("accounts=%#v input=%#v", accounts, store.lastAccountList)
+	}
+
+	members, err := service.ListTenantMembers(context.Background(), ListTenantMembersInput{TenantID: " 101 ", ListQuery: ListQuery{Keyword: " Alice ", Status: IAMStatusEnabled, Limit: 25}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if members.Total != 1 || members.Items[0].AccountUsername != "alice" || !reflect.DeepEqual(members.Items[0].ManualRoleCodes, []string{"operator"}) || store.lastMemberList.TenantID != "101" || store.lastMemberList.Keyword != "Alice" {
+		t.Fatalf("members=%#v input=%#v", members, store.lastMemberList)
+	}
+
+	roles, err := service.ListTenantRoles(context.Background(), ListTenantRolesInput{TenantID: "101", ListQuery: ListQuery{Limit: 201}})
+	assertCode(t, err, CodeInvalidInput)
+	if roles.Total != 0 {
+		t.Fatalf("invalid role query returned %#v", roles)
+	}
+	readRole, err := service.GetTenantRole(context.Background(), TenantRoleKey{TenantID: "101", RoleID: "role-a"})
+	if err != nil || !reflect.DeepEqual(readRole.PermissionCodes, []string{"read"}) || !reflect.DeepEqual(readRole.MenuCodes, []string{"home"}) {
+		t.Fatalf("role=%#v err=%v", readRole, err)
+	}
+
+	menus, err := service.ListMenus(context.Background(), ListMenusInput{ListQuery: ListQuery{Status: IAMStatusEnabled}})
+	if err != nil || menus.Total != 1 {
+		t.Fatalf("menus=%#v err=%v", menus, err)
+	}
+	permissions, err := service.ListPermissions(context.Background(), ListPermissionsInput{})
+	if err != nil || permissions.Total != 1 {
+		t.Fatalf("permissions=%#v err=%v", permissions, err)
+	}
+}
+
+func TestIAMUpdateTenantDisplayNameRequiresSystemActorAndVersion(t *testing.T) {
+	store := &fakeIAMStore{}
+	reconciler := &recordingReconciler{}
+	service := newTestIAMService(t, store, reconciler)
+
+	_, err := service.UpdateTenant(context.Background(), UpdateTenantInput{TenantID: "101", DisplayName: "New name", ExpectedVersion: 1})
+	assertCode(t, err, CodePermissionDenied)
+	if store.updateTenantCalls != 0 {
+		t.Fatal("non-system actor reached tenant update")
+	}
+	tenant, err := service.UpdateTenant(context.Background(), UpdateTenantInput{Actor: SystemActor{System: true}, TenantID: " 101 ", DisplayName: " New name ", ExpectedVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenant.ID != "101" || tenant.DisplayName != "New name" || tenant.Version != 2 || store.lastUpdateTenant.DisplayName != "New name" || len(reconciler.calls) != 1 {
+		t.Fatalf("tenant=%#v input=%#v reconcile=%#v", tenant, store.lastUpdateTenant, reconciler.calls)
+	}
+}
+
 func TestIAMStableStoreErrorsAreRedacted(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -241,6 +315,16 @@ type fakeIAMStore struct {
 	replacePermissionCalls int
 	resetCalls             int
 	setTenantStatusCalls   int
+	updateTenantCalls      int
+	accountPage            IdentityAccountPage
+	tenantPage             TenantPage
+	memberPage             TenantMemberPage
+	rolePage               TenantRolePage
+	menuPage               MenuPage
+	permissionPage         PermissionPage
+	lastAccountList        ListIdentityAccountsInput
+	lastMemberList         ListTenantMembersInput
+	lastUpdateTenant       UpdateTenantStoreInput
 }
 
 func (s *fakeIAMStore) event(value string) {
@@ -263,11 +347,45 @@ func (s *fakeIAMStore) SetTenantStatus(_ context.Context, input SetTenantStatusS
 	}
 	return Tenant{ID: input.TenantID, Status: input.Status, Version: input.ExpectedVersion + 1}, nil
 }
-func (s *fakeIAMStore) ListTenantMembers(_ context.Context, input ListTenantMembersInput) ([]TenantMember, error) {
+func (s *fakeIAMStore) ListIdentityAccounts(_ context.Context, input ListIdentityAccountsInput) (IdentityAccountPage, error) {
+	s.lastAccountList = input
+	return s.accountPage, s.err
+}
+func (s *fakeIAMStore) GetIdentityAccount(_ context.Context, id IdentityAccountID) (IdentityAccount, error) {
 	if s.err != nil {
-		return nil, s.err
+		return IdentityAccount{}, s.err
 	}
-	return []TenantMember{s.member}, nil
+	if len(s.accountPage.Items) == 0 {
+		return IdentityAccount{ID: id}, nil
+	}
+	return s.accountPage.Items[0], nil
+}
+func (s *fakeIAMStore) ListTenants(context.Context, ListTenantsInput) (TenantPage, error) {
+	return s.tenantPage, s.err
+}
+func (s *fakeIAMStore) GetTenant(_ context.Context, id string) (Tenant, error) {
+	if s.err != nil {
+		return Tenant{}, s.err
+	}
+	if len(s.tenantPage.Items) == 0 {
+		return Tenant{ID: id}, nil
+	}
+	return s.tenantPage.Items[0], nil
+}
+func (s *fakeIAMStore) UpdateTenant(_ context.Context, input UpdateTenantStoreInput) (Tenant, error) {
+	s.updateTenantCalls++
+	s.lastUpdateTenant = input
+	if s.err != nil {
+		return Tenant{}, s.err
+	}
+	return Tenant{ID: input.TenantID, DisplayName: input.DisplayName, Status: IAMStatusEnabled, Version: input.ExpectedVersion + 1}, nil
+}
+func (s *fakeIAMStore) ListTenantMembers(_ context.Context, input ListTenantMembersInput) (TenantMemberPage, error) {
+	s.lastMemberList = input
+	if s.err != nil {
+		return TenantMemberPage{}, s.err
+	}
+	return s.memberPage, nil
 }
 func (s *fakeIAMStore) GetTenantMember(context.Context, TenantMemberKey) (TenantMember, error) {
 	if s.err != nil {
@@ -297,6 +415,33 @@ func (s *fakeIAMStore) GetTenantRole(context.Context, TenantRoleKey) (TenantRole
 		return TenantRole{}, s.err
 	}
 	return s.role, nil
+}
+func (s *fakeIAMStore) ListTenantRoles(context.Context, ListTenantRolesInput) (TenantRolePage, error) {
+	return s.rolePage, s.err
+}
+func (s *fakeIAMStore) ListMenus(context.Context, ListMenusInput) (MenuPage, error) {
+	return s.menuPage, s.err
+}
+func (s *fakeIAMStore) GetMenu(_ context.Context, code string) (Menu, error) {
+	if s.err != nil {
+		return Menu{}, s.err
+	}
+	if len(s.menuPage.Items) == 0 {
+		return Menu{Code: code}, nil
+	}
+	return s.menuPage.Items[0], nil
+}
+func (s *fakeIAMStore) ListPermissions(context.Context, ListPermissionsInput) (PermissionPage, error) {
+	return s.permissionPage, s.err
+}
+func (s *fakeIAMStore) GetPermission(_ context.Context, code string) (Permission, error) {
+	if s.err != nil {
+		return Permission{}, s.err
+	}
+	if len(s.permissionPage.Items) == 0 {
+		return Permission{Code: code}, nil
+	}
+	return s.permissionPage.Items[0], nil
 }
 func (s *fakeIAMStore) CreateTenantRole(_ context.Context, input CreateTenantRoleStoreInput) (TenantRole, error) {
 	if s.err != nil {

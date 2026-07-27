@@ -61,10 +61,31 @@ message UpdateAccountStatusResponse { string status = 1; }
 message ResetAccountPasswordRequest { string account_id = 1; string new_password = 2; string request_id = 3; string trace_id = 4; }
 message ResetAccountPasswordResponse { bool reset = 1; }
 
+message IdentityAccountItem {
+  string account_id = 1; string username = 2; string email = 3; string display_name = 4;
+  string source_code = 5; string external_subject = 6; string status = 7;
+}
+message ListIdentityAccountsRequest { string keyword = 1; string status = 2; uint32 limit = 3; uint32 offset = 4; string request_id = 5; string trace_id = 6; }
+message ListIdentityAccountsResponse { uint64 total = 1; repeated IdentityAccountItem items = 2; }
+message GetIdentityAccountRequest { string account_id = 1; string request_id = 2; string trace_id = 3; }
+message GetIdentityAccountResponse { IdentityAccountItem item = 1; }
+
 message ListTenantMembersRequest {
   int64 tenant_id = 1;
+  string keyword = 2; string status = 3; uint32 limit = 4; uint32 offset = 5;
+  string request_id = 6; string trace_id = 7;
 }
-message ListTenantMembersResponse { repeated string member_ids = 1; repeated string account_ids = 2; repeated string statuses = 3; repeated uint64 versions = 4; }
+message TenantMemberItem {
+  string member_id = 1; string account_id = 2; string username = 3; string email = 4;
+  string display_name = 5; string source_code = 6; string external_subject = 7;
+  string status = 8; repeated string role_codes = 9; uint64 version = 10;
+}
+message ListTenantMembersResponse {
+  repeated string member_ids = 1; repeated string account_ids = 2; repeated string statuses = 3; repeated uint64 versions = 4;
+  repeated TenantMemberItem items = 5; uint64 total = 6;
+}
+message GetTenantMemberRequest { int64 tenant_id = 1; string subject_id = 2; string member_id = 3; string request_id = 4; string trace_id = 5; }
+message GetTenantMemberResponse { TenantMemberItem item = 1; }
 message UpdateTenantMemberStatusRequest { int64 tenant_id = 1; string subject_id = 2; string member_id = 3; string status = 4; uint64 expected_version = 5; string request_id = 6; string trace_id = 7; }
 message UpdateTenantMemberStatusResponse { string status = 1; uint64 version = 2; }
 message ReplaceTenantMemberRolesRequest { int64 tenant_id = 1; string subject_id = 2; string member_id = 3; repeated string role_codes = 4; uint64 expected_version = 5; string request_id = 6; string trace_id = 7; }
@@ -72,11 +93,26 @@ message ReplaceTenantMemberRolesResponse { repeated string role_codes = 1; uint6
 
 message ProvisionTenantRequest { string code = 1; string name = 2; string initial_admin_account_id = 3; string request_id = 4; string trace_id = 5; }
 message ProvisionTenantResponse { int64 tenant_id = 1; }
+message TenantItem { int64 tenant_id = 1; string code = 2; string name = 3; string status = 4; uint64 version = 5; }
+message ListTenantsRequest { string keyword = 1; string status = 2; uint32 limit = 3; uint32 offset = 4; string request_id = 5; string trace_id = 6; }
+message ListTenantsResponse { uint64 total = 1; repeated TenantItem items = 2; }
+message GetTenantRequest { int64 tenant_id = 1; string request_id = 2; string trace_id = 3; }
+message GetTenantResponse { TenantItem item = 1; }
+message UpdateTenantRequest { int64 tenant_id = 1; string name = 2; uint64 expected_version = 3; string request_id = 4; string trace_id = 5; }
+message UpdateTenantResponse { TenantItem item = 1; }
 message UpdateTenantStatusRequest { int64 tenant_id = 1; string status = 2; uint64 expected_version = 3; string request_id = 4; string trace_id = 5; }
 message UpdateTenantStatusResponse { string status = 1; uint64 version = 2; }
 
 message CreateRoleRequest { int64 tenant_id = 1; string subject_id = 2; string code = 3; string name = 4; string request_id = 5; string trace_id = 6; }
 message CreateRoleResponse { string role_id = 1; uint64 version = 2; }
+message RoleItem {
+  string role_id = 1; string code = 2; string name = 3; string status = 4; bool managed = 5;
+  repeated string permission_codes = 6; repeated string menu_codes = 7; uint64 version = 8;
+}
+message ListRolesRequest { int64 tenant_id = 1; string subject_id = 2; string keyword = 3; string status = 4; uint32 limit = 5; uint32 offset = 6; string request_id = 7; string trace_id = 8; }
+message ListRolesResponse { uint64 total = 1; repeated RoleItem items = 2; }
+message GetRoleRequest { int64 tenant_id = 1; string subject_id = 2; string role_id = 3; string request_id = 4; string trace_id = 5; }
+message GetRoleResponse { RoleItem item = 1; }
 message UpdateRoleRequest { int64 tenant_id = 1; string subject_id = 2; string role_id = 3; string name = 4; uint64 expected_version = 5; string request_id = 6; string trace_id = 7; }
 message UpdateRoleResponse { bool updated = 1; uint64 version = 2; }
 message UpdateRoleStatusRequest { int64 tenant_id = 1; string subject_id = 2; string role_id = 3; string status = 4; uint64 expected_version = 5; string request_id = 6; string trace_id = 7; }
@@ -85,6 +121,24 @@ message ReplaceRolePermissionsRequest { int64 tenant_id = 1; string subject_id =
 message ReplaceRolePermissionsResponse { repeated string permission_codes = 1; uint64 version = 2; }
 message ReplaceRoleMenusRequest { int64 tenant_id = 1; string subject_id = 2; string role_id = 3; repeated string menu_codes = 4; uint64 expected_version = 5; string request_id = 6; string trace_id = 7; }
 message ReplaceRoleMenusResponse { repeated string menu_codes = 1; uint64 version = 2; }
+
+message MenuItem {
+  string menu_id = 1; string code = 2; string parent_code = 3; string name = 4; string path = 5;
+  string component = 6; string icon = 7; int32 sort_order = 8; string source_id = 9; string status = 10;
+}
+message ListMenusRequest { string keyword = 1; string status = 2; uint32 limit = 3; uint32 offset = 4; string request_id = 5; string trace_id = 6; }
+message ListMenusResponse { uint64 total = 1; repeated MenuItem items = 2; }
+message GetMenuRequest { string code = 1; string request_id = 2; string trace_id = 3; }
+message GetMenuResponse { MenuItem item = 1; }
+
+message PermissionItem {
+  string permission_id = 1; string resource_code = 2; string code = 3; string name = 4;
+  string description = 5; string source_id = 6; string status = 7;
+}
+message ListPermissionsRequest { string keyword = 1; string status = 2; uint32 limit = 3; uint32 offset = 4; string request_id = 5; string trace_id = 6; }
+message ListPermissionsResponse { uint64 total = 1; repeated PermissionItem items = 2; }
+message GetPermissionRequest { string code = 1; string request_id = 2; string trace_id = 3; }
+message GetPermissionResponse { PermissionItem item = 1; }
 
 service CoreService {
   rpc Health(HealthRequest) returns (HealthResponse) {
@@ -191,6 +245,35 @@ service CoreService {
     };
   }
 
+  rpc ListIdentityAccounts(ListIdentityAccountsRequest) returns (ListIdentityAccountsResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.account.list" method: GET path: "/iam/accounts"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.account.read"
+      request_fields: { http_field: "keyword" rpc_field: "keyword" }
+      request_fields: { http_field: "status" rpc_field: "status" }
+      request_fields: { http_field: "limit" rpc_field: "limit" }
+      request_fields: { http_field: "offset" rpc_field: "offset" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc GetIdentityAccount(GetIdentityAccountRequest) returns (GetIdentityAccountResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.account.get" method: GET path: "/iam/accounts/{accountId}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.account.read"
+      request_fields: { http_field: "accountId" rpc_field: "account_id" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
+    };
+  }
+
   rpc UpdateAccountStatus(UpdateAccountStatusRequest) returns (UpdateAccountStatusResponse) {
     option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
     option (nexa.protocol.v1.http_proxy) = {
@@ -224,15 +307,35 @@ service CoreService {
   }
 
   rpc ListTenantMembers(ListTenantMembersRequest) returns (ListTenantMembersResponse) {
-    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: TENANT_ID rpc_field: "tenant_id" } };
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: TENANT_ID rpc_field: "tenant_id" } context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
     option (nexa.protocol.v1.http_proxy) = {
       operation_id: "core.iam.member.list" method: GET path: "/iam/members"
       auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
       permission: "core.iam.member.read"
+      request_fields: { http_field: "keyword" rpc_field: "keyword" }
+      request_fields: { http_field: "status" rpc_field: "status" }
+      request_fields: { http_field: "limit" rpc_field: "limit" }
+      request_fields: { http_field: "offset" rpc_field: "offset" }
       response_fields: { rpc_field: "member_ids" http_field: "memberIds" }
       response_fields: { rpc_field: "account_ids" http_field: "accountIds" }
       response_fields: { rpc_field: "statuses" http_field: "statuses" }
       response_fields: { rpc_field: "versions" http_field: "versions" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc GetTenantMember(GetTenantMemberRequest) returns (GetTenantMemberResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: TENANT_ID rpc_field: "tenant_id" } context_fields: { source: SUBJECT_ID rpc_field: "subject_id" } context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.member.get" method: GET path: "/iam/members/{memberId}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.member.read"
+      request_fields: { http_field: "memberId" rpc_field: "member_id" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
     };
   }
 
@@ -290,6 +393,52 @@ service CoreService {
     };
   }
 
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.tenant.list" method: GET path: "/iam/tenants"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.tenant.read"
+      request_fields: { http_field: "keyword" rpc_field: "keyword" }
+      request_fields: { http_field: "status" rpc_field: "status" }
+      request_fields: { http_field: "limit" rpc_field: "limit" }
+      request_fields: { http_field: "offset" rpc_field: "offset" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.tenant.get" method: GET path: "/iam/tenants/{tenantId}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.tenant.read"
+      request_fields: { http_field: "tenantId" rpc_field: "tenant_id" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
+    };
+  }
+
+  rpc UpdateTenant(UpdateTenantRequest) returns (UpdateTenantResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.tenant.update" method: PUT path: "/iam/tenants/{tenantId}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.tenant.update"
+      request_fields: { http_field: "tenantId" rpc_field: "tenant_id" }
+      request_fields: { http_field: "name" rpc_field: "name" }
+      request_fields: { http_field: "expectedVersion" rpc_field: "expected_version" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
+      errors: { match: { domain: "core" code: "concurrent_write" } project: { domain: "api" code: "concurrent_write" http_status: 409 } }
+      errors: { match: { domain: "core" code: "permission_denied" } project: { domain: "api" code: "permission_denied" http_status: 403 } }
+    };
+  }
+
   rpc UpdateTenantStatus(UpdateTenantStatusRequest) returns (UpdateTenantStatusResponse) {
     option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
     option (nexa.protocol.v1.http_proxy) = {
@@ -305,6 +454,35 @@ service CoreService {
       errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
       errors: { match: { domain: "core" code: "concurrent_write" } project: { domain: "api" code: "concurrent_write" http_status: 409 } }
       errors: { match: { domain: "core" code: "permission_denied" } project: { domain: "api" code: "permission_denied" http_status: 403 } }
+    };
+  }
+
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: TENANT_ID rpc_field: "tenant_id" } context_fields: { source: SUBJECT_ID rpc_field: "subject_id" } context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.role.list" method: GET path: "/iam/roles"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.role.read"
+      request_fields: { http_field: "keyword" rpc_field: "keyword" }
+      request_fields: { http_field: "status" rpc_field: "status" }
+      request_fields: { http_field: "limit" rpc_field: "limit" }
+      request_fields: { http_field: "offset" rpc_field: "offset" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc GetRole(GetRoleRequest) returns (GetRoleResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: TENANT_ID rpc_field: "tenant_id" } context_fields: { source: SUBJECT_ID rpc_field: "subject_id" } context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.role.get" method: GET path: "/iam/roles/{roleId}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.role.read"
+      request_fields: { http_field: "roleId" rpc_field: "role_id" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
     };
   }
 
@@ -397,6 +575,64 @@ service CoreService {
       errors: { match: { domain: "core" code: "concurrent_write" } project: { domain: "api" code: "concurrent_write" http_status: 409 } }
       errors: { match: { domain: "core" code: "permission_denied" } project: { domain: "api" code: "permission_denied" http_status: 403 } }
       errors: { match: { domain: "core" code: "failed_precondition" } project: { domain: "api" code: "failed_precondition" http_status: 412 } }
+    };
+  }
+
+  rpc ListMenus(ListMenusRequest) returns (ListMenusResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.menu.list" method: GET path: "/iam/menus"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.menu.read"
+      request_fields: { http_field: "keyword" rpc_field: "keyword" }
+      request_fields: { http_field: "status" rpc_field: "status" }
+      request_fields: { http_field: "limit" rpc_field: "limit" }
+      request_fields: { http_field: "offset" rpc_field: "offset" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc GetMenu(GetMenuRequest) returns (GetMenuResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.menu.get" method: GET path: "/iam/menus/{code}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.menu.read"
+      request_fields: { http_field: "code" rpc_field: "code" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
+    };
+  }
+
+  rpc ListPermissions(ListPermissionsRequest) returns (ListPermissionsResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.permission.list" method: GET path: "/iam/permissions"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.permission.read"
+      request_fields: { http_field: "keyword" rpc_field: "keyword" }
+      request_fields: { http_field: "status" rpc_field: "status" }
+      request_fields: { http_field: "limit" rpc_field: "limit" }
+      request_fields: { http_field: "offset" rpc_field: "offset" }
+      response_fields: { rpc_field: "total" http_field: "total" }
+      response_fields: { rpc_field: "items" http_field: "items" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+    };
+  }
+
+  rpc GetPermission(GetPermissionRequest) returns (GetPermissionResponse) {
+    option (nexa.protocol.v1.rpc_context) = { context_fields: { source: REQUEST_ID rpc_field: "request_id" } context_fields: { source: TRACE_ID rpc_field: "trace_id" } };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "core.iam.permission.get" method: GET path: "/iam/permissions/{code}"
+      auth: { mode: REQUIRED credentials: { id: "primary" type: BEARER location: HEADER name: "Authorization" } }
+      permission: "core.iam.permission.read"
+      request_fields: { http_field: "code" rpc_field: "code" }
+      response_fields: { rpc_field: "item" http_field: "item" }
+      errors: { match: { domain: "core" code: "invalid_input" } project: { domain: "api" code: "invalid_input" http_status: 400 } }
+      errors: { match: { domain: "core" code: "not_found" } project: { domain: "api" code: "not_found" http_status: 404 } }
     };
   }
 }

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"ariga.io/atlas/sql/migrate"
-	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/nxnminieye/nexa/generation/frontend"
 )
 
 func assertDetachedSourceState(t *testing.T, repository string) {
@@ -26,75 +26,118 @@ func assertDetachedSourceState(t *testing.T, repository string) {
 func validateDetachedFrontendFacts(t *testing.T, repository string) {
 	t.Helper()
 	root := filepath.Join(repository, "frontend", "frontend", "core")
-	schemaPath := filepath.Join(root, "object-schema", "identity-account.schema.json")
-	schemaContent := mustReadFile(t, schemaPath)
-	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaContent))
-	if err != nil {
-		t.Fatalf("parse detached object schema: %v", err)
-	}
-	var schemaView struct {
-		ID         string `json:"$id"`
-		Properties map[string]struct {
-			Title string `json:"title"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(schemaContent, &schemaView); err != nil || schemaView.ID == "" || len(schemaView.Properties) == 0 {
-		t.Fatalf("decode detached object schema metadata: %v %#v", err, schemaView)
-	}
-	compiler := jsonschema.NewCompiler()
-	if err := compiler.AddResource(schemaView.ID, document); err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := compiler.Compile(schemaView.ID)
-	if err != nil {
-		t.Fatalf("compile detached object schema: %v", err)
-	}
-	if err := compiled.Validate(map[string]any{"username": "alice", "displayName": "Alice", "status": "enabled"}); err != nil {
-		t.Fatalf("validate detached object schema instance: %v", err)
+	locales := make(map[string]map[string]string, 2)
+	for _, localeID := range []string{"en-US", "zh-CN"} {
+		path := filepath.Join(root, "locales", localeID+".json")
+		content := mustReadFile(t, path)
+		parsed, err := frontend.ParseLocale(detachedSourcePath(t, repository, path), content)
+		if err != nil {
+			t.Fatalf("parse detached locale %s: %v", localeID, err)
+		}
+		if parsed.Locale() != localeID {
+			t.Fatalf("detached locale identity = %q, want %q", parsed.Locale(), localeID)
+		}
+		var envelope struct {
+			Messages map[string]string `json:"messages"`
+		}
+		if err := json.Unmarshal(content, &envelope); err != nil || len(envelope.Messages) == 0 {
+			t.Fatalf("decode detached locale %s: %v", localeID, err)
+		}
+		for key, value := range envelope.Messages {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				t.Fatalf("detached locale %s contains an empty entry", localeID)
+			}
+		}
+		locales[localeID] = envelope.Messages
 	}
 
-	locales := make(map[string]map[string]string, 2)
-	for _, locale := range []string{"en-US", "zh-CN"} {
-		path := filepath.Join(root, "locales", locale+".json")
-		var messages map[string]string
-		decodeStrictJSONFile(t, path, &messages)
-		if len(messages) == 0 {
-			t.Fatalf("detached locale %s is empty", locale)
+	wantPages := map[string]string{
+		"accounts.page.json": "core-accounts", "members.page.json": "core-members", "menus.page.json": "core-menus",
+		"permissions.page.json": "core-permissions", "roles.page.json": "core-roles", "tenants.page.json": "core-tenants",
+	}
+	pagePaths, err := filepath.Glob(filepath.Join(root, "pages", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pagePaths) != len(wantPages) {
+		t.Fatalf("detached Core pages = %#v", pagePaths)
+	}
+	for _, pagePath := range pagePaths {
+		name := filepath.Base(pagePath)
+		wantID, ok := wantPages[name]
+		if !ok {
+			t.Fatalf("unexpected detached Core page %q", name)
 		}
-		for key, value := range messages {
-			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-				t.Fatalf("detached locale %s contains an empty entry", locale)
+		content := mustReadFile(t, pagePath)
+		parsed, err := frontend.ParsePageSpec(detachedSourcePath(t, repository, pagePath), content)
+		if err != nil {
+			t.Fatalf("parse detached page %s: %v", name, err)
+		}
+		if parsed.ID() != wantID {
+			t.Fatalf("detached page %s ID = %q, want %q", name, parsed.ID(), wantID)
+		}
+		var page struct {
+			TitleKey string `json:"titleKey"`
+			Menu     *struct {
+				TitleKey string `json:"titleKey"`
+			} `json:"menu"`
+			Fields []struct {
+				LabelKey string `json:"labelKey"`
+				Choices  []struct {
+					LabelKey string `json:"labelKey"`
+				} `json:"choices"`
+				Columns []struct {
+					LabelKey string `json:"labelKey"`
+				} `json:"columns"`
+			} `json:"fields"`
+			Actions []struct {
+				LabelKey   string `json:"labelKey"`
+				ConfirmKey string `json:"confirmKey"`
+			} `json:"actions"`
+		}
+		if err := json.Unmarshal(content, &page); err != nil {
+			t.Fatalf("decode detached page %s locale keys: %v", name, err)
+		}
+		keys := []string{page.TitleKey}
+		if page.Menu != nil {
+			keys = append(keys, page.Menu.TitleKey)
+		}
+		for _, field := range page.Fields {
+			keys = append(keys, field.LabelKey)
+			for _, choice := range field.Choices {
+				keys = append(keys, choice.LabelKey)
+			}
+			for _, column := range field.Columns {
+				keys = append(keys, column.LabelKey)
 			}
 		}
-		locales[locale] = messages
-	}
-	pagePath := filepath.Join(root, "pages", "identity-accounts.page.json")
-	var page struct {
-		APIVersion   string   `json:"apiVersion"`
-		Kind         string   `json:"kind"`
-		ID           string   `json:"id"`
-		TitleKey     string   `json:"titleKey"`
-		ObjectSchema string   `json:"objectSchema"`
-		Views        []string `json:"views"`
-	}
-	decodeStrictJSONFile(t, pagePath, &page)
-	if page.APIVersion != "nexa.dev/frontend-page/v1" || page.Kind != "ObjectPage" || page.ID == "" || len(page.Views) == 0 {
-		t.Fatalf("detached page contract = %#v", page)
-	}
-	boundSchema := filepath.Clean(filepath.Join(filepath.Dir(pagePath), filepath.FromSlash(page.ObjectSchema)))
-	if boundSchema != schemaPath {
-		t.Fatalf("detached page objectSchema resolves to %q, want %q", boundSchema, schemaPath)
-	}
-	for _, messages := range locales {
-		if messages[page.TitleKey] == "" {
-			t.Fatalf("detached page title key %q is unresolved", page.TitleKey)
-		}
-		for name, property := range schemaView.Properties {
-			if property.Title == "" || messages[property.Title] == "" {
-				t.Fatalf("detached schema property %s title %q is unresolved", name, property.Title)
+		for _, action := range page.Actions {
+			keys = append(keys, action.LabelKey)
+			if action.ConfirmKey != "" {
+				keys = append(keys, action.ConfirmKey)
 			}
 		}
+		for _, key := range keys {
+			for localeID, messages := range locales {
+				if key == "" || messages[key] == "" {
+					t.Fatalf("detached page %s locale %s key %q is unresolved", name, localeID, key)
+				}
+			}
+		}
+		delete(wantPages, name)
 	}
+	if len(wantPages) != 0 {
+		t.Fatalf("missing detached Core pages = %#v", wantPages)
+	}
+}
+
+func detachedSourcePath(t *testing.T, repository, path string) string {
+	t.Helper()
+	relative, err := filepath.Rel(repository, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.ToSlash(relative)
 }
 
 func validateDetachedMigrationFacts(t *testing.T, repository string) {

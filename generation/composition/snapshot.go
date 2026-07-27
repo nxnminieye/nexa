@@ -120,6 +120,7 @@ func validateSnapshot(wire wireDocument, source string) error {
 		return invalid("type_closure_invalid", source, "/types", "composition v1 snapshot cannot contain projected types")
 	}
 	previous = ""
+	tenantTypes := map[string]string{}
 	for index, operation := range wire.Operations {
 		pointer := fmt.Sprintf("/operations/%d", index)
 		if previous != "" && operation.ID <= previous {
@@ -128,6 +129,15 @@ func validateSnapshot(wire wireDocument, source string) error {
 		previous = operation.ID
 		if err := validateSnapshotOperation(wire.APIVersion, operation, source, pointer, sourceIndex, used, typeIndex); err != nil {
 			return err
+		}
+		for _, binding := range operation.ContextFields {
+			if binding.Source != protocol.ContextTenantID {
+				continue
+			}
+			if existing := tenantTypes[operation.ServiceID]; existing != "" && existing != binding.ValueType.Name {
+				return invalid("tenant_context_type_mixed", source, pointer+"/contextFields", "tenant context type is inconsistent within the service")
+			}
+			tenantTypes[operation.ServiceID] = binding.ValueType.Name
 		}
 	}
 	if err := validateProjectedTypeClosure(wire, typeIndex, source); err != nil {
@@ -516,11 +526,8 @@ func validateSnapshotOperation(version string, operation wireOperation, source, 
 		if err := validateValue(binding.ValueType); err != nil {
 			return invalid("value_type_invalid", source, itemPointer+"/valueType", "composition value type is invalid")
 		}
-		expected := "string"
-		if binding.Source == protocol.ContextTenantID {
-			expected = "int64"
-		}
-		if binding.ValueType.Kind != httpapi.ValueScalar || binding.ValueType.Name != expected {
+		valueType := snapshotValue(binding.ValueType)
+		if !validContextValueType(binding.Source, valueType) {
 			return invalid("context_binding_type_invalid", source, itemPointer+"/valueType", "composition context binding type is invalid")
 		}
 		if version == APIVersionV2 {

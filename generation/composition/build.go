@@ -91,6 +91,9 @@ func Build(catalog servicecatalog.Catalog, protocols []protocol.Document, native
 			}
 		}
 	}
+	if _, err := tenantTypesByService(state.operations); err != nil {
+		return Document{}, err
+	}
 	sort.Slice(state.operations, func(i, j int) bool {
 		return state.operations[i].proxy.OperationID() < state.operations[j].proxy.OperationID()
 	})
@@ -155,11 +158,7 @@ func buildOperation(serviceID string, binding provenance.Source, document protoc
 		if err != nil {
 			return nil, err
 		}
-		expected := "string"
-		if item.Source() == protocol.ContextTenantID {
-			expected = "int64"
-		}
-		if resolved.valueType.Kind != httpapi.ValueScalar || resolved.valueType.Name != expected {
+		if !validContextValueType(item.Source(), resolved.valueType) {
 			return nil, invalid("context_binding_type_invalid", method.FilePath(), "", "context binding target has an invalid type")
 		}
 		key := strings.Join(resolved.typedPath, "\x00")
@@ -211,6 +210,32 @@ func buildOperation(serviceID string, binding provenance.Source, document protoc
 		generatedIdentifierCollision(result.responseFields, true) ||
 		generatedIdentifierCollision(result.responseFields, false) {
 		return nil, invalid("generated_identifier_collision", method.FilePath(), "", "bindings produce duplicate generated Go identifiers")
+	}
+	return result, nil
+}
+
+func validContextValueType(source protocol.ContextValue, value httpapi.ValueTypeSpec) bool {
+	if value.Kind != httpapi.ValueScalar {
+		return false
+	}
+	if source == protocol.ContextTenantID {
+		return value.Name == "string" || value.Name == "int64"
+	}
+	return value.Name == "string"
+}
+
+func tenantTypesByService(operations []*operationState) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, operation := range operations {
+		for _, binding := range operation.contextFields {
+			if binding.context != protocol.ContextTenantID {
+				continue
+			}
+			if existing := result[operation.serviceID]; existing != "" && existing != binding.valueType.Name {
+				return nil, invalid("tenant_context_type_mixed", operation.method.FilePath(), "", "tenant context type is inconsistent within the service")
+			}
+			result[operation.serviceID] = binding.valueType.Name
+		}
 	}
 	return result, nil
 }

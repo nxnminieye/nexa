@@ -45,9 +45,10 @@ wire 见[CLI 机器协议](../contracts/cli-machine-protocol.md)。
 
 ## Generation plugin
 
-Generation plugin 通过 consumer 注入的 ProjectProvider 接收 typed Proto/API document，并绑定明确的
-delegated tool 与 generated/extensions scopes。Provider 不复制节点 facts。Direct generation 与 replace-tree
-边界见[受控生成](../contracts/controlled-generation.md)。
+Generation plugin 通过 consumer 注入的 ProjectProvider 接收 typed Proto/API/FrontendIR document，并绑定
+明确的 delegated tool 与 generated/extensions scopes。Provider 不复制节点 facts。Direct generation 与
+replace-tree 边界见[受控生成](../contracts/controlled-generation.md)，PageSpec 与 renderer request 见
+[前端生成契约](../contracts/frontend-generation.md)。
 
 Reference alpha CLI 没有 consumer ProjectProvider，因此 inspection 能展示 generation command contract，
 但具体业务 generation 需要 consumer composition 提供真实 facts/toolchain。

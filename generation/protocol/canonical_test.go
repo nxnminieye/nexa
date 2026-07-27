@@ -118,7 +118,7 @@ func TestSnapshotRejectsDescriptorTamperingAfterAllDigestsAreRecomputed(t *testi
 		{name: "method input", mutate: func(root map[string]any) { firstMethod(root)["input"] = "sample.v1.Missing" }},
 		{name: "tenant context type", mutate: func(root map[string]any) {
 			fields := root["files"].([]any)[0].(map[string]any)["messages"].([]any)[0].(map[string]any)["fields"].([]any)
-			fields[1].(map[string]any)["type"] = map[string]any{"kind": "scalar", "name": "string"}
+			fields[1].(map[string]any)["type"] = map[string]any{"kind": "scalar", "name": "int32"}
 		}},
 		{name: "request rpc path root", mutate: func(root map[string]any) {
 			firstMethod(root)["httpProxy"].(map[string]any)["requestFields"].([]any)[0].(map[string]any)["rpcPath"] = []any{"sample.v1.GetSampleResponse#1"}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 
+	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/generation/toolchain"
 	"github.com/nxnminieye/nexa/nexactl/plugin"
+	"github.com/nxnminieye/nexa/provenance"
 )
 
 const (
@@ -22,12 +24,13 @@ type ProviderDescriptor struct {
 	Tools   []ProviderTool
 }
 
-// ToolRole closes the two direct generation command families.
+// ToolRole closes the direct generation command families.
 type ToolRole string
 
 const (
-	ToolRoleRPCGo ToolRole = "rpc-go"
-	ToolRoleAPIGo ToolRole = "api-go"
+	ToolRoleRPCGo          ToolRole = "rpc-go"
+	ToolRoleAPIGo          ToolRole = "api-go"
+	ToolRoleFrontendRender ToolRole = "frontend-render"
 )
 
 // ProviderTool binds one inspectable delegated tool to exactly one command role.
@@ -60,11 +63,21 @@ type APIProject struct {
 	UserLogic       []UserLogicFile
 }
 
+// FrontendProject contains the canonical FrontendIR and consumer-owned source boundaries.
+type FrontendProject struct {
+	Facts                    genfrontend.Document
+	Tool                     toolchain.Tool
+	GeneratedScope           string
+	ExtensionScopes          []string
+	FrontendSourceLockDigest provenance.Digest
+}
+
 // ServiceProject closes the consumer-owned facts for one service.
 type ServiceProject struct {
 	ServiceID string
 	RPC       *RPCProject
 	API       *APIProject
+	Frontend  *FrontendProject
 }
 
 // Project contains the services resolved by a consumer provider.
@@ -107,11 +120,13 @@ func New(options Options) (plugin.Plugin, error) {
 			Provides: []plugin.Capability{
 				{ID: "generation.rpc", Version: capabilityVersion},
 				{ID: "generation.api", Version: capabilityVersion},
+				{ID: "generation.frontend", Version: capabilityVersion},
 			},
 		},
 		Commands: []plugin.CommandSpec{
 			directCommand("rpc", runner.delegatedTools[ToolRoleRPCGo], runner.generateRPC),
 			directCommand("api", runner.delegatedTools[ToolRoleAPIGo], runner.generateAPI),
+			frontendCommand(runner.delegatedTools[ToolRoleFrontendRender], runner.generateFrontend),
 		},
 	})
 }
@@ -122,11 +137,28 @@ func directCommand(owner string, tools []plugin.DelegatedToolSpec, run plugin.Ha
 		Summary:        "directly generate " + owner + " source",
 		Flags:          selectorFlags(),
 		InputSchema:    json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"},"overwrite-logic":{"type":"boolean","default":false}}}`),
-		OutputSchema:   json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service","generatedScope","userLogic"],"properties":{"apiVersion":{"const":"nexa.dev/generation-result/v2"},"kind":{"const":"GenerationResult"},"status":{"const":"generated"},"service":{"type":"string"},"generatedScope":{"type":"string"},"userLogic":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","action"],"properties":{"path":{"type":"string"},"action":{"enum":["created","skipped","overwritten"]}}}}}}`),
+		OutputSchema:   generationResultSchema(),
 		SideEffect:     plugin.SideEffectRepositoryWrite,
 		DelegatedTools: cloneDelegatedTools(tools),
 		Run:            run,
 	}
+}
+
+func frontendCommand(tools []plugin.DelegatedToolSpec, run plugin.Handler) plugin.CommandSpec {
+	return plugin.CommandSpec{
+		Path:           []string{"generation", "frontend", "generate"},
+		Summary:        "directly generate frontend source",
+		Flags:          frontendSelectorFlags(),
+		InputSchema:    json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"}}}`),
+		OutputSchema:   generationResultSchema(),
+		SideEffect:     plugin.SideEffectRepositoryWrite,
+		DelegatedTools: cloneDelegatedTools(tools),
+		Run:            run,
+	}
+}
+
+func generationResultSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service","generatedScope","userLogic"],"properties":{"apiVersion":{"const":"nexa.dev/generation-result/v2"},"kind":{"const":"GenerationResult"},"status":{"const":"generated"},"service":{"type":"string"},"generatedScope":{"type":"string"},"userLogic":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","action"],"properties":{"path":{"type":"string"},"action":{"enum":["created","skipped","overwritten"]}}}}}}`)
 }
 
 func selectorFlags() []plugin.FlagSpec {
@@ -135,6 +167,14 @@ func selectorFlags() []plugin.FlagSpec {
 		{Name: "provider", Type: plugin.FlagString, Summary: "project provider id", Required: true},
 		{Name: "service", Type: plugin.FlagString, Summary: "selected service id", Required: true},
 		{Name: "overwrite-logic", Type: plugin.FlagBool, Summary: "overwrite declared user-logic files", Default: json.RawMessage(`false`)},
+	}
+}
+
+func frontendSelectorFlags() []plugin.FlagSpec {
+	return []plugin.FlagSpec{
+		{Name: "repo-root", Type: plugin.FlagString, Summary: "repository root", Required: true},
+		{Name: "provider", Type: plugin.FlagString, Summary: "project provider id", Required: true},
+		{Name: "service", Type: plugin.FlagString, Summary: "selected service id", Required: true},
 	}
 }
 

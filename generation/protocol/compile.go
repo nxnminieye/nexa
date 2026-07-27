@@ -206,6 +206,9 @@ func projectDocument(serviceID string, entries []string, compiled linker.Files) 
 		}
 		routes[route] = struct{}{}
 	}
+	if err := validateTenantContextTypes(state, methodNames); err != nil {
+		return Document{}, err
+	}
 	if err := finalizeSources(state); err != nil {
 		return Document{}, err
 	}

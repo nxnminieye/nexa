@@ -5,9 +5,21 @@
     "providerId": "core-application",
     "modulePath": "github.com/nxnminieye/nexa",
     "packagePath": "github.com/nxnminieye/nexa/plugins/service/core",
-    "version": "v0.1.0"
+    "version": "v0.2.0"
   },
   "files": [
+    {
+      "path": "backend/core/coreapp/access.go",
+      "size": 2367,
+      "digest": "sha256:85ff3c07880431ccef069fdf828cc3f3402cc2b2eefc7eca1dbde970e427ecad",
+      "mode": "0644"
+    },
+    {
+      "path": "backend/core/coreapp/access_test.go",
+      "size": 4635,
+      "digest": "sha256:abe5dfff8aec3896a38267f3bed365aa66a5580489db657d333bf980ac3d6db8",
+      "mode": "0644"
+    },
     {
       "path": "backend/core/coreapp/authority.go",
       "size": 764,
@@ -64,14 +76,14 @@
     },
     {
       "path": "backend/core/coreapp/iam.go",
-      "size": 19101,
-      "digest": "sha256:8f87973af68ea5bcf47e01a7867f6675f38638d9dcac154a159e42accd94a1ca",
+      "size": 27670,
+      "digest": "sha256:4b62cf9e4c0c2836b5a5e47a9fef95a444159f720de05f46f54f6bddcd742e5d",
       "mode": "0644"
     },
     {
       "path": "backend/core/coreapp/iam_test.go",
-      "size": 13403,
-      "digest": "sha256:97ebeb366597af458eca6de802ea3ffb20389e18c01b667550049b4501d1c030",
+      "size": 20357,
+      "digest": "sha256:04d55382e8bb925238646ff88f4d4112e7f5520b15622b470001c8986aff9db0",
       "mode": "0644"
     },
     {
@@ -106,8 +118,8 @@
     },
     {
       "path": "backend/core/coreapp/postgres_store.go",
-      "size": 36476,
-      "digest": "sha256:188dfece3a3066e319971df1306c05000dd200aeaa0155dbca52646a8548a8c9",
+      "size": 49614,
+      "digest": "sha256:051f69fc28bfefc04082e5b0e7b44943037052e2380ddb4b986236ffdb219887",
       "mode": "0644"
     },
     {
@@ -130,8 +142,8 @@
     },
     {
       "path": "backend/core/coreapp/store.go",
-      "size": 6555,
-      "digest": "sha256:9a62db99fbb994e29e4acaaefe1f1cb502704eae245771f62602d68f69359a5b",
+      "size": 8673,
+      "digest": "sha256:6603aceae2731a1b2434c4ac76af38d1c22d00f122f9530780912b31381d60d7",
       "mode": "0644"
     },
     {
@@ -142,8 +154,8 @@
     },
     {
       "path": "backend/core/desc/core.proto",
-      "size": 27308,
-      "digest": "sha256:d830f7ec098a09c282a090f2a9419faa8741ddcd217fe4ba85fd0b6707cb94bb",
+      "size": 44407,
+      "digest": "sha256:1af4f01b170aacfb9e39a5204f55cc2b61fd65f5e02eb44e0637e40a174501a7",
       "mode": "0644"
     },
     {
@@ -154,8 +166,8 @@
     },
     {
       "path": "backend/core/ent/schema/models.go",
-      "size": 23174,
-      "digest": "sha256:a00866b6a8816960c09eaec3850c08c383b4e112d42cbe21e0a99bd78be40ee7",
+      "size": 23228,
+      "digest": "sha256:7152e61705c91f5ec9a718927e1a562ee9bcfd8b07f9718eb7224511d168adb7",
       "mode": "0644"
     },
     {
@@ -177,27 +189,57 @@
       "mode": "0644"
     },
     {
+      "path": "backend/core/migrations/003_auth_session_access_hash_unique.sql",
+      "size": 99,
+      "digest": "sha256:a9d21d40b226c4e81f32dc575201e1e73219cb9d5d96909b78ff2471f7c70a12",
+      "mode": "0644"
+    },
+    {
       "path": "frontend/frontend/core/locales/en-US.json",
-      "size": 206,
-      "digest": "sha256:7f3f737f810cb26a22f1ae2c1f211c4773f3bda6ebd80e68813e20ed924a8199",
+      "size": 1812,
+      "digest": "sha256:c3e25f0701f31e7525a9a4eb2546c60ca9ec19320c26aac218ed60d1f5e770ed",
       "mode": "0644"
     },
     {
       "path": "frontend/frontend/core/locales/zh-CN.json",
-      "size": 203,
-      "digest": "sha256:9c135870e98d40a198aec2a0a912a5ee75f2e11975b6bb74d4f6b1f27da51e95",
+      "size": 1824,
+      "digest": "sha256:4969f2dc4f9b428e0af76e95765e61fcf4f0529f50c07be7d2e70de80b32be8a",
       "mode": "0644"
     },
     {
-      "path": "frontend/frontend/core/object-schema/identity-account.schema.json",
-      "size": 628,
-      "digest": "sha256:01e1e146b8a0578f29b7c486ca4c58b8204abef860ce20e1c8c8808b03383278",
+      "path": "frontend/frontend/core/pages/accounts.page.json",
+      "size": 2853,
+      "digest": "sha256:3a7376736e83c7a73ee460fea20bf4df63aa117294eba6c8a8f79239ae61fa28",
       "mode": "0644"
     },
     {
-      "path": "frontend/frontend/core/pages/identity-accounts.page.json",
-      "size": 241,
-      "digest": "sha256:21f684d7188701ce00c475f6764d291c04d7f3995fa2a59bab0690d647e11ab4",
+      "path": "frontend/frontend/core/pages/members.page.json",
+      "size": 3465,
+      "digest": "sha256:3388ef1b3cc91f10b6afdce7a10343916a56199f2d09adc18b83037d7f1f0f16",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/pages/menus.page.json",
+      "size": 2358,
+      "digest": "sha256:f046ad6f1e64ff88bc28e05a8cbfc34f34d97f1475d7d12e9361cbe6ddb16749",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/pages/permissions.page.json",
+      "size": 2006,
+      "digest": "sha256:dca34e9d53e0b4faf108b16af996b46280df808a5ea148fa515b1a8ac1699794",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/pages/roles.page.json",
+      "size": 5378,
+      "digest": "sha256:393320be70c876ab89debe7dc1af9411b9600b33159e8cb808136c46a55db349",
+      "mode": "0644"
+    },
+    {
+      "path": "frontend/frontend/core/pages/tenants.page.json",
+      "size": 3718,
+      "digest": "sha256:b57f8cf7e1f9e1f2003615a2bb5a263fee6f395a60c360135c0c2c1f3ac80570",
       "mode": "0644"
     }
   ],
@@ -205,6 +247,8 @@
     {
       "id": "backend",
       "files": [
+        "backend/core/coreapp/access.go",
+        "backend/core/coreapp/access_test.go",
         "backend/core/coreapp/authority.go",
         "backend/core/coreapp/authorization.go",
         "backend/core/coreapp/authorization_test.go",
@@ -230,7 +274,8 @@
         "backend/core/ent/schema/models.go",
         "backend/core/ent/schema/models_test.go",
         "backend/core/migrations/001_core.sql",
-        "backend/core/migrations/002_core_iam.sql"
+        "backend/core/migrations/002_core_iam.sql",
+        "backend/core/migrations/003_auth_session_access_hash_unique.sql"
       ],
       "requiresProfiles": [],
       "requiresBundles": [],
@@ -251,8 +296,12 @@
       "files": [
         "frontend/frontend/core/locales/en-US.json",
         "frontend/frontend/core/locales/zh-CN.json",
-        "frontend/frontend/core/object-schema/identity-account.schema.json",
-        "frontend/frontend/core/pages/identity-accounts.page.json"
+        "frontend/frontend/core/pages/accounts.page.json",
+        "frontend/frontend/core/pages/members.page.json",
+        "frontend/frontend/core/pages/menus.page.json",
+        "frontend/frontend/core/pages/permissions.page.json",
+        "frontend/frontend/core/pages/roles.page.json",
+        "frontend/frontend/core/pages/tenants.page.json"
       ],
       "requiresProfiles": [],
       "requiresBundles": [],

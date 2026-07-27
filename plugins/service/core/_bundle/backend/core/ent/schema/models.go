@@ -372,7 +372,11 @@ func (AuthSession) Fields() []ent.Field {
 	}
 }
 func (AuthSession) Indexes() []ent.Index {
-	return []ent.Index{index.Fields("session_id").Unique(), index.Fields("refresh_token_hash").Unique()}
+	return []ent.Index{
+		index.Fields("session_id").Unique(),
+		index.Fields("access_token_hash").Unique(),
+		index.Fields("refresh_token_hash").Unique(),
+	}
 }
 func (AuthSession) Edges() []ent.Edge {
 	return []ent.Edge{

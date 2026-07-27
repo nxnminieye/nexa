@@ -178,11 +178,62 @@ func decodeRequestFields(value protoreflect.Message, method protoreflect.MethodD
 	return result, nil
 }
 
-func expectedContextKind(source ContextValue) protoreflect.Kind {
+func validContextKind(source ContextValue, kind protoreflect.Kind) bool {
 	if source == ContextTenantID {
-		return protoreflect.Int64Kind
+		return kind == protoreflect.StringKind || kind == protoreflect.Int64Kind
 	}
-	return protoreflect.StringKind
+	return kind == protoreflect.StringKind
+}
+
+func validateTenantContextTypes(document *documentState, methodNames []string) error {
+	tenantType := ""
+	for _, name := range methodNames {
+		method := document.methods[name]
+		if method.rpcContext == nil {
+			continue
+		}
+		for _, binding := range method.rpcContext.contextFields {
+			if binding.source != ContextTenantID {
+				continue
+			}
+			field, ok := documentRPCPathTerminal(document, method.input, binding.rpcPath)
+			if !ok {
+				return protocolError("protocol_ir_invalid", "rpc_field_unresolved", method.filePath, "", "Proto RPC context metadata is invalid")
+			}
+			if tenantType != "" && tenantType != field.typeValue.name {
+				return protocolError("protocol_ir_invalid", "tenant_context_type_mixed", method.filePath, "", "Tenant context type is inconsistent within the service")
+			}
+			tenantType = field.typeValue.name
+		}
+	}
+	return nil
+}
+
+func documentRPCPathTerminal(document *documentState, root string, path []string) (*fieldState, bool) {
+	current := root
+	var terminal *fieldState
+	for _, segment := range path {
+		owner, numberText, ok := strings.Cut(segment, "#")
+		number, err := strconv.Atoi(numberText)
+		message := document.messages[current]
+		if !ok || err != nil || owner != current || message == nil {
+			return nil, false
+		}
+		terminal = nil
+		for _, field := range message.fields {
+			if field.number == number {
+				terminal = field
+				break
+			}
+		}
+		if terminal == nil {
+			return nil, false
+		}
+		if terminal.typeValue.kind == TypeMessage {
+			current = terminal.typeValue.name
+		}
+	}
+	return terminal, terminal != nil
 }
 
 func resolveRPCField(root protoreflect.MessageDescriptor, value string) (protoreflect.FieldDescriptor, error) {
@@ -220,7 +271,7 @@ func decodeContextFields(value protoreflect.Message, method protoreflect.MethodD
 			return nil, optionError(method, "context_source_invalid")
 		}
 		field, err := resolveRPCField(method.Input(), stringValue(item, "rpc_field"))
-		if err != nil || field.Cardinality() != protoreflect.Optional || field.HasPresence() || field.Kind() != expectedContextKind(binding.source) {
+		if err != nil || field.Cardinality() != protoreflect.Optional || field.HasPresence() || !validContextKind(binding.source, field.Kind()) {
 			return nil, optionError(method, "context_field_type_invalid")
 		}
 		binding.rpcPath, err = resolveRPCPath(method.Input(), stringValue(item, "rpc_field"))

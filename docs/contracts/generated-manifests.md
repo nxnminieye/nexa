@@ -1,7 +1,7 @@
 # 生成清单
 
 生成清单 package 是为已有 consumer 保留的可重建状态投影数据结构。它不保存业务配置，也不是人工
-authoring surface；当前 official RPC/API direct generation command 不创建、读取或依赖这些 manifest，
+authoring surface；当前 official RPC/API/frontend direct generation command 不创建、读取或依赖这些 manifest，
 下述 managed/write lifecycle 也不是当前 official generation 契约。
 
 ## Owner

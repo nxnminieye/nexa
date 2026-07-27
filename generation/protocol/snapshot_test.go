@@ -3,6 +3,7 @@ package protocol_test
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nxnminieye/nexa/generation/protocol"
@@ -46,6 +47,58 @@ service SampleService {
 	fields := method.RPCContext().ContextFields()
 	if len(fields) != 2 || fields[0].Source() != protocol.ContextRequestID || fields[1].Source() != protocol.ContextTenantID {
 		t.Fatalf("RPCContext().ContextFields() = %#v", fields)
+	}
+}
+
+func TestSnapshotRoundTripsStringTenantContext(t *testing.T) {
+	source := replaceOnce(validProxyProto(""), "int64 tenant_id = 2;", "string tenant_id = 2;")
+	canonical, err := protocol.CanonicalJSON(compileProtocol(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	domain, err := provenance.ParseDomainSource("generated/protocol-string-tenant.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := protocol.ParseSnapshot(domain, canonical)
+	if err != nil {
+		t.Fatalf("ParseSnapshot() error = %v", err)
+	}
+	roundTrip, err := snapshot.CanonicalJSON()
+	if err != nil || !bytes.Equal(roundTrip, canonical) {
+		t.Fatalf("Snapshot.CanonicalJSON() = %s, %v", roundTrip, err)
+	}
+}
+
+func TestSnapshotRejectsRehashedMixedTenantTypes(t *testing.T) {
+	source := strings.Replace(validProxyProto(""), "service SampleService {", `message AuditRequest { int64 tenant_id = 1; }
+message AuditResponse {}
+service SampleService {
+  rpc Audit(AuditRequest) returns (AuditResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: TENANT_ID rpc_field: "tenant_id" }
+    };
+  }`, 1)
+	canonical, err := protocol.CanonicalJSON(compileProtocol(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(canonical, &root); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range root["files"].([]any)[0].(map[string]any)["messages"].([]any) {
+		message := raw.(map[string]any)
+		if message["fullName"] == "sample.v1.AuditRequest" {
+			message["fields"].([]any)[0].(map[string]any)["type"] = map[string]any{"kind": "scalar", "name": "string"}
+		}
+	}
+	tampered := recanonicalizeProtocolSnapshot(t, root)
+	domain, _ := provenance.ParseDomainSource("generated/protocol-mixed-tenant.json")
+	_, err = protocol.ParseSnapshot(domain, tampered)
+	owner, ok := err.(*protocol.Error)
+	if !ok || owner.Reason() != "tenant_context_type_mixed" {
+		t.Fatalf("ParseSnapshot() error = %#v", err)
 	}
 }
 

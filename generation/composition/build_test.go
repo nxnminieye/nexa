@@ -435,6 +435,13 @@ service AccountService {
 }`
 }
 
+func TestBuildAcceptsStringTenant(t *testing.T) {
+	stringTenant := strings.Replace(validProtocolSource(false), "int64 tenant_id = 2;", "string tenant_id = 2;", 1)
+	if _, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, stringTenant)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"}); err != nil {
+		t.Fatalf("Build() string tenant error = %v", err)
+	}
+}
+
 func parseCatalog(t *testing.T, selected bool) servicecatalog.Catalog {
 	t.Helper()
 	binding := " []"

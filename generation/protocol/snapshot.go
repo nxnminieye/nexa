@@ -25,6 +25,7 @@ type snapshotState struct {
 	operationIDs map[string]struct{}
 	routes       map[string]struct{}
 	descriptors  *snapshotDescriptorIndex
+	tenantType   string
 }
 type snapshotMethodState struct {
 	fullName   string
@@ -263,6 +264,16 @@ func validateSnapshotRPCContext(method canonicalMethod, state *snapshotState, fi
 		if !validateSnapshotContextPath(method.Input, binding, state.descriptors) {
 			return protocolError("protocol_snapshot_invalid", "rpc_path_invalid", filePath, "", "Protocol snapshot context path is invalid")
 		}
+		if binding.Source == ContextTenantID {
+			terminal, ok := snapshotRPCPathTerminal(method.Input, binding.RPCPath, state.descriptors)
+			if !ok {
+				return protocolError("protocol_snapshot_invalid", "rpc_path_invalid", filePath, "", "Protocol snapshot context path is invalid")
+			}
+			if state.tenantType != "" && state.tenantType != terminal.Type.Name {
+				return protocolError("protocol_snapshot_invalid", "tenant_context_type_mixed", filePath, "", "Tenant context type is inconsistent within the service")
+			}
+			state.tenantType = terminal.Type.Name
+		}
 		pathKey := strings.Join(binding.RPCPath, "\x00")
 		if _, duplicate := seenSources[binding.Source]; duplicate {
 			return protocolError("protocol_snapshot_invalid", "binding_destination_duplicate", filePath, "", "Protocol snapshot context source is duplicated")
@@ -297,11 +308,11 @@ func validateSnapshotContextPath(root string, binding canonicalContextField, ind
 			current = leaf.Type.Name
 		}
 	}
-	expected := "string"
+	validType := leaf.Type.Name == "string"
 	if binding.Source == ContextTenantID {
-		expected = "int64"
+		validType = leaf.Type.Name == "string" || leaf.Type.Name == "int64"
 	}
-	return leaf.Cardinality == CardinalitySingular && leaf.Presence == PresenceImplicit && leaf.Type.Kind == TypeScalar && leaf.Type.Name == expected
+	return leaf.Cardinality == CardinalitySingular && leaf.Presence == PresenceImplicit && leaf.Type.Kind == TypeScalar && validType
 }
 
 func validHTTPMethod(value HTTPMethod) bool {

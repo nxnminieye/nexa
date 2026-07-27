@@ -12,15 +12,16 @@ import (
 
 	"entgo.io/ent"
 	entschema "entgo.io/ent/schema"
-	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 
 	"github.com/nxnminieye/nexa/generation/composition"
+	"github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	"github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/nexaent"
 	core "github.com/nxnminieye/nexa/plugins/service/core"
 	coreschema "github.com/nxnminieye/nexa/plugins/service/core/_bundle/backend/core/ent/schema"
 	"github.com/nxnminieye/nexa/project/servicecatalog"
+	"github.com/nxnminieye/nexa/provenance"
 	"github.com/nxnminieye/nexa/sourceplugin"
 )
 
@@ -35,10 +36,10 @@ func TestProfileClosuresAreIndependent(t *testing.T) {
 		present      []string
 		absent       []string
 	}{
-		{profile: "backend", wantProfiles: []string{"backend"}, present: []string{"backend/core/coreapp/health.go", "backend/core/desc/core.proto"}, absent: []string{"backend/core/coreapp/oidc_adapter.go", "frontend/frontend/core/pages/identity-accounts.page.json"}},
-		{profile: "identity-oidc", wantProfiles: []string{"backend", "identity-oidc"}, present: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}, absent: []string{"frontend/frontend/core/pages/identity-accounts.page.json"}},
-		{profile: "frontend", wantProfiles: []string{"frontend"}, present: []string{"frontend/frontend/core/pages/identity-accounts.page.json"}, absent: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}},
-		{profile: "full", wantProfiles: []string{"backend", "frontend", "full"}, present: []string{"backend/core/coreapp/health.go", "frontend/frontend/core/pages/identity-accounts.page.json"}, absent: []string{"backend/core/coreapp/oidc_adapter.go"}},
+		{profile: "backend", wantProfiles: []string{"backend"}, present: []string{"backend/core/coreapp/health.go", "backend/core/desc/core.proto"}, absent: []string{"backend/core/coreapp/oidc_adapter.go", "frontend/frontend/core/pages/accounts.page.json"}},
+		{profile: "identity-oidc", wantProfiles: []string{"backend", "identity-oidc"}, present: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}, absent: []string{"frontend/frontend/core/pages/accounts.page.json"}},
+		{profile: "frontend", wantProfiles: []string{"frontend"}, present: []string{"frontend/frontend/core/pages/accounts.page.json"}, absent: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}},
+		{profile: "full", wantProfiles: []string{"backend", "frontend", "full"}, present: []string{"backend/core/coreapp/health.go", "frontend/frontend/core/pages/accounts.page.json"}, absent: []string{"backend/core/coreapp/oidc_adapter.go"}},
 	}
 	for _, test := range tests {
 		t.Run(test.profile, func(t *testing.T) {
@@ -101,6 +102,16 @@ func TestProfileBackendFactsLoadSemantically(t *testing.T) {
 		if descriptor.Name != expected.name || descriptor.Field != expected.field || !descriptor.Unique || !descriptor.Required {
 			t.Fatalf("physical edge = %#v, want name=%s field=%s unique required", descriptor, expected.name, expected.field)
 		}
+	}
+	accessHashUnique := false
+	for _, value := range (coreschema.AuthSession{}).Indexes() {
+		descriptor := value.Descriptor()
+		if descriptor.Unique && sameStrings(descriptor.Fields, []string{"access_token_hash"}) {
+			accessHashUnique = true
+		}
+	}
+	if !accessHashUnique {
+		t.Fatal("AuthSession access_token_hash unique index missing")
 	}
 
 	provider, err := core.New()
@@ -189,7 +200,7 @@ services:
 		t.Fatal(err)
 	}
 	merged, err := httpapi.Merge(api, generated)
-	if err != nil || len(merged.Operations()) != 19 {
+	if err != nil || len(merged.Operations()) != 31 {
 		t.Fatalf("merged Core operations = %d, %v", len(merged.Operations()), err)
 	}
 }
@@ -199,52 +210,180 @@ func TestProfileFrontendFactsAreStructuredAndStandalone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Manifest().ResolveProfile("frontend")
+	closure, err := provider.Manifest().ResolveProfile("frontend")
 	if err != nil {
 		t.Fatal(err)
 	}
-	frontend, ok := provider.Manifest().LookupProfile("frontend")
-	if !ok || len(frontend.RequiredProfileIDs()) != 0 {
-		t.Fatalf("frontend dependencies = %#v", frontend.RequiredProfileIDs())
+	frontendProfile, ok := provider.Manifest().LookupProfile("frontend")
+	if !ok || len(frontendProfile.RequiredProfileIDs()) != 0 {
+		t.Fatalf("frontend dependencies = %#v", frontendProfile.RequiredProfileIDs())
 	}
 
-	schemaFile, _ := provider.Tree().Lookup("frontend/frontend/core/object-schema/identity-account.schema.json")
-	document, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaFile.Bytes()))
-	if err != nil {
-		t.Fatal(err)
+	wantPaths := []string{
+		"frontend/frontend/core/locales/en-US.json",
+		"frontend/frontend/core/locales/zh-CN.json",
+		"frontend/frontend/core/pages/accounts.page.json",
+		"frontend/frontend/core/pages/members.page.json",
+		"frontend/frontend/core/pages/menus.page.json",
+		"frontend/frontend/core/pages/permissions.page.json",
+		"frontend/frontend/core/pages/roles.page.json",
+		"frontend/frontend/core/pages/tenants.page.json",
 	}
-	compiler := jsonschema.NewCompiler()
-	const schemaURL = "https://nexa.dev/frontend/core/identity-account.schema.json"
-	if err := compiler.AddResource(schemaURL, document); err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := compiler.Compile(schemaURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := compiled.Validate(map[string]any{"username": "alice", "displayName": "Alice", "status": "enabled"}); err != nil {
-		t.Fatal(err)
+	if got := profilePaths(closure); !sameStrings(got, wantPaths) {
+		t.Fatalf("frontend files = %#v", got)
 	}
 
-	zh := locale(t, provider.Tree(), "frontend/frontend/core/locales/zh-CN.json")
-	en := locale(t, provider.Tree(), "frontend/frontend/core/locales/en-US.json")
-	pageFile, _ := provider.Tree().Lookup("frontend/frontend/core/pages/identity-accounts.page.json")
-	var page struct {
-		TitleKey     string `json:"titleKey"`
-		ObjectSchema string `json:"objectSchema"`
+	var specs []frontend.PageSpec
+	var locales []frontend.Locale
+	for _, path := range wantPaths {
+		file, ok := provider.Tree().Lookup(path)
+		if !ok {
+			t.Fatalf("%s missing", path)
+		}
+		switch filepath.Base(filepath.Dir(path)) {
+		case "pages":
+			spec, err := frontend.ParsePageSpec(path, file.Bytes())
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			specs = append(specs, spec)
+		case "locales":
+			locale, err := frontend.ParseLocale(path, file.Bytes())
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			locales = append(locales, locale)
+		default:
+			t.Fatalf("legacy frontend asset remains: %s", path)
+		}
 	}
-	if err := json.Unmarshal(pageFile.Bytes(), &page); err != nil {
+	merged := mergedCoreAPI(t, provider)
+	operation, ok := merged.Operation("core.iam.account.list")
+	if !ok {
+		t.Fatal("core.iam.account.list missing")
+	}
+	response, ok := merged.Type(operation.ResponseType())
+	if !ok {
+		t.Fatalf("response type %q missing", operation.ResponseType())
+	}
+	items, ok := response.Field("Items")
+	if !ok {
+		t.Fatal("Items field missing")
+	}
+	element, ok := items.ValueType().Element()
+	if !ok {
+		t.Fatalf("Items value type = %s", items.ValueType().Kind())
+	}
+	item, ok := merged.Type(element.Name())
+	if !ok {
+		t.Fatalf("Items ref type %q missing", element.Name())
+	}
+	accountID, ok := item.Field("AccountId")
+	if !ok {
+		var paths [][]string
+		for _, field := range item.Fields() {
+			paths = append(paths, field.Path())
+		}
+		t.Fatalf("AccountId field missing from %#v", paths)
+	}
+	if !items.Required() || items.ValueType().Kind() != httpapi.ValueArray || element.Kind() != httpapi.ValueRef || !accountID.Required() || accountID.ValueType().Kind() != httpapi.ValueScalar || accountID.ValueType().Name() != "string" {
+		t.Fatalf("account list projection is not a required array/ref row key")
+	}
+	document, err := frontend.Build(merged, specs, locales...)
+	if err != nil {
+		t.Fatalf("build frontend IR: %v", err)
+	}
+	canonical, err := frontend.CanonicalJSON(document)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if zh[page.TitleKey] == "" || en[page.TitleKey] == "" || page.ObjectSchema != "../object-schema/identity-account.schema.json" {
-		t.Fatalf("page references are unresolved: %#v", page)
+	var wire struct {
+		Pages []struct {
+			Operations []json.RawMessage `json:"operations"`
+		} `json:"pages"`
 	}
+	if err := json.Unmarshal(canonical, &wire); err != nil {
+		t.Fatal(err)
+	}
+	operationCount := 0
+	for _, page := range wire.Pages {
+		operationCount += len(page.Operations)
+	}
+	if document.PageCount() != 6 || operationCount != 22 {
+		t.Fatalf("frontend IR = pages:%d operations:%d", document.PageCount(), operationCount)
+	}
+	request, err := frontend.CanonicalRenderRequest(frontend.RenderRequest{
+		FrontendIR: document, RepositoryRoot: "/workspace/example", GeneratedScope: "frontend/generated",
+		ExtensionScopes: []string{"frontend/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("core-frontend-lock")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := frontend.ValidateRendererInput(request); err != nil {
+		t.Fatalf("validate renderer input: %v", err)
+	}
+}
+
+func mergedCoreAPI(t *testing.T, provider sourceplugin.Provider) httpapi.Document {
+	t.Helper()
+	proto, err := protocol.Compile(context.Background(), protocol.CompileOptions{
+		ServiceID: "core", EntryFiles: []string{"backend/core/desc/core.proto"}, Resolver: &treeResolver{tree: provider.Tree()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := t.TempDir()
+	apiFile, _ := provider.Tree().Lookup("backend/core/desc/core.api")
+	path := filepath.Join(repository, "desc", "core.api")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, apiFile.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	native, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: "desc/core.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := servicecatalog.Parse("project/services.yaml", []byte(fmt.Sprintf(`apiVersion: nexa.dev/service-catalog/v1
+kind: ServiceCatalog
+services:
+  - id: core
+    root: backend/core
+    capabilityBindings:
+      - id: %s
+        apiVersion: %s
+`, composition.CapabilityID, composition.CapabilityVersion)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := composition.Build(catalog, []protocol.Document{proto}, native, composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, err := composition.GeneratedAPI(composed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged, err := httpapi.Merge(native, generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return merged
 }
 
 func closurePaths(closure sourceplugin.ProfileClosure) map[string]bool {
 	result := make(map[string]bool)
 	for _, file := range closure.Files() {
 		result[file.Path()] = true
+	}
+	return result
+}
+
+func profilePaths(closure sourceplugin.ProfileClosure) []string {
+	result := make([]string, 0, len(closure.Files()))
+	for _, file := range closure.Files() {
+		result = append(result, file.Path())
 	}
 	return result
 }
@@ -275,19 +414,6 @@ func (r *treeResolver) Open(_ context.Context, path string) (io.ReadCloser, erro
 		return nil, os.ErrNotExist
 	}
 	return io.NopCloser(bytes.NewReader(file.Bytes())), nil
-}
-
-func locale(t *testing.T, tree sourceplugin.Tree, path string) map[string]string {
-	t.Helper()
-	file, ok := tree.Lookup(path)
-	if !ok {
-		t.Fatalf("%s missing", path)
-	}
-	result := make(map[string]string)
-	if err := json.Unmarshal(file.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	return result
 }
 
 func sameStrings(left, right []string) bool {

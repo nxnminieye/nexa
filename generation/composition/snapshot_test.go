@@ -3,6 +3,7 @@ package composition_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -266,6 +267,65 @@ func TestParseSnapshotRejectsRehashedProjectedMessageSourceTampering(t *testing.
 	snapshotSource, _ := provenance.ParseDomainSource("generated/composition-ir-v2-message-digest-tampered.json")
 	if _, err := composition.ParseSnapshot(snapshotSource, canonicalTestJSON(t, root)); err == nil {
 		t.Fatal("ParseSnapshot() accepted a rehashed projected message source digest")
+	}
+}
+
+func TestParseSnapshotRejectsMixedTenantTypesWithinService(t *testing.T) {
+	sourceText := strings.Replace(validProtocolSource(false), "service AccountService {", `message ListAccountRequest { int64 tenant_id = 1; }
+message ListAccountResponse { string name = 1; }
+service AccountService {
+  rpc List(ListAccountRequest) returns (ListAccountResponse) {
+    option (nexa.protocol.v1.rpc_context) = {
+      context_fields: { source: TENANT_ID rpc_field: "tenant_id" }
+    };
+    option (nexa.protocol.v1.http_proxy) = {
+      operation_id: "account.list" method: GET path: "/accounts"
+      auth: { mode: NONE }
+      response_fields: { rpc_field: "name" http_field: "name" }
+    };
+  }`, 1)
+	document, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, sourceText)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := composition.CanonicalJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(canonical, &root); err != nil {
+		t.Fatal(err)
+	}
+	operation := compositionOperation(root, "account.list")
+	binding := operation["contextFields"].([]any)[0].(map[string]any)
+	binding["valueType"].(map[string]any)["name"] = "string"
+	terminal := binding["rpcPath"].([]any)[0].(map[string]any)
+	terminal["typeName"] = "string"
+	fieldNode := map[string]any{
+		"apiVersion": "nexa.dev/proto-field-node/v1", "kind": "field",
+		"fullName": terminal["fullName"], "number": terminal["number"], "jsonName": terminal["jsonName"],
+		"cardinality": "singular", "presence": "implicit", "type": map[string]any{"kind": "scalar", "name": "string"},
+	}
+	encoded, err := json.Marshal(fieldNode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCanonical, err := jcs.Transform(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range root["sources"].([]any) {
+		item := raw.(map[string]any)
+		if item["ref"] == terminal["sourceRef"] {
+			item["digest"] = provenance.SHA256(fieldCanonical).String()
+		}
+	}
+	root["sourceDigest"] = compositionSourceDigest(t, root["sources"].([]any))
+	snapshotSource, _ := provenance.ParseDomainSource("generated/composition-ir-v2-mixed-tenant.json")
+	_, err = composition.ParseSnapshot(snapshotSource, canonicalTestJSON(t, root))
+	var typed *composition.Error
+	if !errors.As(err, &typed) || typed.Reason() != "tenant_context_type_mixed" {
+		t.Fatalf("ParseSnapshot() mixed tenant error = %v", err)
 	}
 }
 

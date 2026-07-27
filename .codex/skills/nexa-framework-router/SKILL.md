@@ -55,8 +55,9 @@ SDK 已发布或 consumer 必须选择。不得探测缺失的 runtime/SDK binar
 ## 缺失能力
 
 未出现在自省结果中的能力视为未编入。Inspection 版本不支持、计划命令不存在、输入不完整或副作用越界时报告结构化 gap。以上情况均不臆造命令，不手改生成物，
-也不创建空插件、空目录或占位事实。requirements/work/UserOperation、human gate、TestSpec/evidence、deployment
-instance 和 frontend 全部缺失仍是合法的 Minimum Runtime。
+也不创建空插件、空目录或占位事实。requirements/work/UserOperation、human gate、TestSpec/evidence 和
+deployment instance 缺失仍是合法的 Minimum Runtime；consumer 未选择 frontend 时仍是合法 backend-only
+组合，不需要 PageSpec 或占位页面。
 
 Runtime 能力不通过 CLI 自省声明运行时实例。判断是否选择某个 runtime package，必须查看 consumer 的
 Go import、constructor composition 与编译依赖结果；根 `go.mod` 中存在 requirement 不等于最终二进制已链接或构造该能力。
