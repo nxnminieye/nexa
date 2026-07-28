@@ -252,6 +252,108 @@ func TestBindingPresenceIncludesOptionalParents(t *testing.T) {
 	assertReason(t, err, "optional_row_source_required_target")
 }
 
+func TestBuildRequiresClosedResponseWireBindings(t *testing.T) {
+	page := []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"wire","titleKey":"page.wire","mode":"singleton","accessOperation":"get","route":{"path":"/wire","name":"Wire"},"operations":[{"id":"get","role":"get","operationId":"wire.get","contextBindings":[]}],"fields":[{"id":"api-version","labelKey":"field.apiVersion","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["APIVersion"]}]},{"id":"id","labelKey":"field.id","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["ID"]}]}],"actions":[],"extensionPoints":[]}`)
+	apiTemplate := `syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+type GetRequest {}
+type GetResponse { APIVersion string %s ID int64 %s }
+@server (nexaOperationId: "wire.get" nexaAuthMode: "none")
+service api { @handler get get /wire (GetRequest) returns (GetResponse) }
+`
+	for _, tc := range []struct {
+		name, apiVersionTag, idTag, reason, pointer string
+	}{
+		{"missing", "", "`json:\"id\"`", "response_wire_binding_missing", "/api/types/1/fields/0/binding"},
+		{"non-body", "`form:\"apiVersion\"`", "`json:\"id\"`", "response_wire_binding_location_invalid", "/api/types/1/fields/0/binding/in"},
+		{"duplicate", "`json:\"value\"`", "`json:\"value\"`", "response_wire_name_duplicate", "/api/types/1/fields/1/binding/name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			apiDocument := loadAPI(t, fmt.Sprintf(apiTemplate, tc.apiVersionTag, tc.idTag))
+			if tc.name == "missing" {
+				if _, err := frontend.Build(apiDocument, nil); err != nil {
+					t.Fatalf("unreferenced response rejected: %v", err)
+				}
+			}
+			_, err := frontend.Build(apiDocument, []frontend.PageSpec{mustSpec(t, page)}, locale(t, "page.wire", "field.apiVersion", "field.id"))
+			assertError(t, err, "frontend_ir_invalid", tc.pointer)
+			assertReason(t, err, tc.reason)
+		})
+	}
+
+	nestedAPI := loadAPI(t, `syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+type Child { ID int64 }
+type GetRequest {}
+type GetResponse { Child Child `+"`json:\"child\"`"+` }
+@server (nexaOperationId: "nested.get" nexaAuthMode: "none")
+service api { @handler get get /nested (GetRequest) returns (GetResponse) }
+`)
+	nestedPage := mustSpec(t, []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"nested","titleKey":"page.nested","mode":"singleton","accessOperation":"get","route":{"path":"/nested","name":"Nested"},"operations":[{"id":"get","role":"get","operationId":"nested.get","contextBindings":[]}],"fields":[{"id":"id","labelKey":"field.id","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["Child","ID"]}]}],"actions":[],"extensionPoints":[]}`))
+	_, err := frontend.Build(nestedAPI, []frontend.PageSpec{nestedPage}, locale(t, "page.nested", "field.id"))
+	assertError(t, err, "frontend_ir_invalid", "/api/types/0/fields/0/binding")
+	assertReason(t, err, "response_wire_binding_missing")
+
+	nestedArrays := loadAPI(t, `syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-api/v1")
+type Child { ID int64 `+"`json:\"id\"`"+` }
+type GetRequest {}
+type GetResponse { Items [][]Child `+"`json:\"items\"`"+` }
+@server (nexaOperationId: "arrays.get" nexaAuthMode: "none")
+service api { @handler get get /arrays (GetRequest) returns (GetResponse) }
+`)
+	nestedArraysPage := mustSpec(t, []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"arrays","titleKey":"page.arrays","mode":"singleton","accessOperation":"get","route":{"path":"/arrays","name":"Arrays"},"operations":[{"id":"get","role":"get","operationId":"arrays.get","contextBindings":[]}],"fields":[{"id":"items","labelKey":"field.items","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["Items"]}]}],"actions":[],"extensionPoints":[]}`))
+	if _, err := frontend.Build(nestedArrays, []frontend.PageSpec{nestedArraysPage}, locale(t, "page.arrays", "field.items")); err != nil {
+		t.Fatalf("nested response arrays rejected: %v", err)
+	}
+
+	document, err := frontend.Build(loadAPI(t, fmt.Sprintf(apiTemplate, "`json:\"apiVersion\"`", "`json:\"id\"`")), []frontend.PageSpec{mustSpec(t, page)}, locale(t, "page.wire", "field.apiVersion", "field.id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		API struct {
+			Types []struct {
+				Name   string
+				Fields []struct {
+					Path    []string
+					Binding struct {
+						Location string `json:"in"`
+						Name     string `json:"name"`
+					} `json:"binding"`
+				}
+			}
+		}
+		Pages []struct {
+			Fields []struct {
+				Bindings []struct{ Path []string }
+			}
+		}
+	}
+	if err := json.Unmarshal(canonical(t, document), &wire); err != nil {
+		t.Fatal(err)
+	}
+	bindings := map[string]string{}
+	for _, typeValue := range wire.API.Types {
+		if typeValue.Name != "GetResponse" {
+			continue
+		}
+		for _, field := range typeValue.Fields {
+			bindings[field.Path[0]] = field.Binding.Location + ":" + field.Binding.Name
+		}
+	}
+	if bindings["ID"] != "body:id" || bindings["APIVersion"] != "body:apiVersion" {
+		t.Fatalf("response wire bindings = %#v", bindings)
+	}
+	typedPaths := map[string]bool{}
+	for _, field := range wire.Pages[0].Fields {
+		typedPaths[strings.Join(field.Bindings[0].Path, ".")] = true
+	}
+	if !typedPaths["ID"] || !typedPaths["APIVersion"] {
+		t.Fatalf("page typed paths = %#v", typedPaths)
+	}
+}
+
 func TestRowKeyUsesWholePathPresence(t *testing.T) {
 	apiTemplate := `syntax = "v1"
 info (nexaContractVersion: "nexa.dev/http-api/v1")

@@ -51,6 +51,10 @@ func TestBuildProjectsSelectedUnaryProxyIntoGeneratedAPI(t *testing.T) {
 	if !ok || len(response.Fields()) != 1 {
 		t.Fatalf("generated response = %#v, %v", response, ok)
 	}
+	responseBinding, ok := response.Fields()[0].Binding()
+	if !ok || responseBinding.Location() != api.RequestBindingBody || responseBinding.Name() != "name" {
+		t.Fatalf("generated response binding = %#v, %v", responseBinding, ok)
+	}
 	service, _ := catalog.Lookup("account")
 	bindingSource := service.CapabilityBindings()[0].Source()
 	method, _ := proto.Method("account.v1.AccountService.Get")
@@ -75,6 +79,10 @@ func TestBuildProjectsSelectedUnaryProxyIntoGeneratedAPI(t *testing.T) {
 	projected, ok := manifest.Operation("account.get")
 	if !ok || projected.Provenance().Kind() != api.NodeDerived || len(projected.Provenance().Refs()) != 2 {
 		t.Fatalf("manifest operation = %#v, %v", projected, ok)
+	}
+	requestBindings := projected.RequestBindings()
+	if len(requestBindings) != 1 || requestBindings[0].Field() != "Id" || requestBindings[0].Location() != api.RequestBindingPath || requestBindings[0].Name() != "id" {
+		t.Fatalf("manifest request bindings = %#v", requestBindings)
 	}
 }
 
@@ -317,6 +325,40 @@ func TestBuildProjectsAcyclicNamedObjectAndCollectionClosure(t *testing.T) {
 	settingsType, settingsOK := memberSettings.ValueType().Element()
 	if !ok || memberSettings.ValueType().Kind() != httpapi.ValueOptional || !settingsOK || settingsType.Kind() != httpapi.ValueRef || settingsType.Name() != "AccountAccountV1Settings" {
 		t.Fatalf("member settings = %#v, %v", memberSettings, ok)
+	}
+	for _, tc := range []struct {
+		field, wire string
+	}{{"Id", "id"}, {"RoleCodes", "roleCodes"}, {"Settings", "settings"}} {
+		field, ok := member.Field(tc.field)
+		binding, bound := field.Binding()
+		if !ok || !bound || binding.Location() != api.RequestBindingBody || binding.Name() != tc.wire {
+			t.Fatalf("projected field %s binding = %#v, field=%v bound=%v", tc.field, binding, ok, bound)
+		}
+	}
+}
+
+func TestGeneratedAPIKeepsExactResponseWireNames(t *testing.T) {
+	source := strings.Replace(validProtocolSource(false), "message GetAccountResponse { string name = 1; }", "message GetAccountResponse { string id = 1; string api_version = 2; }", 1)
+	source = strings.Replace(source, `response_fields: { rpc_field: "name" http_field: "name" }`, `response_fields: { rpc_field: "id" http_field: "id" }
+      response_fields: { rpc_field: "api_version" http_field: "apiVersion" }`, 1)
+	document, err := composition.Build(parseCatalog(t, true), []protocol.Document{compileProtocol(t, source)}, loadNative(t, "health.get", "/health"), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated, err := composition.GeneratedAPI(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, _ := generated.Operation("account.get")
+	response, _ := generated.Type(operation.ResponseType())
+	for _, tc := range []struct {
+		path, wire string
+	}{{"Id", "id"}, {"ApiVersion", "apiVersion"}} {
+		field, ok := response.Field(tc.path)
+		binding, bound := field.Binding()
+		if !ok || !bound || binding.Location() != api.RequestBindingBody || binding.Name() != tc.wire {
+			t.Fatalf("response field %s binding = %#v, field=%v bound=%v", tc.path, binding, ok, bound)
+		}
 	}
 }
 

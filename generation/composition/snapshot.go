@@ -382,7 +382,7 @@ func validateSnapshotHTTPAPI(wire wireDocument, sources map[string]provenance.So
 				if ownerErr != nil {
 					return invalid("provenance_invalid", source, "/types/fields", "composition projected field provenance is invalid")
 				}
-				value.Fields = append(value.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(field.JSONName)}, Required: field.Required, ValueType: snapshotValue(field.ValueType), Provenance: fieldOwner})
+				value.Fields = append(value.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(field.JSONName)}, Required: field.Required, ValueType: snapshotValue(field.ValueType), Binding: &httpapi.BindingSpec{Location: api.RequestBindingBody, Name: field.JSONName}, Provenance: fieldOwner})
 			}
 			spec.Types = append(spec.Types, value)
 		}
@@ -420,7 +420,7 @@ func validateSnapshotHTTPAPI(wire wireDocument, sources map[string]provenance.So
 			if ownerErr != nil {
 				return invalid("provenance_invalid", source, "/operations/responseFields", "composition response field provenance is invalid")
 			}
-			response.Fields = append(response.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(binding.HTTPField)}, Required: binding.Required, ValueType: snapshotValue(binding.ValueType), Provenance: owner})
+			response.Fields = append(response.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(binding.HTTPField)}, Required: binding.Required, ValueType: snapshotValue(binding.ValueType), Binding: &httpapi.BindingSpec{Location: api.RequestBindingBody, Name: binding.HTTPField}, Provenance: owner})
 		}
 		auth := httpapi.AuthSpec{Mode: api.AuthMode(operation.Auth.Mode)}
 		for _, credential := range operation.Auth.Credentials {

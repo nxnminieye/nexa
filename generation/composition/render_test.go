@@ -33,7 +33,7 @@ func TestRenderScalarArtifactCompatibilityOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"backend/core/desc/generated/account.generated.api":                "397e99cffeea3e956a494a02c16fe66640c27b8dd6961bde05285133261942ef",
+		"backend/core/desc/generated/account.generated.api":                "cb70adc0dd2d720ea56126a2928d1187cdd092a021faa3c2badaa3da9026b702",
 		"backend/core/internal/logic/rpcproxy/account-get.generated.go":    "ee03b2d086728a2d9d5ee9f49bcb98384f3505956e297bb3d68f21ea90b4bc45",
 		"backend/core/internal/rpcproxy/generated/register.generated.go":   "42d9d3bf2b07732b3d4fa2deb91e0290aeeece75ffe7eeaff48f9f54199fdfa9",
 		"backend/core/internal/serviceclients/account/client.generated.go": "a79ce1e37c791b148768ddd77125d3b3dd9fceb24ddd6a76f6cf59ee9791c778",

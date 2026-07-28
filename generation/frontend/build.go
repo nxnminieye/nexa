@@ -24,6 +24,7 @@ func Build(apiDocument httpapi.Document, specs []PageSpec, locales ...Locale) (D
 	pages := make([]wirePage, len(specs))
 	pageIDs, routePaths, routeNames, menuIDs, menuOrders := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]int{}, map[string]bool{}
 	contextTypes := map[string]string{}
+	validatedResponseTypes := map[string]bool{}
 	for index, spec := range specs {
 		base := "/pages/" + strconv.Itoa(index)
 		if spec.state == nil {
@@ -53,7 +54,7 @@ func Build(apiDocument httpapi.Document, specs []PageSpec, locales ...Locale) (D
 			}
 			menuOrders[key] = true
 		}
-		projected, failure := projectPage(apiDocument, spec, base, contextTypes)
+		projected, failure := projectPage(apiDocument, spec, base, contextTypes, validatedResponseTypes)
 		if failure != nil {
 			return Document{}, failure
 		}
@@ -85,7 +86,7 @@ type operationProjection struct {
 	index int
 }
 
-func projectPage(document httpapi.Document, spec PageSpec, base string, globalContexts map[string]string) (wirePage, *Error) {
+func projectPage(document httpapi.Document, spec PageSpec, base string, globalContexts map[string]string, validatedResponseTypes map[string]bool) (wirePage, *Error) {
 	page := clonePageDocument(spec.state.document)
 	aliases := map[string]operationProjection{}
 	roleCounts := map[string]int{}
@@ -95,6 +96,12 @@ func projectPage(document httpapi.Document, spec PageSpec, base string, globalCo
 		op, ok := document.Operation(item.OperationID)
 		if !ok {
 			return wirePage{}, buildError("operation_unresolved", pointer+"/operationId", "API operation does not exist")
+		}
+		if op.ResponseBody() == api.ResponseBodyJSON && !validatedResponseTypes[op.ResponseType()] {
+			if failure := validateResponseWireClosure(document, op.ResponseType()); failure != nil {
+				return wirePage{}, failure
+			}
+			validatedResponseTypes[op.ResponseType()] = true
 		}
 		aliases[item.ID] = operationProjection{item, op, index}
 		roleCounts[item.Role]++
@@ -298,6 +305,80 @@ func projectPage(document httpapi.Document, spec PageSpec, base string, globalCo
 		page.Actions[i].Fields = sortedStrings(page.Actions[i].Fields)
 	}
 	return wirePage{ID: page.ID, TitleKey: page.TitleKey, Mode: page.Mode, AccessOperation: page.AccessOperation, AccessPermission: access.api.Permission(), Route: page.Route, Menu: page.Menu, Operations: operations, Fields: wireFields, Actions: page.Actions, ExtensionPoints: sortedStrings(page.ExtensionPoints), SpecSourceRef: spec.state.sourceRef.String()}, nil
+}
+
+func validateResponseWireClosure(document httpapi.Document, rootType string) *Error {
+	types := document.Types()
+	typeIndexes := make(map[string]int, len(types))
+	for index, value := range types {
+		typeIndexes[value.Name()] = index
+	}
+	visited := map[string]bool{}
+	var validateObject func(string, []string) *Error
+	validateObject = func(typeName string, prefix []string) *Error {
+		objectKey := typeName + "\x00" + strings.Join(prefix, "\x00")
+		if visited[objectKey] {
+			return nil
+		}
+		visited[objectKey] = true
+		typeValue, ok := document.Type(typeName)
+		if !ok {
+			return buildError("response_wire_type_unresolved", "/api/types", "JSON response type closure contains an unresolved type")
+		}
+		fields := typeValue.Fields()
+		wireNames := map[string]bool{}
+		for fieldIndex, field := range fields {
+			path := field.Path()
+			if len(path) != len(prefix)+1 || !samePathPrefix(path, prefix) {
+				continue
+			}
+			fieldPointer := "/api/types/" + strconv.Itoa(typeIndexes[typeName]) + "/fields/" + strconv.Itoa(fieldIndex)
+			binding, hasBinding := field.Binding()
+			if !hasBinding {
+				return buildError("response_wire_binding_missing", fieldPointer+"/binding", "JSON response object field requires an explicit body binding")
+			}
+			if binding.Location() != api.RequestBindingBody {
+				return buildError("response_wire_binding_location_invalid", fieldPointer+"/binding/in", "JSON response object field binding must use body location")
+			}
+			if wireNames[binding.Name()] {
+				return buildError("response_wire_name_duplicate", fieldPointer+"/binding/name", "JSON response object sibling wire name is duplicated")
+			}
+			wireNames[binding.Name()] = true
+			value := unwrapResponseContainer(field.ValueType())
+			switch value.Kind() {
+			case httpapi.ValueObject:
+				if failure := validateObject(typeName, path); failure != nil {
+					return failure
+				}
+			case httpapi.ValueRef:
+				if failure := validateObject(value.Name(), nil); failure != nil {
+					return failure
+				}
+			}
+		}
+		return nil
+	}
+	return validateObject(rootType, nil)
+}
+
+func unwrapResponseContainer(value httpapi.ValueType) httpapi.ValueType {
+	for value.Kind() == httpapi.ValueOptional || value.Kind() == httpapi.ValueArray {
+		next, ok := value.Element()
+		if !ok {
+			return httpapi.ValueType{}
+		}
+		value = next
+	}
+	return value
+}
+
+func samePathPrefix(path, prefix []string) bool {
+	for index := range prefix {
+		if path[index] != prefix[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func projectColumns(document httpapi.Document, page pageDocument, field fieldDocument, aliases map[string]operationProjection, pointer string) ([]wireColumn, *Error) {
@@ -702,7 +783,7 @@ func isIRValue(v httpapi.ValueType) bool {
 		return false
 	}
 	element, ok := v.Element()
-	return ok && element.Kind() != httpapi.ValueOptional && (element.Kind() == httpapi.ValueScalar || element.Kind() == httpapi.ValueRef || element.Kind() == httpapi.ValueObject)
+	return ok && element.Kind() != httpapi.ValueOptional && isIRValue(element)
 }
 func isRequestLeaf(v httpapi.ValueType) bool {
 	v = unwrapOptional(v)

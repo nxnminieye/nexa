@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gowebpki/jcs"
+	generationapi "github.com/nxnminieye/nexa/generation/api"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	"github.com/nxnminieye/nexa/internal/strictdoc"
 	"github.com/nxnminieye/nexa/provenance"
@@ -19,9 +20,14 @@ type rendererAPIValue struct {
 	Element *rendererAPIValue `json:"element,omitempty"`
 }
 type rendererAPIField struct {
-	Path      []string         `json:"path"`
-	Required  bool             `json:"required"`
-	ValueType rendererAPIValue `json:"valueType"`
+	Path      []string            `json:"path"`
+	Required  bool                `json:"required"`
+	ValueType rendererAPIValue    `json:"valueType"`
+	Binding   *rendererAPIBinding `json:"binding,omitempty"`
+}
+type rendererAPIBinding struct {
+	Location string `json:"in"`
+	Name     string `json:"name"`
 }
 type rendererAPIType struct {
 	Name   string             `json:"name"`
@@ -31,6 +37,7 @@ type rendererAPIOperation struct {
 	ID           string `json:"id"`
 	Permission   string `json:"permission"`
 	RequestType  string `json:"requestType"`
+	ResponseBody string `json:"responseBody"`
 	ResponseType string `json:"responseType"`
 }
 type rendererAPIIndex struct {
@@ -345,6 +352,11 @@ func validateRendererSemantics(ir wireDocument) error {
 			apiOperation, ok := operations[operation.OperationID]
 			if !ok || operation.RequestType != apiOperation.RequestType || operation.ResponseType != apiOperation.ResponseType || operation.Permission != apiOperation.Permission {
 				return renderError("operation_projection_invalid", base+"/operations/"+itoa(operationIndex), "operation projection does not match embedded API")
+			}
+			if apiOperation.ResponseBody == string(generationapi.ResponseBodyJSON) {
+				if failure := validateRendererResponseWireClosure(types, operation.ResponseType); failure != nil {
+					return failure
+				}
 			}
 			aliases[operation.ID] = operation
 			roleCounts[operation.Role]++
@@ -698,6 +710,80 @@ func rendererBindingWithinResult(path []string, operation wireOperation) bool {
 	return false
 }
 
+func validateRendererResponseWireClosure(types map[string]rendererAPIType, rootType string) error {
+	typeIndexes := make(map[string]int, len(types))
+	ordered := make([]string, 0, len(types))
+	for name := range types {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	for index, name := range ordered {
+		typeIndexes[name] = index
+	}
+	visited := map[string]bool{}
+	var validateObject func(string, []string) error
+	validateObject = func(typeName string, prefix []string) error {
+		key := typeName + "\x00" + strings.Join(prefix, "\x00")
+		if visited[key] {
+			return nil
+		}
+		visited[key] = true
+		typeValue, ok := types[typeName]
+		if !ok {
+			return renderError("response_wire_type_unresolved", "/frontendIR/api/types", "JSON response type closure contains an unresolved type")
+		}
+		wireNames := map[string]bool{}
+		for fieldIndex, field := range typeValue.Fields {
+			if len(field.Path) != len(prefix)+1 || !equalPathPrefix(field.Path, prefix) {
+				continue
+			}
+			fieldPointer := "/frontendIR/api/types/" + itoa(typeIndexes[typeName]) + "/fields/" + itoa(fieldIndex)
+			if field.Binding == nil {
+				return renderError("response_wire_binding_missing", fieldPointer+"/binding", "JSON response object field requires an explicit body binding")
+			}
+			if field.Binding.Location != string(generationapi.RequestBindingBody) {
+				return renderError("response_wire_binding_location_invalid", fieldPointer+"/binding/in", "JSON response object field binding must use body location")
+			}
+			if wireNames[field.Binding.Name] {
+				return renderError("response_wire_name_duplicate", fieldPointer+"/binding/name", "JSON response object sibling wire name is duplicated")
+			}
+			wireNames[field.Binding.Name] = true
+			value := rendererUnwrapResponseContainer(field.ValueType)
+			switch value.Kind {
+			case "object":
+				if failure := validateObject(typeName, field.Path); failure != nil {
+					return failure
+				}
+			case "ref":
+				if failure := validateObject(value.Name, nil); failure != nil {
+					return failure
+				}
+			}
+		}
+		return nil
+	}
+	return validateObject(rootType, nil)
+}
+
+func rendererUnwrapResponseContainer(value rendererAPIValue) rendererAPIValue {
+	for value.Kind == "optional" || value.Kind == "array" {
+		if value.Element == nil {
+			return rendererAPIValue{}
+		}
+		value = *value.Element
+	}
+	return value
+}
+
+func equalPathPrefix(path, prefix []string) bool {
+	for index := range prefix {
+		if path[index] != prefix[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func rendererContextScalar(value rendererAPIValue) bool {
 	return value.Kind == "scalar" && (value.Name == "string" || integerScalars[value.Name])
 }
@@ -752,7 +838,7 @@ func rendererIRValue(value rendererAPIValue) bool {
 	if value.Kind == "scalar" || value.Kind == "ref" || value.Kind == "object" {
 		return true
 	}
-	return value.Kind == "array" && value.Element != nil && value.Element.Kind != "optional" && (value.Element.Kind == "scalar" || value.Element.Kind == "ref" || value.Element.Kind == "object")
+	return value.Kind == "array" && value.Element != nil && value.Element.Kind != "optional" && rendererIRValue(*value.Element)
 }
 
 func rendererExactType(value rendererAPIValue) string {

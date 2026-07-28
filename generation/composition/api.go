@@ -15,7 +15,7 @@ func GeneratedAPI(document Document) (httpapi.Document, error) {
 	for _, projected := range document.state.types {
 		value := httpapi.GeneratedTypeSpec{Name: projected.name, Shape: httpapi.ValueTypeSpec{Kind: httpapi.ValueObject}, Provenance: projected.provenance}
 		for _, field := range projected.fields {
-			value.Fields = append(value.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(field.jsonName)}, Required: field.required, ValueType: field.valueType, Provenance: field.provenance})
+			value.Fields = append(value.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(field.jsonName)}, Required: field.required, ValueType: field.valueType, Binding: &httpapi.BindingSpec{Location: api.RequestBindingBody, Name: field.jsonName}, Provenance: field.provenance})
 		}
 		spec.Types = append(spec.Types, value)
 	}
@@ -40,7 +40,7 @@ func GeneratedAPI(document Document) (httpapi.Document, error) {
 			if err != nil {
 				return httpapi.Document{}, err
 			}
-			response.Fields = append(response.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(binding.httpField)}, Required: binding.required, ValueType: binding.valueType, Provenance: owner})
+			response.Fields = append(response.Fields, httpapi.GeneratedFieldSpec{Path: []string{exportedIdentifier(binding.httpField)}, Required: binding.required, ValueType: binding.valueType, Binding: &httpapi.BindingSpec{Location: api.RequestBindingBody, Name: binding.httpField}, Provenance: owner})
 		}
 		auth := operation.proxy.Auth()
 		authSpec := httpapi.AuthSpec{Mode: api.AuthMode(auth.Mode())}
