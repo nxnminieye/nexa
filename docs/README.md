@@ -34,6 +34,7 @@ flowchart LR
 - [Core IAM 契约](contracts/core-iam.md)：中性的账号、租户、成员、角色、菜单与权限边界。
 - [受控生成](contracts/controlled-generation.md)：从 typed facts 到 direct replace-tree 普通源码。
 - [前端生成契约](contracts/frontend-generation.md)：PageSpec、FrontendIR 与 delegated renderer request。
+- [HTTP Convention v1](contracts/http-convention.md)：JSON HTTP 命名、请求位置、响应、分页、错误与标量的唯一约定。
 - [标准服务 starter](starters/standard-services.md)：可由 consumer 接管和继续修改的标准源码。
 - [Runtime packages](contracts/runtime-packages.md)：按 Go import 和 constructor 显式选择的公共运行契约，包括 `runtime/s3` 与可选 AWS SDK v2 adapter。
 - [Nexactl Build Plugin](plugins/nexactl-build-plugin.md)：显式组合工程期能力，不是运行时插件系统。
