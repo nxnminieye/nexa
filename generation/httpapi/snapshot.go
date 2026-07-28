@@ -63,18 +63,31 @@ type wireCapability struct {
 	ID         string `json:"id"`
 	APIVersion string `json:"apiVersion"`
 }
+type wireErrorMatch struct {
+	Domain string `json:"domain"`
+	Code   string `json:"code"`
+}
+type wireErrorTarget struct {
+	Domain     string `json:"domain"`
+	Code       string `json:"code"`
+	HTTPStatus int    `json:"httpStatus"`
+}
+type wireErrorProjection struct {
+	Match   wireErrorMatch  `json:"match"`
+	Project wireErrorTarget `json:"project"`
+}
 type wireOperation struct {
-	ID               string                    `json:"id"`
-	Method           api.HTTPMethod            `json:"method"`
-	Path             string                    `json:"path"`
-	RequestType      string                    `json:"requestType"`
-	ResponseBody     api.ResponseBodyMode      `json:"responseBody"`
-	ResponseType     string                    `json:"responseType,omitempty"`
-	Auth             wireAuth                  `json:"auth"`
-	Permission       string                    `json:"permission"`
-	Capability       *wireCapability           `json:"capability,omitempty"`
-	ErrorProjections []api.ErrorProjectionSpec `json:"errorProjections"`
-	Provenance       wireProvenance            `json:"provenance"`
+	ID               string                `json:"id"`
+	Method           api.HTTPMethod        `json:"method"`
+	Path             string                `json:"path"`
+	RequestType      string                `json:"requestType"`
+	ResponseBody     api.ResponseBodyMode  `json:"responseBody"`
+	ResponseType     string                `json:"responseType,omitempty"`
+	Auth             wireAuth              `json:"auth"`
+	Permission       string                `json:"permission"`
+	Capability       *wireCapability       `json:"capability,omitempty"`
+	ErrorProjections []wireErrorProjection `json:"errorProjections"`
+	Provenance       wireProvenance        `json:"provenance"`
 }
 type wireDocument struct {
 	APIVersion   string          `json:"apiVersion"`
@@ -120,7 +133,7 @@ func documentWire(document Document) (wireDocument, error) {
 		result.Types[index] = value
 	}
 	for index, item := range document.state.operations {
-		value := wireOperation{ID: item.id, Method: item.method, Path: item.path, RequestType: item.requestType, ResponseBody: item.responseBody, ResponseType: item.responseType, Auth: wireAuth{Mode: item.auth.mode, Credentials: make([]wireCredential, len(item.auth.credentials))}, Permission: item.permission, ErrorProjections: append([]api.ErrorProjectionSpec{}, item.errorProjections...), Provenance: wireProvenanceOf(item.provenance)}
+		value := wireOperation{ID: item.id, Method: item.method, Path: item.path, RequestType: item.requestType, ResponseBody: item.responseBody, ResponseType: item.responseType, Auth: wireAuth{Mode: item.auth.mode, Credentials: make([]wireCredential, len(item.auth.credentials))}, Permission: item.permission, ErrorProjections: wireErrors(item.errorProjections), Provenance: wireProvenanceOf(item.provenance)}
 		for credentialIndex, credential := range item.auth.credentials {
 			value.Auth.Credentials[credentialIndex] = wireCredential{ID: credential.id, Type: credential.typeID, Location: credential.location, Name: credential.name}
 		}
@@ -130,6 +143,26 @@ func documentWire(document Document) (wireDocument, error) {
 		result.Operations[index] = value
 	}
 	return result, nil
+}
+func wireErrors(values []api.ErrorProjectionSpec) []wireErrorProjection {
+	result := make([]wireErrorProjection, len(values))
+	for index, value := range values {
+		result[index] = wireErrorProjection{
+			Match:   wireErrorMatch{Domain: value.Match.Domain, Code: value.Match.Code},
+			Project: wireErrorTarget{Domain: value.Project.Domain, Code: value.Project.Code, HTTPStatus: value.Project.HTTPStatus},
+		}
+	}
+	return result
+}
+func errorSpecs(values []wireErrorProjection) []api.ErrorProjectionSpec {
+	result := make([]api.ErrorProjectionSpec, len(values))
+	for index, value := range values {
+		result[index] = api.ErrorProjectionSpec{
+			Match:   api.ErrorMatchSpec{Domain: value.Match.Domain, Code: value.Match.Code},
+			Project: api.ErrorTargetSpec{Domain: value.Project.Domain, Code: value.Project.Code, HTTPStatus: value.Project.HTTPStatus},
+		}
+	}
+	return result
 }
 func wireValueOf(value ValueType) wireValue {
 	result := wireValue{Kind: value.kind, Name: value.name}
@@ -202,30 +235,39 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 	if source.String() == "" {
 		return Snapshot{}, invalid("snapshot_source_invalid", "", "", "snapshot source is required")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var wire wireDocument
-	if err := decoder.Decode(&wire); err != nil {
-		return Snapshot{}, invalid("document_invalid", source.String(), "", err.Error())
-	}
-	if err := ensureEOF(decoder); err != nil {
-		return Snapshot{}, invalid("document_invalid", source.String(), "", err.Error())
-	}
 	var schemaValue any
 	if err := json.Unmarshal(data, &schemaValue); err != nil {
 		return Snapshot{}, invalid("document_invalid", source.String(), "", err.Error())
 	}
-	if err := validateSnapshotSchema(schemaValue); err != nil {
-		return Snapshot{}, invalid("document_invalid", source.String(), "", err.Error())
+	apiVersion, kind, ok := snapshotHeader(schemaValue)
+	if !ok {
+		return Snapshot{}, invalid("document_invalid", source.String(), "", "HTTP API snapshot header is invalid")
 	}
-	if wire.APIVersion != APIVersion {
+	if apiVersion != APIVersion {
 		return Snapshot{}, invalid("version_unsupported", source.String(), "/apiVersion", "HTTP API snapshot version is unsupported")
 	}
-	if wire.Kind != Kind {
+	if kind != Kind {
 		return Snapshot{}, invalid("kind_invalid", source.String(), "/kind", "HTTP API snapshot kind is invalid")
 	}
-	canonical, err := canonicalize(wire)
-	if err != nil || !bytes.Equal(canonical, data) {
+	var wire wireDocument
+	var canonical []byte
+	if schemaErr := validateSnapshotSchema(schemaValue); schemaErr == nil {
+		if err := decodeStrictJSON(data, &wire); err != nil {
+			return Snapshot{}, invalid("document_invalid", source.String(), "", err.Error())
+		}
+		var err error
+		canonical, err = canonicalize(wire)
+		if err != nil {
+			return Snapshot{}, invalid("canonical_order_invalid", source.String(), "", "HTTP API snapshot is not canonical")
+		}
+	} else {
+		legacyWire, legacyCanonical, legacy, err := decodeLegacyWire(data, schemaValue)
+		if err != nil || !legacy {
+			return Snapshot{}, invalid("document_invalid", source.String(), "", schemaErr.Error())
+		}
+		wire, canonical = legacyWire, legacyCanonical
+	}
+	if !bytes.Equal(canonical, data) {
 		return Snapshot{}, invalid("canonical_order_invalid", source.String(), "", "HTTP API snapshot is not canonical")
 	}
 	sources := make([]provenance.Source, len(wire.Sources))
@@ -254,6 +296,25 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 		state.operations = append(state.operations, item.ID)
 	}
 	return Snapshot{state: state}, nil
+}
+
+func snapshotHeader(value any) (string, string, bool) {
+	root, ok := value.(map[string]any)
+	if !ok {
+		return "", "", false
+	}
+	apiVersion, versionOK := root["apiVersion"].(string)
+	kind, kindOK := root["kind"].(string)
+	return apiVersion, kind, versionOK && kindOK
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return ensureEOF(decoder)
 }
 func ensureEOF(decoder *json.Decoder) error {
 	var extra any

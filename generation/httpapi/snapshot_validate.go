@@ -86,7 +86,8 @@ func validateSnapshotSemantics(wire wireDocument, sources []provenance.Source) e
 			return invalid("snapshot_route_duplicate", "", "/operations/path", "snapshot route is duplicated")
 		}
 		routes[routeKey] = true
-		state := &operationState{id: input.ID, method: input.Method, path: input.Path, requestType: input.RequestType, responseBody: input.ResponseBody, responseType: input.ResponseType, permission: input.Permission, auth: Auth{mode: input.Auth.Mode, credentials: make([]Credential, len(input.Auth.Credentials))}, errorProjections: append([]api.ErrorProjectionSpec(nil), input.ErrorProjections...)}
+		errorProjections := errorSpecs(input.ErrorProjections)
+		state := &operationState{id: input.ID, method: input.Method, path: input.Path, requestType: input.RequestType, responseBody: input.ResponseBody, responseType: input.ResponseType, permission: input.Permission, auth: Auth{mode: input.Auth.Mode, credentials: make([]Credential, len(input.Auth.Credentials))}, errorProjections: errorProjections}
 		previousCredential := ""
 		for index, credential := range input.Auth.Credentials {
 			if previousCredential != "" && credential.ID <= previousCredential {
@@ -106,7 +107,7 @@ func validateSnapshotSemantics(wire wireDocument, sources []provenance.Source) e
 		if input.Capability != nil {
 			state.capability, state.hasCapability = Capability{id: input.Capability.ID, apiVersion: input.Capability.APIVersion}, true
 		}
-		envelope := canonicalRouteNode{APIVersion: routeNodeVersion, Kind: "route", OperationID: input.ID, Method: string(input.Method), Path: input.Path, RequestType: input.RequestType, ResponseBody: string(input.ResponseBody), ResponseType: input.ResponseType, Auth: canonicalAuth{Mode: string(input.Auth.Mode), Credentials: make([]canonicalCredential, len(input.Auth.Credentials))}, Permission: input.Permission, ErrorProjections: canonicalErrors(input.ErrorProjections)}
+		envelope := canonicalRouteNode{APIVersion: routeNodeVersion, Kind: "route", OperationID: input.ID, Method: string(input.Method), Path: input.Path, RequestType: input.RequestType, ResponseBody: string(input.ResponseBody), ResponseType: input.ResponseType, Auth: canonicalAuth{Mode: string(input.Auth.Mode), Credentials: make([]canonicalCredential, len(input.Auth.Credentials))}, Permission: input.Permission, ErrorProjections: canonicalErrors(errorProjections)}
 		for index, credential := range input.Auth.Credentials {
 			envelope.Auth.Credentials[index] = canonicalCredential{ID: credential.ID, Type: string(credential.Type), Location: string(credential.Location), Name: credential.Name}
 		}

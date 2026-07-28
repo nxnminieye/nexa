@@ -136,6 +136,17 @@ service core-api { @handler health get /health (HealthRequest) returns (HealthRe
 	if err := json.Unmarshal(canonical, &tampered); err != nil {
 		t.Fatal(err)
 	}
+	for _, value := range tampered["operations"].([]any) {
+		projections := value.(map[string]any)["errorProjections"].([]any)
+		for _, projectionValue := range projections {
+			projection := projectionValue.(map[string]any)
+			match, hasMatch := projection["match"].(map[string]any)
+			project, hasProject := projection["project"].(map[string]any)
+			if !hasMatch || !hasProject || match["domain"] == nil || match["code"] == nil || project["domain"] == nil || project["code"] == nil || project["httpStatus"] == nil {
+				t.Fatalf("error projection is not canonical lower camel case: %#v", projection)
+			}
+		}
+	}
 	tampered["operations"].([]any)[0].(map[string]any)["path"] = "/tampered"
 	ordinary, _ := json.Marshal(tampered)
 	tamperedCanonical, _ := jcs.Transform(ordinary)
@@ -175,8 +186,29 @@ service core-api { @handler health get /health (HealthRequest) returns (HealthRe
 	if err := json.Unmarshal(httpapi.Schema(), &schema); err != nil || schema["$id"] == nil {
 		t.Fatalf("Schema() = %#v, %v", schema, err)
 	}
-	if _, err := httpapi.ParseSnapshot(snapshotSource, append(bytes.TrimSuffix(canonical, []byte{'\n'}), []byte(`,"unknown":true}`)...)); err == nil {
-		t.Fatal("ParseSnapshot() accepted noncanonical/unknown data")
+	if err := json.Unmarshal(canonical, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	tampered["unknown"] = true
+	ordinary, _ = json.Marshal(tampered)
+	tamperedCanonical, _ = jcs.Transform(ordinary)
+	if _, err := httpapi.ParseSnapshot(snapshotSource, tamperedCanonical); err == nil {
+		t.Fatal("ParseSnapshot() accepted an unknown document field")
+	}
+	if err := json.Unmarshal(canonical, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range tampered["operations"].([]any) {
+		projections := value.(map[string]any)["errorProjections"].([]any)
+		if len(projections) != 0 {
+			projections[0].(map[string]any)["unknown"] = true
+			break
+		}
+	}
+	ordinary, _ = json.Marshal(tampered)
+	tamperedCanonical, _ = jcs.Transform(ordinary)
+	if _, err := httpapi.ParseSnapshot(snapshotSource, tamperedCanonical); err == nil {
+		t.Fatal("ParseSnapshot() accepted an unknown error projection field")
 	}
 }
 
