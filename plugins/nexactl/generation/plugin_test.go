@@ -146,6 +146,20 @@ func TestFrontendProviderRequiresExactDelegatedMetadata(t *testing.T) {
 	}
 }
 
+func TestAPIProviderRequiresExactDelegatedMetadata(t *testing.T) {
+	provider := testProvider{descriptor: generation.ProviderDescriptor{
+		ID:      "consumer",
+		Version: "v1.0.0",
+		Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: plugin.DelegatedToolSpec{
+			ID: "consumer.api", Version: "v1.0.0", Inputs: []string{"typed-facts", "repository"}, Writes: []string{"repository"},
+		}}},
+	}}
+	_, err := generation.New(generation.Options{Providers: []generation.ProjectProvider{provider}})
+	if err == nil {
+		t.Fatal("API delegated tool with serialized typed-facts metadata accepted")
+	}
+}
+
 func TestDirectRPCGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T) {
 	repository := t.TempDir()
 	mustWrite(t, filepath.Join(repository, "generated/rpc/stale.go"), []byte("stale"))
@@ -204,11 +218,11 @@ func TestDirectRPCGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T
 func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	repository := t.TempDir()
 	tool := directTool("consumer.api")
-	document := apiDocument(t, repository)
+	apiDocument(t, repository)
 	provider := testProvider{
 		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
 		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
-			Facts: document, Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
 		}}}},
 	}
 	runner := &testRunner{writePath: "generated/api/sample.go", writeData: []byte("package apigenerated\n")}
@@ -216,16 +230,59 @@ func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	if _, err := command.Run(context.Background(), invocation(repository)); err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := []string{"generate", "--service", "sample", "--generated-scope", "generated/api"}
+	wantArgs := []string{"generate", "--service", "sample", "--entry-file", "sample.api", "--generated-scope", "generated/api"}
 	if !reflect.DeepEqual(runner.request.Args, wantArgs) {
 		t.Fatalf("delegated args = %#v, want %#v", runner.request.Args, wantArgs)
 	}
-	wantStdin, err := httpapi.CanonicalJSON(document)
-	if err != nil {
+	if len(runner.request.Stdin) != 0 {
+		t.Fatal("delegated API received serialized HTTP API facts")
+	}
+}
+
+func TestDirectAPIGenerationRejectsInvalidSourceBeforeReplacingTree(t *testing.T) {
+	repository := t.TempDir()
+	stale := filepath.Join(repository, "generated/api/stale.go")
+	mustWrite(t, stale, []byte("stale"))
+	apiDocument(t, repository)
+	mustWrite(t, filepath.Join(repository, "sample.api"), []byte("syntax = \"v1\"\ntype Broken {\n"))
+	tool := directTool("consumer.api")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api",
+		}}}},
+	}
+	command := generationCommand(t, provider, &testRunner{}, "api")
+	if _, err := command.Run(context.Background(), invocation(repository)); err == nil {
+		t.Fatal("invalid API source accepted")
+	}
+	if data, err := os.ReadFile(stale); err != nil || string(data) != "stale" {
+		t.Fatalf("tree changed before API source validation: %q, %v", data, err)
+	}
+}
+
+func TestDirectAPIGenerationRejectsSourceSymlinkBeforeReplacingTree(t *testing.T) {
+	repository := t.TempDir()
+	stale := filepath.Join(repository, "generated/api/stale.go")
+	mustWrite(t, stale, []byte("stale"))
+	target := filepath.Join(t.TempDir(), "sample.api")
+	apiDocument(t, filepath.Dir(target))
+	if err := os.Symlink(target, filepath.Join(repository, "sample.api")); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(runner.request.Stdin, wantStdin) {
-		t.Fatal("delegated API stdin is not canonical HTTP API IR")
+	tool := directTool("consumer.api")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api",
+		}}}},
+	}
+	command := generationCommand(t, provider, &testRunner{}, "api")
+	if _, err := command.Run(context.Background(), invocation(repository)); err == nil {
+		t.Fatal("API source symlink accepted")
+	}
+	if data, err := os.ReadFile(stale); err != nil || string(data) != "stale" {
+		t.Fatalf("tree changed before API source symlink validation: %q, %v", data, err)
 	}
 }
 
@@ -346,7 +403,11 @@ func (r *testRunner) Run(_ context.Context, request toolchain.Request) (toolchai
 }
 
 func delegated(id string) plugin.DelegatedToolSpec {
-	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: []string{"typed-facts", "repository"}, Writes: []string{"repository"}}
+	inputs := []string{"typed-facts", "repository"}
+	if strings.HasSuffix(id, ".api") {
+		inputs = []string{generation.APISourceInput, "repository"}
+	}
+	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: inputs, Writes: []string{"repository"}}
 }
 
 func frontendDelegated(id string) plugin.DelegatedToolSpec {

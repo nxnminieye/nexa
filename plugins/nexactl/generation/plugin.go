@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 
 	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
-	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/generation/toolchain"
 	"github.com/nxnminieye/nexa/nexactl/plugin"
@@ -15,6 +14,8 @@ import (
 const (
 	pluginVersion     = "v0.1.0"
 	capabilityVersion = "v1.0.0"
+	// APISourceInput identifies the source-based API-Go tool boundary.
+	APISourceInput = "nexa.dev/api-source/v1"
 )
 
 // ProviderDescriptor identifies one consumer-owned project provider and its delegated tools.
@@ -54,9 +55,9 @@ type RPCProject struct {
 	UserLogic       []UserLogicFile
 }
 
-// APIProject contains the typed API facts and explicit consumer-owned path boundaries.
+// APIProject contains the exact consumer .api source entry and output boundaries.
 type APIProject struct {
-	Facts           httpapi.Document
+	EntryFile       string
 	Tool            toolchain.Tool
 	GeneratedScope  string
 	ExtensionScopes []string

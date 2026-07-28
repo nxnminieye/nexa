@@ -2,12 +2,14 @@ package generation
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
@@ -64,6 +66,9 @@ func newCommandRunner(options Options) (*commandRunner, error) {
 			}
 			if declared.Role == ToolRoleFrontendRender && (!reflect.DeepEqual(declared.Tool.Inputs, []string{"nexa.dev/frontend-renderer/v1", "frontend-ir", "repository"}) || !reflect.DeepEqual(declared.Tool.Writes, []string{"repository"})) {
 				return nil, inputError("provider_invalid", "provider", "provider_frontend_tool_contract_invalid", toolPointer+"/tool", declared.Tool.ID)
+			}
+			if declared.Role == ToolRoleAPIGo && (!reflect.DeepEqual(declared.Tool.Inputs, []string{APISourceInput, "repository"}) || !reflect.DeepEqual(declared.Tool.Writes, []string{"repository"})) {
+				return nil, inputError("provider_invalid", "provider", "provider_api_tool_contract_invalid", toolPointer+"/tool", declared.Tool.ID)
 			}
 			if roles[declared.Role] == nil {
 				roles[declared.Role] = make(map[string]string)
@@ -123,14 +128,39 @@ func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invoc
 	if err != nil {
 		return nil, err
 	}
-	if service.API == nil || service.API.Facts.APIVersion() != httpapi.APIVersion {
+	if service.API == nil || service.API.EntryFile == "" {
 		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api", "")
 	}
-	stdin, err := httpapi.CanonicalJSON(service.API.Facts)
-	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
-		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api/facts", "")
+	entry := service.API.EntryFile
+	if filepath.IsAbs(entry) || filepath.Clean(entry) != entry || !filepath.IsLocal(entry) || filepath.Ext(entry) != ".api" {
+		return nil, inputError("fact_source_invalid", "provider", "api_entry_invalid", "/project/services/api/entryFile", "")
 	}
-	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, stdin, invocation)
+	entry = filepath.ToSlash(entry)
+	if err := rejectAPISourceSymlink(repository, filepath.FromSlash(entry)); err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "api_entry_unverified", "/project/services/api/entryFile", "")
+	}
+	if _, err := httpapi.Load(ctx, httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: entry}); err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "api_source_invalid", "/project/services/api/entryFile", "")
+	}
+	return r.generateWithArgs(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, nil, []string{"--entry-file", entry}, invocation)
+}
+
+func rejectAPISourceSymlink(repository, entry string) error {
+	current := repository
+	for _, component := range strings.Split(filepath.Clean(entry), string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("API source path contains symlink")
+		}
+	}
+	return nil
 }
 
 func (r *commandRunner) generateFrontend(ctx context.Context, invocation plugin.Invocation) (any, error) {
@@ -180,6 +210,10 @@ func (r *commandRunner) generateFrontend(ctx context.Context, invocation plugin.
 }
 
 func (r *commandRunner) generate(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, userLogic []UserLogicFile, stdin []byte, invocation plugin.Invocation) (any, error) {
+	return r.generateWithArgs(ctx, repository, providerID, serviceID, role, tool, generated, extensions, userLogic, stdin, nil, invocation)
+}
+
+func (r *commandRunner) generateWithArgs(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, userLogic []UserLogicFile, stdin []byte, extraArgs []string, invocation plugin.Invocation) (any, error) {
 	environment, err := r.prepareDirectTool(providerID, role, tool)
 	if err != nil {
 		return nil, err
@@ -194,7 +228,7 @@ func (r *commandRunner) generate(ctx context.Context, repository, providerID, se
 	}
 	result, err := toolchain.RunDirect(ctx, r.runner, toolchain.Request{
 		RepositoryRoot: repository, StagingRoot: repository, WorkDir: repository,
-		Tool: tool, Args: []string{"generate", "--service", serviceID, "--generated-scope", prepared.GeneratedScope()}, Environment: environment, Stdin: append([]byte(nil), stdin...),
+		Tool: tool, Args: append(append([]string{"generate", "--service", serviceID}, extraArgs...), "--generated-scope", prepared.GeneratedScope()), Environment: environment, Stdin: append([]byte(nil), stdin...),
 	})
 	if err != nil {
 		return nil, projectOwnerError(err)

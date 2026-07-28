@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,7 +89,33 @@ func resolveLoadPaths(repositoryRoot, entryFile string) (string, string, error) 
 	if filepath.Ext(entry) != ".api" {
 		return "", "", invalid("entry_file_invalid", entryFile, "", "entry file must use .api extension")
 	}
+	if err := validateRepositoryFile(root, entry); err != nil {
+		return "", "", invalid("entry_file_invalid", entryFile, "", err.Error())
+	}
 	return root, entry, nil
+}
+
+func validateRepositoryFile(root, filename string) error {
+	rel, err := filepath.Rel(root, filename)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("file must remain inside repository root")
+	}
+	current := root
+	parts := strings.Split(rel, string(filepath.Separator))
+	for index, part := range parts {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("file path contains symlink")
+		}
+		if index == len(parts)-1 && !info.Mode().IsRegular() {
+			return errors.New("file is not regular")
+		}
+	}
+	return nil
 }
 
 func (i *authoredIndex) collect(root, filename string) error {
@@ -107,6 +134,9 @@ func (i *authoredIndex) collect(root, filename string) error {
 		return invalid("import_outside_repository", filename, "", "HTTP API import must remain inside repository root")
 	}
 	rel = filepath.ToSlash(rel)
+	if err := validateRepositoryFile(root, abs); err != nil {
+		return invalid("source_path_invalid", rel, "", err.Error())
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return invalid("source_read_failed", rel, "", err.Error())

@@ -3,7 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/composition"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	"github.com/nxnminieye/nexa/generation/protocol"
@@ -56,10 +54,6 @@ func TestDG2TypedHTTPProjectionExternalConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	generatedAPI, err := composition.GeneratedAPI(document)
-	if err != nil {
-		t.Fatal(err)
-	}
 	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core"})
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +82,8 @@ func TestDG2TypedHTTPProjectionExternalConsumer(t *testing.T) {
 	}
 	renderer := filepath.Join(root, "renderer")
 	runGenerationConsumerCommand(t, repositoryRoot(t), environment, "go", "build", "-mod=readonly", "-o", renderer, "./integration/testdata/dg2_typed_http_projection/renderer")
-	assertDG2RendererRejectsDanglingRef(t, renderer, generatedAPI, environment, root)
-	provider := dg2GenerationProvider{api: generatedAPI, renderer: renderer}
+	assertDG2RendererRejectsInvalidSource(t, renderer, environment, root)
+	provider := dg2GenerationProvider{renderer: renderer}
 	buildPlugin, err := generationplugin.New(generationplugin.Options{Providers: []generationplugin.ProjectProvider{provider}})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +103,7 @@ func TestDG2TypedHTTPProjectionExternalConsumer(t *testing.T) {
 		t.Fatalf("parse delegated API: %v", err)
 	}
 	writeDG2File(t, consumer, "go.mod", "module example.com/dg2-consumer\n\ngo 1.25.0\n")
-	writeDG2File(t, consumer, "clienttest/client_test.go", "package clienttest\n\nimport (\n  \"testing\"\n  generated \"example.com/dg2-consumer/generated\"\n)\n\nfunc TestTypedClientCompiles(t *testing.T) {\n  _ = generated.AccountAccountV1Member{}\n  _ = generated.AccountAccountV1Settings{}\n  _ = generated.AccountReplaceRPCRequest{}\n}\n")
+	writeDG2File(t, consumer, "clienttest/client_test.go", "package clienttest\n\nimport (\n  \"testing\"\n  generated \"example.com/dg2-consumer/generated\"\n)\n\nfunc TestAPISourceIdentity(t *testing.T) {\n  if generated.APISourceEntry != \"backend/core/desc/core.api\" {\n    t.Fatalf(\"API source entry = %q\", generated.APISourceEntry)\n  }\n}\n")
 	runGenerationConsumerCommand(t, consumer, environment, "go", "test", "./...")
 	runGenerationConsumerCommand(t, consumer, environment, "git", "init", "-q")
 	runGenerationConsumerCommand(t, consumer, environment, "git", "config", "user.name", "Nexa Test")
@@ -121,72 +115,30 @@ func TestDG2TypedHTTPProjectionExternalConsumer(t *testing.T) {
 }
 
 type dg2GenerationProvider struct {
-	api      httpapi.Document
 	renderer string
 }
 
 func (provider dg2GenerationProvider) Descriptor() generationplugin.ProviderDescriptor {
-	return generationplugin.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generationplugin.ProviderTool{{Role: generationplugin.ToolRoleAPIGo, Tool: plugin.DelegatedToolSpec{ID: "consumer.api", Version: "v1.0.0", Inputs: []string{"typed facts", "repository"}, Writes: []string{"repository"}}}}}
+	return generationplugin.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generationplugin.ProviderTool{{Role: generationplugin.ToolRoleAPIGo, Tool: plugin.DelegatedToolSpec{ID: "consumer.api", Version: "v1.0.0", Inputs: []string{generationplugin.APISourceInput, "repository"}, Writes: []string{"repository"}}}}}
 }
 
 func (provider dg2GenerationProvider) Resolve(context.Context, string) (generationplugin.Project, error) {
-	tool := toolchain.Tool{ID: "consumer.api", Version: "v1.0.0", Executable: provider.renderer, Args: []string{"api"}, InputScopes: []string{"repository"}, WriteScopes: []string{"repository"}, Probe: toolchain.ExecutableProbe{Args: []string{"version"}, ExpectedVersion: "dg2-typed-http-renderer v1.0.0"}}
-	return generationplugin.Project{Services: []generationplugin.ServiceProject{{ServiceID: "core", API: &generationplugin.APIProject{Facts: provider.api, Tool: tool, GeneratedScope: "generated", ExtensionScopes: []string{"extensions"}}}}}, nil
+	tool := toolchain.Tool{ID: "consumer.api", Version: "v1.0.0", Executable: provider.renderer, Args: []string{"api"}, InputScopes: []string{"repository"}, WriteScopes: []string{"repository"}, Probe: toolchain.ExecutableProbe{Args: []string{"version"}, ExpectedVersion: "dg2-api-source-renderer v1.0.0"}}
+	return generationplugin.Project{Services: []generationplugin.ServiceProject{{ServiceID: "core", API: &generationplugin.APIProject{EntryFile: "backend/core/desc/core.api", Tool: tool, GeneratedScope: "generated", ExtensionScopes: []string{"extensions"}}}}}, nil
 }
 
-func assertDG2RendererRejectsDanglingRef(t *testing.T, renderer string, document httpapi.Document, environment []string, root string) {
+func assertDG2RendererRejectsInvalidSource(t *testing.T, renderer string, environment []string, root string) {
 	t.Helper()
-	canonical, err := httpapi.CanonicalJSON(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire map[string]any
-	if err := json.Unmarshal(canonical, &wire); err != nil {
-		t.Fatal(err)
-	}
-	mutated := false
-	for _, rawType := range wire["types"].([]any) {
-		for _, rawField := range rawType.(map[string]any)["fields"].([]any) {
-			value := rawField.(map[string]any)["valueType"].(map[string]any)
-			if value["kind"] == "ref" {
-				value["name"] = "MissingProjectedType"
-				mutated = true
-				break
-			}
-			if value["kind"] == "optional" {
-				element := value["element"].(map[string]any)
-				if element["kind"] == "ref" {
-					element["name"] = "MissingProjectedType"
-					mutated = true
-					break
-				}
-			}
-		}
-		if mutated {
-			break
-		}
-	}
-	if !mutated {
-		t.Fatal("typed HTTP API fixture has no ref to tamper")
-	}
-	encoded, err := json.Marshal(wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonicalTampered, err := jcs.Transform(encoded)
-	if err != nil {
-		t.Fatal(err)
-	}
 	negativeRoot := filepath.Join(root, "negative-render")
-	if err := os.MkdirAll(negativeRoot, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(negativeRoot, "generated"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(renderer, "api", "generate", "--service", "core", "--generated-scope", "generated")
+	writeDG2File(t, negativeRoot, "invalid.api", "this is not an api document\n")
+	command := exec.Command(renderer, "api", "generate", "--service", "core", "--entry-file", "invalid.api", "--generated-scope", "generated")
 	command.Dir = negativeRoot
 	command.Env = environment
-	command.Stdin = bytes.NewReader(canonicalTampered)
 	if output, err := command.CombinedOutput(); err == nil {
-		t.Fatalf("renderer accepted dangling typed ref: %s", output)
+		t.Fatalf("renderer accepted invalid .api source: %s", output)
 	}
 }
 
