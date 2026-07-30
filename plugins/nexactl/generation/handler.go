@@ -2,13 +2,16 @@ package generation
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
+	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/generation/replacetree"
@@ -39,7 +42,7 @@ type userLogicResult struct {
 func newCommandRunner(options Options) (*commandRunner, error) {
 	providers := make(map[string]ProjectProvider, len(options.Providers))
 	providerTools := make(map[string]map[ToolRole]map[string]string, len(options.Providers))
-	tools := map[ToolRole][]plugin.DelegatedToolSpec{ToolRoleRPCGo: {}, ToolRoleAPIGo: {}}
+	tools := map[ToolRole][]plugin.DelegatedToolSpec{ToolRoleRPCGo: {}, ToolRoleAPIGo: {}, ToolRoleFrontendRender: {}}
 	for index, candidate := range options.Providers {
 		pointer := "/providers/" + strconv.Itoa(index)
 		if nilProvider(candidate) {
@@ -58,8 +61,14 @@ func newCommandRunner(options Options) (*commandRunner, error) {
 		roles := make(map[ToolRole]map[string]string)
 		for toolIndex, declared := range descriptor.Tools {
 			toolPointer := pointer + "/tools/" + strconv.Itoa(toolIndex)
-			if declared.Role != ToolRoleRPCGo && declared.Role != ToolRoleAPIGo {
+			if declared.Role != ToolRoleRPCGo && declared.Role != ToolRoleAPIGo && declared.Role != ToolRoleFrontendRender {
 				return nil, inputError("provider_invalid", "provider", "provider_tool_role_invalid", toolPointer+"/role", "")
+			}
+			if declared.Role == ToolRoleFrontendRender && (!reflect.DeepEqual(declared.Tool.Inputs, []string{"nexa.dev/frontend-renderer/v1", "frontend-ir", "repository"}) || !reflect.DeepEqual(declared.Tool.Writes, []string{"repository"})) {
+				return nil, inputError("provider_invalid", "provider", "provider_frontend_tool_contract_invalid", toolPointer+"/tool", declared.Tool.ID)
+			}
+			if declared.Role == ToolRoleAPIGo && (!reflect.DeepEqual(declared.Tool.Inputs, []string{APISourceInput, "repository"}) || !reflect.DeepEqual(declared.Tool.Writes, []string{"repository"})) {
+				return nil, inputError("provider_invalid", "provider", "provider_api_tool_contract_invalid", toolPointer+"/tool", declared.Tool.ID)
 			}
 			if roles[declared.Role] == nil {
 				roles[declared.Role] = make(map[string]string)
@@ -119,24 +128,97 @@ func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invoc
 	if err != nil {
 		return nil, err
 	}
-	if service.API == nil || service.API.Facts.APIVersion() != httpapi.APIVersion {
+	if service.API == nil || service.API.EntryFile == "" {
 		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api", "")
 	}
-	stdin, err := httpapi.CanonicalJSON(service.API.Facts)
-	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
-		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api/facts", "")
+	entry := service.API.EntryFile
+	if filepath.IsAbs(entry) || filepath.Clean(entry) != entry || !filepath.IsLocal(entry) || filepath.Ext(entry) != ".api" {
+		return nil, inputError("fact_source_invalid", "provider", "api_entry_invalid", "/project/services/api/entryFile", "")
 	}
-	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, stdin, invocation)
+	entry = filepath.ToSlash(entry)
+	if err := rejectAPISourceSymlink(repository, filepath.FromSlash(entry)); err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "api_entry_unverified", "/project/services/api/entryFile", "")
+	}
+	document, err := httpapi.Load(ctx, httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: entry})
+	if err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "api_source_invalid", "/project/services/api/entryFile", "")
+	}
+	if err := httpapi.ValidateConvention(document); err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "api_convention_invalid", "/project/services/api/entryFile", "")
+	}
+	return r.generateWithArgs(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, nil, []string{"--entry-file", entry}, invocation)
+}
+
+func rejectAPISourceSymlink(repository, entry string) error {
+	current := repository
+	for _, component := range strings.Split(filepath.Clean(entry), string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("API source path contains symlink")
+		}
+	}
+	return nil
+}
+
+func (r *commandRunner) generateFrontend(ctx context.Context, invocation plugin.Invocation) (any, error) {
+	repository, providerID, service, err := r.resolve(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if service.Frontend == nil {
+		return nil, inputError("fact_source_invalid", "provider", "frontend_facts_invalid", "/project/services/frontend", "")
+	}
+	project := service.Frontend
+	environment, err := r.prepareDirectTool(providerID, ToolRoleFrontendRender, project.Tool)
+	if err != nil {
+		return nil, err
+	}
+	stdin, err := genfrontend.CanonicalRenderRequest(genfrontend.RenderRequest{
+		FrontendIR: project.Facts, RepositoryRoot: repository, GeneratedScope: project.GeneratedScope,
+		ExtensionScopes: project.ExtensionScopes, FrontendSourceLockDigest: project.FrontendSourceLockDigest,
+	})
+	if err != nil || len(stdin) > toolchain.MaxStdinBytes {
+		return nil, inputError("fact_source_invalid", "provider", "frontend_facts_invalid", "/project/services/frontend/facts", "")
+	}
+	prepared, err := replacetree.Prepare(repository, project.GeneratedScope, project.ExtensionScopes, nil)
+	if err != nil {
+		return nil, projectOwnerError(err)
+	}
+	result, err := toolchain.RunDirect(ctx, r.runner, toolchain.Request{
+		RepositoryRoot: repository, StagingRoot: repository, WorkDir: repository,
+		Tool: project.Tool, Args: []string{"render", "--service", service.ServiceID, "--generated-scope", prepared.GeneratedScope()}, Environment: environment, Stdin: stdin,
+	})
+	if err != nil {
+		return nil, projectOwnerError(err)
+	}
+	if err := validateDirectResult(result, project.Tool); err != nil {
+		return nil, err
+	}
+	if project.Facts.PageCount() == 0 && project.Facts.OperationCount() == 0 {
+		entries, readErr := os.ReadDir(filepath.Join(repository, filepath.FromSlash(prepared.GeneratedScope())))
+		if readErr != nil || len(entries) != 0 {
+			return nil, inputError("tool_result_invalid", "result", "frontend_empty_output_invalid", "/result/generatedScope", project.Tool.ID)
+		}
+	}
+	return generationResult{
+		APIVersion: "nexa.dev/generation-result/v2", Kind: "GenerationResult", Status: "generated",
+		Service: service.ServiceID, GeneratedScope: prepared.GeneratedScope(), UserLogic: []userLogicResult{},
+	}, nil
 }
 
 func (r *commandRunner) generate(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, userLogic []UserLogicFile, stdin []byte, invocation plugin.Invocation) (any, error) {
-	if err := r.requireProviderTool(providerID, role, tool); err != nil {
-		return nil, err
-	}
-	if len(tool.InputScopes) != 1 || tool.InputScopes[0] != "repository" || len(tool.WriteScopes) != 1 || tool.WriteScopes[0] != "repository" || tool.ID == "" || tool.Version == "" || tool.Executable == "" || tool.Probe.ExpectedVersion == "" {
-		return nil, inputError("provider_invalid", "provider", "direct_tool_invalid", "/project/services/tool", tool.ID)
-	}
-	environment, err := r.environment(tool)
+	return r.generateWithArgs(ctx, repository, providerID, serviceID, role, tool, generated, extensions, userLogic, stdin, nil, invocation)
+}
+
+func (r *commandRunner) generateWithArgs(ctx context.Context, repository, providerID, serviceID string, role ToolRole, tool toolchain.Tool, generated string, extensions []string, userLogic []UserLogicFile, stdin []byte, extraArgs []string, invocation plugin.Invocation) (any, error) {
+	environment, err := r.prepareDirectTool(providerID, role, tool)
 	if err != nil {
 		return nil, err
 	}
@@ -150,16 +232,13 @@ func (r *commandRunner) generate(ctx context.Context, repository, providerID, se
 	}
 	result, err := toolchain.RunDirect(ctx, r.runner, toolchain.Request{
 		RepositoryRoot: repository, StagingRoot: repository, WorkDir: repository,
-		Tool: tool, Args: []string{"generate", "--service", serviceID, "--generated-scope", prepared.GeneratedScope()}, Environment: environment, Stdin: append([]byte(nil), stdin...),
+		Tool: tool, Args: append(append([]string{"generate", "--service", serviceID}, extraArgs...), "--generated-scope", prepared.GeneratedScope()), Environment: environment, Stdin: append([]byte(nil), stdin...),
 	})
 	if err != nil {
 		return nil, projectOwnerError(err)
 	}
-	if result.ToolID != tool.ID || result.Version != tool.Version || result.ExecutableVersion != tool.Probe.ExpectedVersion {
-		return nil, inputError("tool_result_invalid", "result", "tool_identity_mismatch", "/result", tool.ID)
-	}
-	if result.ExitCode != 0 {
-		return nil, delegatedToolFailure(tool.ID, result.ExitCode, result.Diagnostic)
+	if err := validateDirectResult(result, tool); err != nil {
+		return nil, err
 	}
 	overwrite, ok := invocation.Flags["overwrite-logic"].(bool)
 	if !ok {
@@ -174,6 +253,26 @@ func (r *commandRunner) generate(ctx context.Context, repository, providerID, se
 		resultLogic[index] = userLogicResult{Path: value.Path, Action: string(value.Action)}
 	}
 	return generationResult{APIVersion: "nexa.dev/generation-result/v2", Kind: "GenerationResult", Status: "generated", Service: serviceID, GeneratedScope: prepared.GeneratedScope(), UserLogic: resultLogic}, nil
+}
+
+func (r *commandRunner) prepareDirectTool(providerID string, role ToolRole, tool toolchain.Tool) ([]toolchain.EnvVar, error) {
+	if err := r.requireProviderTool(providerID, role, tool); err != nil {
+		return nil, err
+	}
+	if len(tool.InputScopes) != 1 || tool.InputScopes[0] != "repository" || len(tool.WriteScopes) != 1 || tool.WriteScopes[0] != "repository" || tool.ID == "" || tool.Version == "" || tool.Executable == "" || tool.Probe.ExpectedVersion == "" {
+		return nil, inputError("provider_invalid", "provider", "direct_tool_invalid", "/project/services/tool", tool.ID)
+	}
+	return r.environment(tool)
+}
+
+func validateDirectResult(result toolchain.Result, tool toolchain.Tool) error {
+	if result.ToolID != tool.ID || result.Version != tool.Version || result.ExecutableVersion != tool.Probe.ExpectedVersion {
+		return inputError("tool_result_invalid", "result", "tool_identity_mismatch", "/result", tool.ID)
+	}
+	if result.ExitCode != 0 {
+		return delegatedToolFailure(tool.ID, result.ExitCode, result.Diagnostic)
+	}
+	return nil
 }
 
 func (r *commandRunner) resolve(ctx context.Context, invocation plugin.Invocation) (string, string, ServiceProject, error) {

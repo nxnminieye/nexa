@@ -57,6 +57,9 @@ func RunWithOptions(ctx context.Context, spec Module, options Options) error {
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600); err != nil {
 		return fmt.Errorf("bundle module: write go.mod: %w", err)
 	}
+	if output, err := downloadModuleGraph(ctx, root); err != nil {
+		return fmt.Errorf("bundle module: download dependencies: %w\n%s", err, output)
+	}
 
 	output, err := runModuleTests(ctx, root, []string{"./..."}, options, execModuleTestRunner{})
 	if err != nil {
@@ -79,6 +82,9 @@ func RunMaterialized(ctx context.Context, spec MaterializedModule, options Optio
 	}
 	if len(spec.Packages) == 0 {
 		return fmt.Errorf("materialized module: no packages")
+	}
+	if output, err := downloadModuleGraph(ctx, spec.Root); err != nil {
+		return fmt.Errorf("materialized module: download dependencies: %w\n%s", err, output)
 	}
 	output, err := runModuleTests(ctx, spec.Root, spec.Packages, options, execModuleTestRunner{})
 	if err != nil {
@@ -108,6 +114,15 @@ func (execModuleTestRunner) Run(ctx context.Context, spec moduleTestCommand) ([]
 	command.Stderr = &output
 	err := command.Run()
 	return output.Bytes(), err
+}
+
+func downloadModuleGraph(ctx context.Context, root string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "go", "mod", "download", "all")
+	command.Dir = root
+	command.Env = commandEnvironment(map[string]string{
+		"GOENV": "off", "GOFLAGS": "", "GOTOOLCHAIN": "local", "GOWORK": "off",
+	})
+	return command.CombinedOutput()
 }
 
 func runModuleTests(ctx context.Context, root string, packages []string, options Options, runner moduleTestRunner) ([]byte, error) {

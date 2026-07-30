@@ -26,8 +26,7 @@ CLI 是可执行机器契约。先发现实际能力，再复用公共 SDK 和 `
 - 新的 CLI 能力如果不直接服务 starter 或受控代码生成，必须先交用户审核，再进入设计和实现。
 
 Runtime `nexa`、可发布的 Python SDK/wheel、HTTP parity、quality 和 deployment 在 V0.1 均为 not-selected。
-Reference `nexactl` 当前包含 governance validation、`skills sync` 与 `sdk-python-assets` 工程命令；这些命令
-存在不等于对应 runtime 能力已发布或被 consumer 选择。不得探测缺失 binary，不得创建事实文件、占位
+未发布的 Python SDK runtime 已随旧 `sdk/api` descriptor contract 删除。不得探测缺失 binary，不得创建事实文件、占位
 目录或空插件，不得手改 generated artifact。
 
 ## 机器协议

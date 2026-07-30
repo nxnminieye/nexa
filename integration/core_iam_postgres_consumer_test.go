@@ -29,7 +29,14 @@ func TestCoreIAMPostgresConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	environment := append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local", "GOPROXY=off", "NEXA_CORE_IAM_TEST_DSN="+dsn)
+	preparationEnvironment := append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
+	prepare := exec.Command("go", "mod", "download")
+	prepare.Dir, prepare.Env = consumer, preparationEnvironment
+	if output, err := prepare.CombinedOutput(); err != nil {
+		t.Fatalf("prepare materialized Core IAM consumer dependencies: %v\n%s", err, output)
+	}
+
+	environment := append(preparationEnvironment, "GOPROXY=off", "GOSUMDB=off", "NEXA_CORE_IAM_TEST_DSN="+dsn)
 	command := exec.Command("go", "test", "-mod=mod", "./...", "-count=1")
 	command.Dir, command.Env = consumer, environment
 	output, err := command.CombinedOutput()

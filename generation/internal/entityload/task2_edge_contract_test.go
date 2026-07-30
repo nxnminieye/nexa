@@ -7,12 +7,12 @@ import (
 	"entgo.io/ent/entc/gen"
 	"entgo.io/ent/entc/load"
 	entfield "entgo.io/ent/schema/field"
-	"github.com/nxnminieye/nexa/nexaent"
 )
 
 func TestTask2ProjectsCompiledEntEdgeFacts(t *testing.T) {
 	graph, member := task2GraphWithBoundEdge(t)
-	projection, err := projectGraph(graph, nil, testSourceResolver(t, task2Schema(graph, "Account"), member))
+	account := task2Schema(graph, "Account")
+	projection, err := projectGraph(graph, testFactGraph(t, []*load.Schema{account, member}, factOptions{}), nil, testSourceResolver(t, account, member))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestTask2ProjectsCompiledEntEdgeFacts(t *testing.T) {
 
 func TestTask2ProjectsInversePairByBoundFieldSemanticOwner(t *testing.T) {
 	graph, account, member := task2GraphWithInverseBoundEdge(t)
-	projection, err := projectGraph(graph, nil, testSourceResolver(t, account, member))
+	projection, err := projectGraph(graph, testFactGraph(t, []*load.Schema{account, member}, factOptions{}), nil, testSourceResolver(t, account, member))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,8 +73,9 @@ func TestTask2RejectsUnsupportedOrUnclosedEntEdges(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			graph, member := task2GraphWithBoundEdge(t)
+			account := task2Schema(graph, "Account")
 			test.mutate(graph)
-			if _, err := projectGraph(graph, nil, testSourceResolver(t, task2Schema(graph, "Account"), member)); err == nil {
+			if _, err := projectGraph(graph, testFactGraph(t, []*load.Schema{account, member}, factOptions{}), nil, testSourceResolver(t, account, member)); err == nil {
 				t.Fatal("unsupported or unclosed edge was silently accepted")
 			}
 		})
@@ -89,7 +90,8 @@ func TestTask2RejectsEdgeTargetOutsideTypedProjection(t *testing.T) {
 			node.Annotations = nil
 		}
 	}
-	if _, err := projectGraph(graph, nil, testSourceResolver(t, account, member)); err == nil {
+	facts := testFactGraph(t, []*load.Schema{account, member}, factOptions{omitSchema: map[string]bool{"Account": true}})
+	if _, err := projectGraph(graph, facts, nil, testSourceResolver(t, account, member)); err == nil {
 		t.Fatal("edge target outside typed projection was accepted")
 	}
 }
@@ -97,12 +99,12 @@ func TestTask2RejectsEdgeTargetOutsideTypedProjection(t *testing.T) {
 func task2GraphWithBoundEdge(t *testing.T) (*gen.Graph, *load.Schema) {
 	t.Helper()
 	account := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10", Annotations: typedAnnotations(t, testSchemaMeta("account"), nil),
-		Fields: []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Annotations: fieldAnnotations(t, task2NoCRUDFieldMeta("account.name"))}},
+		Name: "Account", Pos: "schema/account.go:10",
+		Fields: []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}}},
 	}
 	member := &load.Schema{
-		Name: "Member", Pos: "schema/member.go:10", Annotations: typedAnnotations(t, testSchemaMeta("member"), nil),
-		Fields: []*load.Field{{Name: "account_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}, Annotations: fieldAnnotations(t, task2NoCRUDFieldMeta("member.account"))}},
+		Name: "Member", Pos: "schema/member.go:10",
+		Fields: []*load.Field{{Name: "account_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}}},
 		Edges:  []*load.Edge{{Name: "account", Type: "Account", Field: "account_id", Unique: true, Required: true}},
 	}
 	graph, err := gen.NewGraph(&gen.Config{}, account, member)
@@ -115,13 +117,13 @@ func task2GraphWithBoundEdge(t *testing.T) (*gen.Graph, *load.Schema) {
 func task2GraphWithInverseBoundEdge(t *testing.T) (*gen.Graph, *load.Schema, *load.Schema) {
 	t.Helper()
 	account := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10", Annotations: typedAnnotations(t, testSchemaMeta("account"), nil),
-		Fields: []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Annotations: fieldAnnotations(t, task2NoCRUDFieldMeta("account.name"))}},
+		Name: "Account", Pos: "schema/account.go:10",
+		Fields: []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}}},
 		Edges:  []*load.Edge{{Name: "members", Type: "Member"}},
 	}
 	member := &load.Schema{
-		Name: "Member", Pos: "schema/member.go:10", Annotations: typedAnnotations(t, testSchemaMeta("member"), nil),
-		Fields: []*load.Field{{Name: "account_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}, Annotations: fieldAnnotations(t, task2NoCRUDFieldMeta("member.account"))}},
+		Name: "Member", Pos: "schema/member.go:10",
+		Fields: []*load.Field{{Name: "account_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}}},
 		Edges:  []*load.Edge{{Name: "account", Type: "Account", RefName: "members", Inverse: true, Field: "account_id", Unique: true, Required: true}},
 	}
 	graph, err := gen.NewGraph(&gen.Config{}, account, member)
@@ -134,15 +136,12 @@ func task2GraphWithInverseBoundEdge(t *testing.T) (*gen.Graph, *load.Schema, *lo
 func task2Schema(graph *gen.Graph, name string) *load.Schema {
 	for _, node := range graph.Nodes {
 		if node.Name == name {
-			// The loader only needs the original source position for the resolver.
-			return &load.Schema{Name: name, Pos: node.Pos()}
+			fields := make([]*load.Field, 0, len(node.Fields))
+			for _, field := range node.Fields {
+				fields = append(fields, &load.Field{Name: field.Name, Info: field.Type})
+			}
+			return &load.Schema{Name: name, Pos: node.Pos(), Fields: fields}
 		}
 	}
 	return nil
-}
-
-func task2NoCRUDFieldMeta(prefix string) nexaent.FieldMeta {
-	meta := testFieldMeta(prefix)
-	meta.CRUD = nil
-	return meta
 }

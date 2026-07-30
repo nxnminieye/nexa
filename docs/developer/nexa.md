@@ -38,7 +38,7 @@ typed Ent metadata、已验证的 generation 能力、参考 `nexactl` compositi
 packages。参考 CLI 不等于 consumer CLI；package 存在也不等于已经进入最终二进制或支持面。
 
 可发布的 Python SDK/wheel、runtime `nexa` CLI、动态插件、远程控制、自动部署和产品私有规则不属于当前
-alpha 支持面；reference CLI 中存在 `sdk-python-assets` 工程命令不等于 Python SDK 已发布。统一 CRUD logic
+alpha 支持面；未发布的 Python SDK runtime 已随旧 `sdk/api` descriptor contract 删除。统一 CRUD logic
 同样不属于本 alpha 支持面；目录或 exported API 存在不能替代通过的 public behavior test。
 
 采用前先从[核心概念](../concepts/README.md)建立共同语言，再按[快速开始](../adoption/quick-start.md)执行。

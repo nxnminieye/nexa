@@ -7,13 +7,13 @@ import (
 	"entgo.io/ent/entc/gen"
 	entfield "entgo.io/ent/schema/field"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
 type sourceResolver func(position string) (provenance.DomainSource, error)
 
-func projectGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve sourceResolver) (entityvalue.Projection, error) {
+func projectGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources []provenance.Source, resolve sourceResolver) (entityvalue.Projection, error) {
 	if graph == nil {
 		return entityvalue.Projection{}, fmt.Errorf("entity graph is unavailable")
 	}
@@ -28,15 +28,9 @@ func projectGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve s
 		if node == nil {
 			continue
 		}
-		_, hasMeta, err := decodeSchemaAnnotation(node.Annotations)
-		if err != nil {
-			return entityvalue.Projection{}, err
-		}
-		_, hasCRUD, err := decodeCRUDAnnotation(node.Annotations)
-		if err != nil {
-			return entityvalue.Projection{}, err
-		}
-		selected[node] = hasMeta || hasCRUD
+		_, hasSchemaFact := facts.Fact(sourcecomment.FactID{SemanticID: node.Name, Key: "scope"})
+		_, hasCRUDFact := facts.Fact(sourcecomment.FactID{SemanticID: node.Name, Key: "crud.operations"})
+		selected[node] = hasSchemaFact || hasCRUDFact
 	}
 	type boundField struct {
 		owner  *gen.Type
@@ -70,11 +64,8 @@ func projectGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve s
 		if node == nil || node.Name == "" {
 			return entityvalue.Projection{}, fmt.Errorf("entity name is invalid")
 		}
-		meta, present, err := decodeSchemaAnnotation(node.Annotations)
-		if err != nil {
-			return entityvalue.Projection{}, err
-		}
-		crud, hasCRUD, err := decodeCRUDAnnotation(node.Annotations)
+		_, present := facts.Fact(sourcecomment.FactID{SemanticID: node.Name, Key: "scope"})
+		crud, hasCRUD, err := facts.CRUD(node.Name)
 		if err != nil {
 			return entityvalue.Projection{}, err
 		}
@@ -82,7 +73,11 @@ func projectGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve s
 			continue
 		}
 		if !present {
-			return entityvalue.Projection{}, fmt.Errorf("schema metadata is required")
+			return entityvalue.Projection{}, fmt.Errorf("schema facts are required")
+		}
+		meta, err := facts.SchemaFacts(node.Name)
+		if err != nil {
+			return entityvalue.Projection{}, err
 		}
 		file, err := resolve(node.Pos())
 		if err != nil {
@@ -92,7 +87,7 @@ func projectGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve s
 		if err != nil {
 			return entityvalue.Projection{}, err
 		}
-		if node.IsView() || node.HasCompositeID() || node.ID == nil || meta.Identity != nexaent.IdentityEntID {
+		if node.IsView() || node.HasCompositeID() || node.ID == nil {
 			return entityvalue.Projection{}, fmt.Errorf("entity identity is unsupported")
 		}
 		identityType, ok := scalarType(node.ID.Type)
@@ -128,17 +123,11 @@ func projectGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve s
 				return entityvalue.Projection{}, fmt.Errorf("field name is duplicated")
 			}
 			seen[field.Name] = struct{}{}
-			fieldMeta, present, err := decodeFieldAnnotation(field.Annotations)
+			fieldMeta, err := facts.FieldFacts(node.Name + "." + field.Name)
 			if err != nil {
 				return entityvalue.Projection{}, err
 			}
-			if !present {
-				return entityvalue.Projection{}, fmt.Errorf("field metadata is required")
-			}
-			isTenantField, _, err := decodeTenantAnnotation(field.Annotations)
-			if err != nil {
-				return entityvalue.Projection{}, err
-			}
+			isTenantField := false
 			typeID, ok := scalarType(field.Type)
 			if !ok {
 				return entityvalue.Projection{}, fmt.Errorf("field type is unsupported")
@@ -238,7 +227,7 @@ func crudExactTypeSupported(info *entfield.TypeInfo) bool {
 	}
 }
 
-func fieldParticipatesInCRUD(meta nexaent.FieldMeta, tenant bool, crud nexaent.CRUDSpec) bool {
+func fieldParticipatesInCRUD(meta sourcecomment.FieldFacts, tenant bool, crud sourcecomment.CRUDOperations) bool {
 	if tenant {
 		return false
 	}
@@ -247,16 +236,16 @@ func fieldParticipatesInCRUD(meta nexaent.FieldMeta, tenant bool, crud nexaent.C
 	}
 	for _, operation := range crud.Operations() {
 		switch operation {
-		case nexaent.CRUDList, nexaent.CRUDGet:
-			if meta.CRUD.Read == nexaent.ReadInclude {
+		case sourcecomment.CRUDList, sourcecomment.CRUDGet:
+			if meta.CRUD.Read == sourcecomment.ReadInclude {
 				return true
 			}
-		case nexaent.CRUDCreate:
-			if meta.CRUD.Read == nexaent.ReadInclude || meta.CRUD.Mutation == nexaent.MutationCreate || meta.CRUD.Mutation == nexaent.MutationCreateUpdate {
+		case sourcecomment.CRUDCreate:
+			if meta.CRUD.Read == sourcecomment.ReadInclude || meta.CRUD.Mutation == sourcecomment.MutationCreate || meta.CRUD.Mutation == sourcecomment.MutationCreateUpdate {
 				return true
 			}
-		case nexaent.CRUDUpdate:
-			if meta.CRUD.Read == nexaent.ReadInclude || meta.CRUD.Mutation == nexaent.MutationUpdate || meta.CRUD.Mutation == nexaent.MutationCreateUpdate {
+		case sourcecomment.CRUDUpdate:
+			if meta.CRUD.Read == sourcecomment.ReadInclude || meta.CRUD.Mutation == sourcecomment.MutationUpdate || meta.CRUD.Mutation == sourcecomment.MutationCreateUpdate {
 				return true
 			}
 		}

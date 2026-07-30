@@ -25,6 +25,7 @@ type preparedPublish struct {
 	root            string
 	previewRoot     string
 	stagedOwnership string
+	moduleSnapshots []moduleFileSnapshot
 }
 
 func (prepared preparedPublish) cleanup() {
@@ -63,7 +64,12 @@ func (e *Engine) preparePlanPublish(repository *repository, plan Plan, newLock l
 	if err != nil {
 		return preparedPublish{}, publishFailure("stage_create_failed", "transaction", err)
 	}
-	prepared := preparedPublish{root: staging, previewRoot: filepath.Join(staging, "preview", "target"), stagedOwnership: filepath.Join(staging, "ownership.json")}
+	previewRepository := filepath.Join(staging, "preview", "repository")
+	prepared := preparedPublish{
+		root:            staging,
+		previewRoot:     filepath.Join(previewRepository, filepath.FromSlash(plan.selection.target)),
+		stagedOwnership: filepath.Join(staging, "ownership.json"),
+	}
 	failed := true
 	defer func() {
 		if failed {
@@ -73,7 +79,7 @@ func (e *Engine) preparePlanPublish(repository *repository, plan Plan, newLock l
 	if err := os.Chmod(staging, 0o700); err != nil {
 		return preparedPublish{}, publishFailure("stage_mode_failed", "transaction", err)
 	}
-	if err := writePreviewTree(staging, final); err != nil {
+	if err := writePreviewTree(previewRepository, plan.selection.target, final); err != nil {
 		return preparedPublish{}, err
 	}
 	ownership, err := newLock.CanonicalJSON()
@@ -103,6 +109,9 @@ func (e *Engine) applyPreparedPlan(ctx context.Context, repository *repository, 
 	}
 	if live.digest != plan.beforeDigest {
 		return snapshotChanged("/plan/beforeDigest", "transaction")
+	}
+	if err := verifyModuleFileSnapshots(prepared.moduleSnapshots); err != nil {
+		return err
 	}
 	if err := validateStagedOwnership(prepared.stagedOwnership, newLock); err != nil {
 		return err
@@ -331,8 +340,8 @@ func validatePreviewStates(files map[string]FileState) error {
 	return nil
 }
 
-func writePreviewTree(stagingRoot string, files map[string]FileState) error {
-	previewRoot := filepath.Join(stagingRoot, "preview", "target")
+func writePreviewTree(previewRepository, target string, files map[string]FileState) error {
+	previewRoot := filepath.Join(previewRepository, filepath.FromSlash(target))
 	if err := os.MkdirAll(previewRoot, 0o755); err != nil {
 		return publishFailure("preview_create_failed", "transaction", err)
 	}

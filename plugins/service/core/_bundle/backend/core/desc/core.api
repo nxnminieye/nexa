@@ -1,33 +1,91 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 syntax = "v1"
 
 info (
-  nexaContractVersion: "nexa.dev/http-api/v1"
+  nexaContractVersion: "nexa.dev/http-convention/v1"
 )
 
 type ProviderCapabilities {
-  Authenticate bool `json:"authenticate"`
-  AutoProvision bool `json:"autoProvision"`
-  GroupClaims bool `json:"groupClaims"`
+  Authenticate bool
+  AutoProvision bool
+  GroupClaims bool
 }
 
 type ProviderDescriptor {
-  ID string `json:"id"`
-  Protocol string `json:"protocol"`
-  Capabilities ProviderCapabilities `json:"capabilities"`
+  ID string
+  Protocol string
+  Capabilities ProviderCapabilities
 }
 
-type ListProvidersRequest {}
+type ListProvidersRequest {
+  Limit int64 `form:"limit,optional"`
+  Offset int64 `form:"offset,optional"`
+}
 type ListProvidersResponse {
   Items []ProviderDescriptor `json:"items"`
+  Total int64 `json:"total"`
 }
 
-@server (
-  nexaOperationId: "core.auth.providers"
-  nexaAuthMode: "none"
-  nexaCapabilityId: "nexa.dev/core-api"
-  nexaCapabilityVersion: "nexa.dev/core-api/v1"
-)
+type UserInfoResponse {
+  UserID string
+  MemberID int64
+  Username string
+  Email string `json:"email,optional"`
+  RealName string
+  Avatar string
+	Roles []string `json:"roles,optional"`
+	Desc string
+	Token string
+}
+
+type RouteMeta {
+  Title string
+  Icon string `json:"icon,optional"`
+  KeepAlive bool `json:"keepAlive,optional"`
+  Order int64 `json:"order,optional"`
+  HideInMenu bool `json:"hideInMenu,optional"`
+  HideChildrenInMenu bool `json:"hideChildrenInMenu,optional"`
+}
+
+type RouteItem {
+  Name string
+  Path string
+  Component string
+  Redirect string `json:"redirect,optional"`
+  Meta RouteMeta
+  Children []RouteItem `json:"children,optional"`
+}
+
 service core-api {
-  @handler listProviders
+  // @nexa auth: "none"
+  @handler ListProviders
   get /auth/providers (ListProvidersRequest) returns (ListProvidersResponse)
+}
+
+service core-api {
+  // @nexa auth: "required"
+  // @nexa permission: "public"
+  @handler Logout
+  post /auth/logout
+}
+
+service core-api {
+  // @nexa auth: "required"
+  // @nexa permission: "nexa.auth.permissions.read"
+  @handler GetAccessCodes
+  get /auth/codes returns ([]string)
+}
+
+service core-api {
+  // @nexa auth: "required"
+  // @nexa permission: "nexa.auth.me.read"
+  @handler GetUserInfo
+  get /user/info returns (UserInfoResponse)
+}
+
+service core-api {
+  // @nexa auth: "required"
+  // @nexa permission: "nexa.menu.read"
+  @handler GetAllMenus
+  get /menu/all returns ([]RouteItem)
 }

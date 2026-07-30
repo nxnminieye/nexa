@@ -6,15 +6,24 @@ import (
 	"strings"
 
 	"github.com/nxnminieye/nexa/generation/api"
+	"github.com/nxnminieye/nexa/generation/httpconvention"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
-const APIVersion = "nexa.dev/http-api-ir/v1"
-
 type LoadOptions struct {
-	RepositoryRoot string
-	EntryFile      string
-	SourceResolver SourceResolver
+	RepositoryRoot   string
+	EntryFile        string
+	SourceResolver   SourceResolver
+	SourceProjection *SourceProjection
+}
+
+// SourceProjection is compiler-produced input for extending an earlier
+// validated FactGraph. It is not a .api authoring surface.
+type SourceProjection struct {
+	Upstream       sourcecomment.FactGraph
+	Nodes          []sourcecomment.ProjectionExpectation
+	InheritedFacts []sourcecomment.InheritedFactExpectation
 }
 
 type SourceResolver interface {
@@ -90,48 +99,39 @@ func (v ValueType) Value() (ValueType, bool) {
 	return cloneValue(*v.value), true
 }
 
-type Binding struct {
-	location api.RequestBindingLocation
-	name     string
-}
-
-func (b Binding) Location() api.RequestBindingLocation { return b.location }
-func (b Binding) Name() string                         { return b.name }
-
 type Type struct{ state *typeState }
 type Field struct{ state *fieldState }
 type Operation struct{ state *operationState }
 type Document struct{ state *documentState }
 
 type typeState struct {
-	name       string
-	shape      ValueType
-	provenance NodeProvenance
-	fields     []*fieldState
-	fieldIndex map[string]int
+	name, semanticID string
+	firstSource      sourcecomment.SourceRef
+	shape            ValueType
+	provenance       NodeProvenance
+	fields           []*fieldState
+	fieldIndex       map[string]int
 }
 
 type fieldState struct {
-	ownerType  string
-	path       []string
-	required   bool
-	valueType  ValueType
-	binding    Binding
-	hasBinding bool
-	origin     provenance.Source
-	hasOrigin  bool
-	provenance NodeProvenance
+	ownerType, semanticID string
+	firstSource           sourcecomment.SourceRef
+	path                  []string
+	required              bool
+	valueType             ValueType
+	transport             httpconvention.Location
+	hasTransport          bool
+	origin                provenance.Source
+	hasOrigin             bool
+	provenance            NodeProvenance
 }
 
 type operationState struct {
 	id, path, requestType, responseType, permission string
 	method                                          api.HTTPMethod
-	responseBody                                    api.ResponseBodyMode
 	auth                                            Auth
-	capability                                      Capability
-	hasCapability                                   bool
 	provenance                                      NodeProvenance
-	errorProjections                                []api.ErrorProjectionSpec
+	firstSource                                     sourcecomment.SourceRef
 }
 
 type documentState struct {
@@ -141,9 +141,16 @@ type documentState struct {
 	operationIndex map[string]int
 	sources        []provenance.Source
 	sourceIndex    map[string]int
+	factGraph      sourcecomment.FactGraph
 }
 
-func (d Document) APIVersion() string { return APIVersion }
+func (d Document) FactGraph() sourcecomment.FactGraph {
+	if d.state == nil {
+		return sourcecomment.FactGraph{}
+	}
+	return d.state.factGraph
+}
+
 func (d Document) Types() []Type {
 	if d.state == nil {
 		return nil
@@ -250,7 +257,17 @@ func (f Field) Path() []string {
 	if f.state == nil {
 		return nil
 	}
-	return append([]string(nil), f.state.path...)
+	path := append([]string(nil), f.state.path...)
+	if f.state.provenance.kind != NodeFactGenerated {
+		return path
+	}
+	for index, segment := range path {
+		canonical, err := httpconvention.CanonicalName(segment)
+		if err == nil {
+			path[index] = canonical
+		}
+	}
+	return path
 }
 func (f Field) Required() bool { return f.state != nil && f.state.required }
 func (f Field) ValueType() ValueType {
@@ -258,12 +275,6 @@ func (f Field) ValueType() ValueType {
 		return ValueType{}
 	}
 	return cloneValue(f.state.valueType)
-}
-func (f Field) Binding() (Binding, bool) {
-	if f.state == nil {
-		return Binding{}, false
-	}
-	return f.state.binding, f.state.hasBinding
 }
 func (f Field) Origin() (provenance.Source, bool) {
 	if f.state == nil {
@@ -308,17 +319,11 @@ func (o Operation) ResponseType() string {
 	}
 	return o.state.responseType
 }
-func (o Operation) ResponseBody() api.ResponseBodyMode {
-	if o.state == nil {
-		return ""
-	}
-	return o.state.responseBody
-}
 func (o Operation) Auth() Auth {
 	if o.state == nil {
 		return Auth{}
 	}
-	return cloneAuth(o.state.auth)
+	return o.state.auth
 }
 func (o Operation) Permission() string {
 	if o.state == nil {
@@ -326,45 +331,16 @@ func (o Operation) Permission() string {
 	}
 	return o.state.permission
 }
-func (o Operation) Capability() (Capability, bool) {
-	if o.state == nil {
-		return Capability{}, false
-	}
-	return o.state.capability, o.state.hasCapability
-}
 func (o Operation) Provenance() NodeProvenance {
 	if o.state == nil {
 		return NodeProvenance{}
 	}
 	return cloneProvenance(o.state.provenance)
 }
-func (o Operation) ErrorProjections() []api.ErrorProjectionSpec {
-	if o.state == nil {
-		return nil
-	}
-	return append([]api.ErrorProjectionSpec(nil), o.state.errorProjections...)
-}
 
-type Auth struct {
-	mode        api.AuthMode
-	credentials []Credential
-}
-type Credential struct {
-	id       string
-	typeID   api.CredentialType
-	location api.CredentialLocation
-	name     string
-}
-type Capability struct{ id, apiVersion string }
+type Auth struct{ mode api.AuthMode }
 
-func (a Auth) Mode() api.AuthMode                     { return a.mode }
-func (a Auth) Credentials() []Credential              { return append([]Credential(nil), a.credentials...) }
-func (c Credential) ID() string                       { return c.id }
-func (c Credential) Type() api.CredentialType         { return c.typeID }
-func (c Credential) Location() api.CredentialLocation { return c.location }
-func (c Credential) Name() string                     { return c.name }
-func (c Capability) ID() string                       { return c.id }
-func (c Capability) APIVersion() string               { return c.apiVersion }
+func (a Auth) Mode() api.AuthMode { return a.mode }
 
 func cloneValue(input ValueType) ValueType {
 	result := input
@@ -385,10 +361,6 @@ func cloneValue(input ValueType) ValueType {
 func cloneProvenance(input NodeProvenance) NodeProvenance {
 	input.sources = append([]provenance.Source(nil), input.sources...)
 	input.canonical = append([]byte(nil), input.canonical...)
-	return input
-}
-func cloneAuth(input Auth) Auth {
-	input.credentials = append([]Credential(nil), input.credentials...)
 	return input
 }
 func cloneFieldState(input *fieldState) *fieldState {
@@ -423,13 +395,11 @@ func cloneOperationState(input *operationState) *operationState {
 		return nil
 	}
 	out := *input
-	out.auth = cloneAuth(input.auth)
 	out.provenance = cloneProvenance(input.provenance)
-	out.errorProjections = append([]api.ErrorProjectionSpec(nil), input.errorProjections...)
 	return &out
 }
 
-func newDocument(types []*typeState, operations []*operationState, extra []provenance.Source) (Document, error) {
+func newDocument(types []*typeState, operations []*operationState, extra []provenance.Source, facts sourcecomment.FactGraph) (Document, error) {
 	typeValues := make([]*typeState, len(types))
 	for index, value := range types {
 		typeValues[index] = cloneTypeState(value)
@@ -440,7 +410,7 @@ func newDocument(types []*typeState, operations []*operationState, extra []prove
 	}
 	sort.Slice(typeValues, func(i, j int) bool { return typeValues[i].name < typeValues[j].name })
 	sort.Slice(operationValues, func(i, j int) bool { return operationValues[i].id < operationValues[j].id })
-	state := &documentState{types: typeValues, operations: operationValues, typeIndex: map[string]int{}, operationIndex: map[string]int{}, sourceIndex: map[string]int{}}
+	state := &documentState{types: typeValues, operations: operationValues, typeIndex: map[string]int{}, operationIndex: map[string]int{}, sourceIndex: map[string]int{}, factGraph: facts}
 	for i, item := range typeValues {
 		state.typeIndex[item.name] = i
 		for _, source := range item.provenance.sources {

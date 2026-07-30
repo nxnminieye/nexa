@@ -2,6 +2,7 @@
 package crudbuild
 
 import (
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -13,10 +14,6 @@ const (
 )
 
 type MultiTenantConfig struct{ Enabled bool }
-
-type ContextValue string
-
-const ContextTenantID ContextValue = "tenant-id"
 
 type Spec struct {
 	ServiceID          string
@@ -44,8 +41,6 @@ type Enum struct{ state *enumState }
 type EnumValue struct{ state *enumValueState }
 type Service struct{ state *serviceState }
 type Method struct{ state *methodState }
-type RPCContext struct{ state *rpcContextState }
-type ContextBinding struct{ state *contextBindingState }
 type Snapshot struct{ state *snapshotState }
 
 type Lock struct{ state *lockState }
@@ -66,17 +61,18 @@ type documentState struct {
 
 type messageState struct {
 	id, name        string
+	firstSource     sourcecomment.SourceRef
 	fields          []*fieldState
 	reservedNames   []string
 	reservedNumbers []int32
 }
 
 type fieldState struct {
-	id, name, wireType      string
-	number                  int32
-	repeated, optional      bool
-	internal, tenantContext bool
-	source                  provenance.Source
+	id, name, wireType string
+	number             int32
+	repeated, optional bool
+	source             provenance.Source
+	firstSource        sourcecomment.SourceRef
 }
 
 type enumState struct {
@@ -92,19 +88,14 @@ type enumValueState struct {
 }
 
 type serviceState struct {
-	id, name string
-	methods  []*methodState
+	id, name    string
+	firstSource sourcecomment.SourceRef
+	methods     []*methodState
 }
 
 type methodState struct {
 	id, name, input, output string
-	rpcContext              *rpcContextState
-}
-
-type rpcContextState struct{ contextFields []*contextBindingState }
-type contextBindingState struct {
-	source   ContextValue
-	rpcField string
+	firstSource             sourcecomment.SourceRef
 }
 
 type snapshotState struct {
@@ -311,10 +302,8 @@ func (f Field) Number() int32 {
 	}
 	return f.state.number
 }
-func (f Field) Repeated() bool        { return f.state != nil && f.state.repeated }
-func (f Field) Optional() bool        { return f.state != nil && f.state.optional }
-func (f Field) Internal() bool        { return f.state != nil && f.state.internal }
-func (f Field) IsTenantContext() bool { return f.state != nil && f.state.tenantContext }
+func (f Field) Repeated() bool { return f.state != nil && f.state.repeated }
+func (f Field) Optional() bool { return f.state != nil && f.state.optional }
 func (f Field) Source() provenance.Source {
 	if f.state == nil {
 		return provenance.Source{}
@@ -415,35 +404,6 @@ func (m Method) Output() string {
 	}
 	return m.state.output
 }
-func (m Method) RPCContext() RPCContext {
-	if m.state == nil {
-		return RPCContext{}
-	}
-	return RPCContext{state: m.state.rpcContext}
-}
-func (c RPCContext) ContextFields() []ContextBinding {
-	if c.state == nil {
-		return nil
-	}
-	result := make([]ContextBinding, len(c.state.contextFields))
-	for i, value := range c.state.contextFields {
-		result[i] = ContextBinding{state: value}
-	}
-	return result
-}
-func (b ContextBinding) Source() ContextValue {
-	if b.state == nil {
-		return ""
-	}
-	return b.state.source
-}
-func (b ContextBinding) RPCField() string {
-	if b.state == nil {
-		return ""
-	}
-	return b.state.rpcField
-}
-
 func (s Snapshot) Valid() bool { return s.state != nil }
 func (s Snapshot) CanonicalJSON() []byte {
 	if s.state == nil {

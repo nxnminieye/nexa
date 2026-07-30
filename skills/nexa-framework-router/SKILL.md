@@ -48,15 +48,16 @@ repository write；准确能力与副作用仍由当前源码、实际 inspectio
 - Repository write 前重新确认计划、输入和 affected files。任何不直接服务 starter 或受控代码生成的新增框架能力，都必须先交用户审核。
 
 V0.1 明确 not-selected：runtime `nexa`、可发布的 Python SDK/wheel、HTTP parity、quality 和 deployment。
-Reference `nexactl` 当前包含 governance validation 与 `sdk-python-assets` 工程命令；它们存在不等于 Python
-SDK 已发布或 consumer 必须选择。不得探测缺失的 runtime/SDK binary，不得为这些面创建事实文件、占位
+未发布的 Python SDK runtime 已随旧 `sdk/api` descriptor contract 删除。不得探测缺失的 runtime/SDK binary，
+不得为这些面创建事实文件、占位
 目录或空插件，也不得手改生成物。
 
 ## 缺失能力
 
 未出现在自省结果中的能力视为未编入。Inspection 版本不支持、计划命令不存在、输入不完整或副作用越界时报告结构化 gap。以上情况均不臆造命令，不手改生成物，
-也不创建空插件、空目录或占位事实。requirements/work/UserOperation、human gate、TestSpec/evidence、deployment
-instance 和 frontend 全部缺失仍是合法的 Minimum Runtime。
+也不创建空插件、空目录或占位事实。requirements/work/UserOperation、human gate、TestSpec/evidence 和
+deployment instance 缺失仍是合法的 Minimum Runtime；consumer 未选择 frontend 时仍是合法 backend-only
+组合，不需要 PageSpec 或占位页面。
 
 Runtime 能力不通过 CLI 自省声明运行时实例。判断是否选择某个 runtime package，必须查看 consumer 的
 Go import、constructor composition 与编译依赖结果；根 `go.mod` 中存在 requirement 不等于最终二进制已链接或构造该能力。

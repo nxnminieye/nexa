@@ -7,6 +7,7 @@ import (
 
 	generationapi "github.com/nxnminieye/nexa/generation/api"
 	generationhttpapi "github.com/nxnminieye/nexa/generation/httpapi"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 	"github.com/nxnminieye/nexa/runtime/crud"
 	"github.com/nxnminieye/nexa/sourceplugin"
@@ -19,12 +20,12 @@ func main() {
 }
 
 type frameworkSurfaceResult struct {
-	GenerationSchemas int
-	RenderedBytes     int
-	SourceFiles       int
-	SourceProfiles    int
-	TreeFiles         int
-	CRUDLimit         int64
+	GenerationTypes int
+	RenderedBytes   int
+	SourceFiles     int
+	SourceProfiles  int
+	TreeFiles       int
+	CRUDLimit       int64
 }
 
 func exerciseFrameworkSurfaces() (frameworkSurfaceResult, error) {
@@ -45,12 +46,12 @@ func exerciseFrameworkSurfaces() (frameworkSurfaceResult, error) {
 		return frameworkSurfaceResult{}, fmt.Errorf("check CRUD window")
 	}
 	return frameworkSurfaceResult{
-		GenerationSchemas: generationSchemas,
-		RenderedBytes:     renderedBytes,
-		SourceFiles:       sourceFiles,
-		SourceProfiles:    sourceProfiles,
-		TreeFiles:         treeFiles,
-		CRUDLimit:         window.Limit(),
+		GenerationTypes: generationSchemas,
+		RenderedBytes:   renderedBytes,
+		SourceFiles:     sourceFiles,
+		SourceProfiles:  sourceProfiles,
+		TreeFiles:       treeFiles,
+		CRUDLimit:       window.Limit(),
 	}, nil
 }
 
@@ -67,53 +68,35 @@ func exerciseGeneration() (int, int, error) {
 		{Ref: operationRef, Digest: provenance.SHA256([]byte("starter operation"))},
 		{Ref: fieldRef, Digest: provenance.SHA256([]byte("starter field"))},
 	}
-	manifest, err := generationapi.NewManifest(generationapi.ManifestSpec{
-		Sources: sources,
-		Schemas: []generationapi.SchemaSpec{
-			{ID: "scalar.string", Kind: generationapi.SchemaString},
-			{
-				ID: "starter.request", Kind: generationapi.SchemaObject,
-				Provenance: &generationapi.NodeProvenanceSpec{Kind: generationapi.NodeCanonical, Refs: []provenance.SourceRef{operationRef}},
-				Fields: []generationapi.FieldSpec{{
-					Name: "id", SchemaRef: "scalar.string", Required: true,
-					Provenance: generationapi.NodeProvenanceSpec{Kind: generationapi.NodeCanonical, Refs: []provenance.SourceRef{fieldRef}},
-				}},
-			},
-		},
-	})
-	if err != nil {
-		return 0, 0, fmt.Errorf("create generation manifest: %w", err)
-	}
-	canonical, err := manifest.CanonicalJSON()
-	if err != nil {
-		return 0, 0, fmt.Errorf("encode generation manifest: %w", err)
-	}
-	parsed, err := generationapi.Parse("starter-api-manifest.json", canonical)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse generation manifest: %w", err)
-	}
-	roundTrip, err := parsed.CanonicalJSON()
-	if err != nil || !bytes.Equal(canonical, roundTrip) {
-		return 0, 0, fmt.Errorf("generation manifest round-trip changed")
-	}
-
 	generatedProvenance, err := generationhttpapi.NewGeneratedProvenance(sources)
 	if err != nil {
 		return 0, 0, fmt.Errorf("create generated provenance: %w", err)
 	}
+	firstSource, err := sourcecomment.ParseSourceRef("proto://backend/core/rpc/starter.proto#starter.v1.Starter.Get")
+	if err != nil {
+		return 0, 0, err
+	}
+	messageSource, err := sourcecomment.ParseSourceRef("proto://backend/core/rpc/starter.proto#starter.v1.StarterRequest")
+	if err != nil {
+		return 0, 0, err
+	}
+	fieldSource, err := sourcecomment.ParseSourceRef("proto://backend/core/rpc/starter.proto#starter.v1.StarterRequest.id")
+	if err != nil {
+		return 0, 0, err
+	}
 	document, err := generationhttpapi.NewGeneratedDocument(generationhttpapi.GeneratedDocumentSpec{
 		Types: []generationhttpapi.GeneratedTypeSpec{{
-			Name: "StarterRequest", Shape: generationhttpapi.ValueTypeSpec{Kind: generationhttpapi.ValueObject}, Provenance: generatedProvenance,
+			SemanticID: "starter.v1.StarterRequest", Name: "StarterRequest", FirstSource: messageSource,
+			Shape: generationhttpapi.ValueTypeSpec{Kind: generationhttpapi.ValueObject}, Provenance: generatedProvenance,
 			Fields: []generationhttpapi.GeneratedFieldSpec{{
-				Path: []string{"ID"}, Required: true,
+				SemanticID: "starter.v1.StarterRequest.id", FirstSource: fieldSource, Path: []string{"ID"}, Required: true,
 				ValueType:  generationhttpapi.ValueTypeSpec{Kind: generationhttpapi.ValueScalar, Name: "string"},
-				Binding:    &generationhttpapi.BindingSpec{Location: generationapi.RequestBindingPath, Name: "id"},
 				Provenance: generatedProvenance,
 			}},
 		}},
 		Operations: []generationhttpapi.GeneratedOperationSpec{{
-			ID: "starter.get", Method: generationapi.MethodGET, Path: "/starter/{id}", RequestType: "StarterRequest",
-			ResponseBody: generationapi.ResponseBodyNone, Auth: generationhttpapi.AuthSpec{Mode: generationapi.AuthNone}, Provenance: generatedProvenance,
+			ID: "starter.get", Method: generationapi.MethodGET, Path: "/starters/{id}", RequestType: "StarterRequest",
+			Auth: generationhttpapi.AuthSpec{Mode: generationapi.AuthNone}, Provenance: generatedProvenance, FirstSource: firstSource,
 		}},
 	})
 	if err != nil {
@@ -126,7 +109,7 @@ func exerciseGeneration() (int, int, error) {
 	if err := generationhttpapi.VerifyRenderedGenerated("starter.generated.api", rendered, document); err != nil {
 		return 0, 0, fmt.Errorf("verify generated HTTP document: %w", err)
 	}
-	return len(parsed.Schemas()), len(rendered), nil
+	return len(document.Types()), len(rendered), nil
 }
 
 func exerciseSourceBundle() (int, int, int, error) {

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/frontend/frontend-render-request-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "frontendIR",
+    "repositoryRoot",
+    "generatedScope",
+    "extensionScopes",
+    "frontendSourceLockDigest"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "nexa.dev/frontend-renderer/v1"
+    },
+    "kind": {
+      "const": "FrontendRenderRequest"
+    },
+    "frontendIR": {
+      "$ref": "https://nexa.dev/schemas/generation/frontend/frontend-ir-v1.schema.json"
+    },
+    "repositoryRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatedScope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "extensionScopes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "frontendSourceLockDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

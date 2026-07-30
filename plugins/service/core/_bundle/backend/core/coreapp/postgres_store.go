@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var errPostgresStoreFailure = errors.New("core postgres store: failure")
@@ -28,6 +29,7 @@ var _ IAMStore = (*PostgresStore)(nil)
 var _ CatalogStore = (*PostgresStore)(nil)
 var _ ExternalIdentityLookup = (*PostgresStore)(nil)
 var _ ExternalRoleGrantStore = (*PostgresStore)(nil)
+var _ AccessSessionStore = (*PostgresStore)(nil)
 
 func (s *PostgresStore) CreateLocalAccount(ctx context.Context, input CreateLocalAccountInput) (IdentityAccount, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -101,6 +103,67 @@ JOIN identity_accounts a ON a.id=s.identity_account_id WHERE s.refresh_token_has
 	return value, nil
 }
 
+func (s *PostgresStore) FindAccessPrincipal(ctx context.Context, hash string, now time.Time) (AccessPrincipal, error) {
+	var value AccessPrincipal
+	var accountID int64
+	var email, display sql.NullString
+	err := s.db.QueryRowContext(ctx, `WITH RECURSIVE
+principal AS (
+  SELECT s.session_id,t.id::text AS tenant_id,t.code AS tenant_code,m.id::text AS member_id,
+         a.id AS account_id,a.identity_source_code,a.external_subject,a.username,a.email,a.display_name,a.status
+  FROM auth_sessions s
+  JOIN tenants t ON t.id=s.tenant_id AND t.status='enabled'
+  JOIN identity_accounts a ON a.id=s.identity_account_id AND a.status='enabled'
+  JOIN tenant_members m ON m.tenant_id=s.tenant_id AND m.identity_account_id=s.identity_account_id AND m.status='enabled'
+  WHERE s.access_token_hash=$1 AND s.revoked=FALSE AND s.access_expires_at>$2
+),
+principal_roles AS (
+  SELECT r.id,r.code,r.default_router
+  FROM principal p
+  JOIN tenant_member_roles g ON g.tenant_id=p.tenant_id::bigint AND g.tenant_member_id=p.member_id::bigint
+  JOIN roles r ON r.id=g.role_id AND r.tenant_id=g.tenant_id AND r.status='enabled'
+  UNION
+  SELECT r.id,r.code,r.default_router
+  FROM principal p
+  JOIN managed_tenant_member_roles g ON g.tenant_id=p.tenant_id::bigint AND g.tenant_member_id=p.member_id::bigint
+  JOIN roles r ON r.id=g.role_id AND r.tenant_id=g.tenant_id AND r.status='enabled'
+),
+menu_tree(id,code,parent_code,visited) AS (
+  SELECT m.id,m.code,m.parent_code,ARRAY[m.id]
+  FROM principal_roles r
+  JOIN role_menus g ON g.role_id=r.id
+  JOIN principal p ON p.tenant_id::bigint=g.tenant_id
+  JOIN menus m ON m.id=g.menu_id AND m.status='enabled'
+  UNION
+  SELECT parent.id,parent.code,parent.parent_code,tree.visited||parent.id
+  FROM menu_tree tree
+  JOIN menus parent ON parent.code=tree.parent_code AND parent.status='enabled'
+  WHERE NOT parent.id=ANY(tree.visited)
+)
+SELECT p.session_id,p.tenant_id,p.tenant_code,p.member_id,p.account_id,p.identity_source_code,p.external_subject,
+       p.username,p.email,p.display_name,p.status,
+       COALESCE((SELECT array_agg(DISTINCT code ORDER BY code) FROM principal_roles),ARRAY[]::text[]),
+       COALESCE((SELECT array_agg(DISTINCT a.code ORDER BY a.code)
+                 FROM principal_roles r
+                 JOIN role_permission_actions g ON g.role_id=r.id
+                 JOIN principal tenant ON tenant.tenant_id::bigint=g.tenant_id
+                 JOIN permission_actions a ON a.id=g.permission_action_id AND a.status='enabled'
+                 JOIN permission_resources resource ON resource.id=a.permission_resource_id AND resource.status='enabled'),ARRAY[]::text[]),
+		COALESCE((SELECT array_agg(DISTINCT code ORDER BY code) FROM menu_tree),ARRAY[]::text[])
+FROM principal p`, hash, now).Scan(
+		&value.SessionID, &value.TenantID, &value.TenantCode, &value.MemberID, &accountID,
+		&value.Account.SourceCode, &value.Account.ExternalSubject, &value.Account.Username, &email, &display, &value.Account.Status,
+		(*stringArray)(&value.RoleCodes), (*stringArray)(&value.PermissionCodes), (*stringArray)(&value.MenuCodes),
+	)
+	if err != nil {
+		return AccessPrincipal{}, postgresCredentialError(err)
+	}
+	value.Account.ID = accountIDString(accountID)
+	value.Account.Email = email.String
+	value.Account.DisplayName = display.String
+	return value, nil
+}
+
 func (s *PostgresStore) RotateSession(ctx context.Context, input RotateSessionInput) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -140,6 +203,38 @@ func (s *PostgresStore) FindExternalAccount(ctx context.Context, key ExternalIde
 	}
 	value.ID, value.Email, value.DisplayName = accountIDString(id), email.String, display.String
 	return value, nil
+}
+
+func (s *PostgresStore) ListIdentityAccounts(ctx context.Context, input ListIdentityAccountsInput) (IdentityAccountPage, error) {
+	const filter = ` FROM identity_accounts a WHERE ($1='' OR a.username ILIKE '%'||$1||'%' OR COALESCE(a.email,'') ILIKE '%'||$1||'%' OR COALESCE(a.display_name,'') ILIKE '%'||$1||'%' OR a.identity_source_code ILIKE '%'||$1||'%') AND ($2='' OR a.status=$2)`
+	var page IdentityAccountPage
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*)`+filter, input.Keyword, input.Status).Scan(&page.Total); err != nil {
+		return IdentityAccountPage{}, postgresError(err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.identity_source_code,a.external_subject,a.username,a.email,a.display_name,a.status`+filter+` ORDER BY a.id LIMIT $3 OFFSET $4`, input.Keyword, input.Status, input.Limit, input.Offset)
+	if err != nil {
+		return IdentityAccountPage{}, postgresError(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		account, err := scanIdentityAccount(rows)
+		if err != nil {
+			return IdentityAccountPage{}, err
+		}
+		page.Items = append(page.Items, account)
+	}
+	if err = rows.Err(); err != nil {
+		return IdentityAccountPage{}, postgresError(err)
+	}
+	return page, nil
+}
+
+func (s *PostgresStore) GetIdentityAccount(ctx context.Context, accountID IdentityAccountID) (IdentityAccount, error) {
+	id, err := numericID(string(accountID))
+	if err != nil {
+		return IdentityAccount{}, ErrStoreNotFound
+	}
+	return scanIdentityAccount(s.db.QueryRowContext(ctx, `SELECT id,identity_source_code,external_subject,username,email,display_name,status FROM identity_accounts WHERE id=$1`, id))
 }
 
 func (s *PostgresStore) ReplaceExternalRoleGrants(ctx context.Context, input ReplaceExternalRoleGrantsInput) error {
@@ -227,9 +322,9 @@ ON CONFLICT(tenant_id,identity_account_id) DO UPDATE SET identity_account_id=EXC
 		return ProvisionTenantResult{}, postgresError(err)
 	}
 	var roleID int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO roles(tenant_id,code,name,status,managed,source_owner,source_key,source_digest,version)
-VALUES($1,'tenant-owner','Tenant owner','enabled',TRUE,'core.tenant-provision','tenant-owner','v1',1)
-ON CONFLICT(tenant_id,source_owner,source_key) WHERE managed=TRUE DO UPDATE SET source_digest=EXCLUDED.source_digest RETURNING id`, tenantID).Scan(&roleID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO roles(tenant_id,code,name,default_router,status,managed,source_owner,source_key,source_digest,version)
+VALUES($1,'tenant-owner','Tenant owner',$2,'enabled',TRUE,'core.tenant-provision','tenant-owner','v1',1)
+ON CONFLICT(tenant_id,source_owner,source_key) WHERE managed=TRUE DO UPDATE SET source_digest=EXCLUDED.source_digest,default_router=EXCLUDED.default_router RETURNING id`, tenantID, input.DefaultRouter).Scan(&roleID)
 	if err != nil {
 		return ProvisionTenantResult{}, postgresError(err)
 	}
@@ -240,6 +335,59 @@ ON CONFLICT(tenant_id,source_owner,source_key) WHERE managed=TRUE DO UPDATE SET 
 		return ProvisionTenantResult{}, postgresError(err)
 	}
 	return ProvisionTenantResult{Tenant: tenant, Owner: TenantMember{ID: memberIDString(memberID), TenantID: tenant.ID, TenantCode: input.TenantCode, AccountID: input.OwnerAccountID, Status: memberStatus, ManagedOwnerGrant: true, Version: memberVersion}}, nil
+}
+
+func (s *PostgresStore) ListTenants(ctx context.Context, input ListTenantsInput) (TenantPage, error) {
+	const filter = ` FROM tenants t WHERE ($1='' OR t.code ILIKE '%'||$1||'%' OR t.name ILIKE '%'||$1||'%') AND ($2='' OR t.status=$2)`
+	var page TenantPage
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*)`+filter, input.Keyword, input.Status).Scan(&page.Total); err != nil {
+		return TenantPage{}, postgresError(err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id::text,t.code,t.name,t.status,t.version`+filter+` ORDER BY t.id LIMIT $3 OFFSET $4`, input.Keyword, input.Status, input.Limit, input.Offset)
+	if err != nil {
+		return TenantPage{}, postgresError(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tenant Tenant
+		if err = rows.Scan(&tenant.ID, &tenant.Code, &tenant.DisplayName, &tenant.Status, &tenant.Version); err != nil {
+			return TenantPage{}, postgresError(err)
+		}
+		page.Items = append(page.Items, tenant)
+	}
+	if err = rows.Err(); err != nil {
+		return TenantPage{}, postgresError(err)
+	}
+	return page, nil
+}
+
+func (s *PostgresStore) GetTenant(ctx context.Context, tenantID string) (Tenant, error) {
+	id, err := numericID(tenantID)
+	if err != nil {
+		return Tenant{}, ErrStoreNotFound
+	}
+	var tenant Tenant
+	err = s.db.QueryRowContext(ctx, `SELECT id::text,code,name,status,version FROM tenants WHERE id=$1`, id).Scan(&tenant.ID, &tenant.Code, &tenant.DisplayName, &tenant.Status, &tenant.Version)
+	if err != nil {
+		return Tenant{}, postgresError(err)
+	}
+	return tenant, nil
+}
+
+func (s *PostgresStore) UpdateTenant(ctx context.Context, input UpdateTenantStoreInput) (Tenant, error) {
+	id, err := numericID(input.TenantID)
+	if err != nil {
+		return Tenant{}, ErrStoreNotFound
+	}
+	var tenant Tenant
+	err = s.db.QueryRowContext(ctx, `UPDATE tenants SET name=$1,version=version+1 WHERE id=$2 AND version=$3 RETURNING id::text,code,name,status,version`, input.DisplayName, id, input.ExpectedVersion).Scan(&tenant.ID, &tenant.Code, &tenant.DisplayName, &tenant.Status, &tenant.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Tenant{}, distinguishTenantVersion(ctx, s.db, id)
+	}
+	if err != nil {
+		return Tenant{}, postgresError(err)
+	}
+	return tenant, nil
 }
 
 func (s *PostgresStore) SetTenantStatus(ctx context.Context, input SetTenantStatusStoreInput) (Tenant, error) {
@@ -258,28 +406,32 @@ func (s *PostgresStore) SetTenantStatus(ctx context.Context, input SetTenantStat
 	return value, nil
 }
 
-func (s *PostgresStore) ListTenantMembers(ctx context.Context, input ListTenantMembersInput) ([]TenantMember, error) {
+func (s *PostgresStore) ListTenantMembers(ctx context.Context, input ListTenantMembersInput) (TenantMemberPage, error) {
 	tenantID, parseErr := numericID(input.TenantID)
 	if parseErr != nil {
-		return nil, ErrStoreNotFound
+		return TenantMemberPage{}, ErrStoreNotFound
 	}
-	rows, err := s.db.QueryContext(ctx, memberSelect+` WHERE m.tenant_id=$1 ORDER BY m.id`, tenantID)
+	const filter = ` WHERE m.tenant_id=$1 AND ($2='' OR a.username ILIKE '%'||$2||'%' OR COALESCE(a.email,'') ILIKE '%'||$2||'%' OR COALESCE(a.display_name,'') ILIKE '%'||$2||'%') AND ($3='' OR m.status=$3)`
+	var page TenantMemberPage
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM tenant_members m JOIN identity_accounts a ON a.id=m.identity_account_id`+filter, tenantID, input.Keyword, input.Status).Scan(&page.Total); err != nil {
+		return TenantMemberPage{}, postgresError(err)
+	}
+	rows, err := s.db.QueryContext(ctx, memberSelect+filter+` ORDER BY m.id LIMIT $4 OFFSET $5`, tenantID, input.Keyword, input.Status, input.Limit, input.Offset)
 	if err != nil {
-		return nil, postgresError(err)
+		return TenantMemberPage{}, postgresError(err)
 	}
 	defer rows.Close()
-	var result []TenantMember
 	for rows.Next() {
 		member, err := scanMember(rows)
 		if err != nil {
-			return nil, postgresError(err)
+			return TenantMemberPage{}, postgresError(err)
 		}
-		result = append(result, member)
+		page.Items = append(page.Items, member)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, postgresError(err)
+		return TenantMemberPage{}, postgresError(err)
 	}
-	return result, nil
+	return page, nil
 }
 
 func (s *PostgresStore) GetTenantMember(ctx context.Context, key TenantMemberKey) (TenantMember, error) {
@@ -402,6 +554,34 @@ func (s *PostgresStore) GetTenantRole(ctx context.Context, key TenantRoleKey) (T
 	return s.getRole(ctx, s.db, key)
 }
 
+func (s *PostgresStore) ListTenantRoles(ctx context.Context, input ListTenantRolesInput) (TenantRolePage, error) {
+	tenantID, err := numericID(input.TenantID)
+	if err != nil {
+		return TenantRolePage{}, ErrStoreNotFound
+	}
+	const filter = ` WHERE r.tenant_id=$1 AND ($2='' OR r.code ILIKE '%'||$2||'%' OR r.name ILIKE '%'||$2||'%') AND ($3='' OR r.status=$3)`
+	var page TenantRolePage
+	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM roles r`+filter, tenantID, input.Keyword, input.Status).Scan(&page.Total); err != nil {
+		return TenantRolePage{}, postgresError(err)
+	}
+	rows, err := s.db.QueryContext(ctx, roleSelect+filter+` ORDER BY r.id LIMIT $4 OFFSET $5`, tenantID, input.Keyword, input.Status, input.Limit, input.Offset)
+	if err != nil {
+		return TenantRolePage{}, postgresError(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		role, scanErr := scanRole(rows)
+		if scanErr != nil {
+			return TenantRolePage{}, scanErr
+		}
+		page.Items = append(page.Items, role)
+	}
+	if err = rows.Err(); err != nil {
+		return TenantRolePage{}, postgresError(err)
+	}
+	return page, nil
+}
+
 func (s *PostgresStore) CreateTenantRole(ctx context.Context, input CreateTenantRoleStoreInput) (TenantRole, error) {
 	var value TenantRole
 	var id int64
@@ -429,6 +609,63 @@ func (s *PostgresStore) ReplaceRolePermissions(ctx context.Context, input Replac
 }
 func (s *PostgresStore) ReplaceRoleMenus(ctx context.Context, input ReplaceRoleMenusStoreInput) (TenantRole, error) {
 	return s.replaceRoleCatalog(ctx, input.Key, input.ExpectedVersion, input.RejectManaged, input.MenuCodes, false)
+}
+
+func (s *PostgresStore) ListMenus(ctx context.Context, input ListMenusInput) (MenuPage, error) {
+	const filter = ` FROM menus m WHERE ($1='' OR m.code ILIKE '%'||$1||'%' OR m.name ILIKE '%'||$1||'%') AND ($2='' OR m.status=$2)`
+	var page MenuPage
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*)`+filter, input.Keyword, input.Status).Scan(&page.Total); err != nil {
+		return MenuPage{}, postgresError(err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT m.id::text,m.source_owner,m.code,m.parent_code,m.name,m.route_name,m.path,m.component,m.icon,m.sort_order,m.permission_code,m.keep_alive,m.visible,m.status`+filter+` ORDER BY m.sort_order,m.code LIMIT $3 OFFSET $4`, input.Keyword, input.Status, input.Limit, input.Offset)
+	if err != nil {
+		return MenuPage{}, postgresError(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		menu, scanErr := scanMenu(rows)
+		if scanErr != nil {
+			return MenuPage{}, scanErr
+		}
+		page.Items = append(page.Items, menu)
+	}
+	if err = rows.Err(); err != nil {
+		return MenuPage{}, postgresError(err)
+	}
+	return page, nil
+}
+
+func (s *PostgresStore) GetMenu(ctx context.Context, code string) (Menu, error) {
+	return scanMenu(s.db.QueryRowContext(ctx, `SELECT id::text,source_owner,code,parent_code,name,route_name,path,component,icon,sort_order,permission_code,keep_alive,visible,status FROM menus WHERE code=$1`, code))
+}
+
+func (s *PostgresStore) ListPermissions(ctx context.Context, input ListPermissionsInput) (PermissionPage, error) {
+	const from = ` FROM permission_actions a JOIN permission_resources r ON r.id=a.permission_resource_id`
+	const filter = ` WHERE ($1='' OR a.code ILIKE '%'||$1||'%' OR a.name ILIKE '%'||$1||'%' OR COALESCE(a.description,'') ILIKE '%'||$1||'%') AND ($2='' OR a.status=$2)`
+	var page PermissionPage
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*)`+from+filter, input.Keyword, input.Status).Scan(&page.Total); err != nil {
+		return PermissionPage{}, postgresError(err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id::text,a.source_owner,r.code,a.code,a.name,a.description,a.status`+from+filter+` ORDER BY a.code LIMIT $3 OFFSET $4`, input.Keyword, input.Status, input.Limit, input.Offset)
+	if err != nil {
+		return PermissionPage{}, postgresError(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		permission, scanErr := scanPermission(rows)
+		if scanErr != nil {
+			return PermissionPage{}, scanErr
+		}
+		page.Items = append(page.Items, permission)
+	}
+	if err = rows.Err(); err != nil {
+		return PermissionPage{}, postgresError(err)
+	}
+	return page, nil
+}
+
+func (s *PostgresStore) GetPermission(ctx context.Context, code string) (Permission, error) {
+	return scanPermission(s.db.QueryRowContext(ctx, `SELECT a.id::text,a.source_owner,r.code,a.code,a.name,a.description,a.status FROM permission_actions a JOIN permission_resources r ON r.id=a.permission_resource_id WHERE a.code=$1`, code))
 }
 
 func (s *PostgresStore) SetIdentityAccountStatus(ctx context.Context, input SetAccountStatusStoreInput) (IdentityAccount, error) {
@@ -525,8 +762,8 @@ ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source
 	menuCodes := make([]string, 0, len(input.Menus))
 	for _, entry := range input.Menus {
 		menuCodes = append(menuCodes, entry.Code)
-		_, err = tx.ExecContext(ctx, `INSERT INTO menus(source_owner,source_key,source_digest,code,parent_code,name,path,status) VALUES($1,$2,$3,$2,$4,$5,$6,'enabled')
-ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source_digest,parent_code=EXCLUDED.parent_code,name=EXCLUDED.name,path=EXCLUDED.path,status='enabled'`, input.SourceID, entry.Code, input.Digest, entry.ParentCode, entry.DisplayName, entry.Path)
+		_, err = tx.ExecContext(ctx, `INSERT INTO menus(source_owner,source_key,source_digest,code,parent_code,name,route_name,path,component,icon,sort_order,permission_code,keep_alive,visible,status) VALUES($1,$2,$3,$2,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'enabled')
+ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source_digest,parent_code=EXCLUDED.parent_code,name=EXCLUDED.name,route_name=EXCLUDED.route_name,path=EXCLUDED.path,component=EXCLUDED.component,icon=EXCLUDED.icon,sort_order=EXCLUDED.sort_order,permission_code=EXCLUDED.permission_code,keep_alive=EXCLUDED.keep_alive,visible=EXCLUDED.visible,status='enabled'`, input.SourceID, entry.Code, input.Digest, entry.ParentCode, entry.DisplayName, entry.RouteName, entry.Path, entry.Component, entry.Icon, entry.SortOrder, entry.PermissionCode, entry.KeepAlive, entry.Visible)
 		if err != nil {
 			return CatalogSyncResult{}, postgresError(err)
 		}
@@ -555,23 +792,68 @@ ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source
 	return result, nil
 }
 
-const memberSelect = `SELECT m.id,m.tenant_id::text,t.code,m.identity_account_id,m.status,m.version,
+const memberSelect = `SELECT m.id,m.tenant_id::text,t.code,m.identity_account_id,a.username,a.email,a.display_name,a.identity_source_code,a.external_subject,m.status,m.version,
 EXISTS(SELECT 1 FROM managed_tenant_member_roles mg JOIN roles mr ON mr.id=mg.role_id AND mr.tenant_id=mg.tenant_id WHERE mg.tenant_id=m.tenant_id AND mg.tenant_member_id=m.id AND mg.source_owner='core.tenant-provision' AND mr.source_owner='core.tenant-provision' AND mr.source_key='tenant-owner'),
 COALESCE((SELECT array_agg(r.code ORDER BY r.code) FROM tenant_member_roles g JOIN roles r ON r.id=g.role_id AND r.tenant_id=g.tenant_id WHERE g.tenant_id=m.tenant_id AND g.tenant_member_id=m.id),ARRAY[]::text[])
-FROM tenant_members m JOIN tenants t ON t.id=m.tenant_id`
+FROM tenant_members m JOIN tenants t ON t.id=m.tenant_id JOIN identity_accounts a ON a.id=m.identity_account_id`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanMember(row rowScanner) (TenantMember, error) {
 	var value TenantMember
 	var id, accountID int64
+	var email, display sql.NullString
 	var roles stringArray
-	err := row.Scan(&id, &value.TenantID, &value.TenantCode, &accountID, &value.Status, &value.Version, &value.ManagedOwnerGrant, &roles)
+	err := row.Scan(&id, &value.TenantID, &value.TenantCode, &accountID, &value.AccountUsername, &email, &display, &value.AccountSourceCode, &value.AccountExternalSubject, &value.Status, &value.Version, &value.ManagedOwnerGrant, &roles)
 	if err != nil {
 		return TenantMember{}, postgresError(err)
 	}
-	value.ID, value.AccountID = memberIDString(id), accountIDString(accountID)
+	value.ID, value.AccountID, value.AccountEmail, value.AccountDisplayName = memberIDString(id), accountIDString(accountID), email.String, display.String
 	value.ManualRoleCodes = append([]string(nil), roles...)
+	return value, nil
+}
+
+func scanIdentityAccount(row rowScanner) (IdentityAccount, error) {
+	var value IdentityAccount
+	var id int64
+	var email, display sql.NullString
+	if err := row.Scan(&id, &value.SourceCode, &value.ExternalSubject, &value.Username, &email, &display, &value.Status); err != nil {
+		return IdentityAccount{}, postgresError(err)
+	}
+	value.ID, value.Email, value.DisplayName = accountIDString(id), email.String, display.String
+	return value, nil
+}
+
+const roleSelect = `SELECT r.id,r.tenant_id::text,r.code,r.name,r.default_router,r.status,r.managed,r.version,
+COALESCE((SELECT array_agg(a.code ORDER BY a.code) FROM role_permission_actions g JOIN permission_actions a ON a.id=g.permission_action_id WHERE g.tenant_id=r.tenant_id AND g.role_id=r.id),ARRAY[]::text[]),
+COALESCE((SELECT array_agg(m.code ORDER BY m.code) FROM role_menus g JOIN menus m ON m.id=g.menu_id WHERE g.tenant_id=r.tenant_id AND g.role_id=r.id),ARRAY[]::text[])
+FROM roles r`
+
+func scanRole(row rowScanner) (TenantRole, error) {
+	var value TenantRole
+	var id int64
+	if err := row.Scan(&id, &value.TenantID, &value.Code, &value.DisplayName, &value.DefaultRouter, &value.Status, &value.Managed, &value.Version, (*stringArray)(&value.PermissionCodes), (*stringArray)(&value.MenuCodes)); err != nil {
+		return TenantRole{}, postgresError(err)
+	}
+	value.ID = roleIDString(id)
+	return value, nil
+}
+
+func scanMenu(row rowScanner) (Menu, error) {
+	var value Menu
+	if err := row.Scan(&value.ID, &value.SourceID, &value.Code, &value.ParentCode, &value.DisplayName, &value.RouteName, &value.Path, &value.Component, &value.Icon, &value.SortOrder, &value.PermissionCode, &value.KeepAlive, &value.Visible, &value.Status); err != nil {
+		return Menu{}, postgresError(err)
+	}
+	return value, nil
+}
+
+func scanPermission(row rowScanner) (Permission, error) {
+	var value Permission
+	var description sql.NullString
+	if err := row.Scan(&value.ID, &value.SourceID, &value.ResourceCode, &value.Code, &value.DisplayName, &description, &value.Status); err != nil {
+		return Permission{}, postgresError(err)
+	}
+	value.Description = description.String
 	return value, nil
 }
 
@@ -582,21 +864,11 @@ func (s *PostgresStore) getRole(ctx context.Context, queryer interface {
 	if err != nil {
 		return TenantRole{}, ErrStoreNotFound
 	}
-	var value TenantRole
-	var databaseID int64
 	tenantID, err := numericID(key.TenantID)
 	if err != nil {
 		return TenantRole{}, ErrStoreNotFound
 	}
-	err = queryer.QueryRowContext(ctx, `SELECT r.id,r.tenant_id::text,r.code,r.name,r.status,r.managed,r.version,
-COALESCE((SELECT array_agg(a.code ORDER BY a.code) FROM role_permission_actions g JOIN permission_actions a ON a.id=g.permission_action_id WHERE g.tenant_id=r.tenant_id AND g.role_id=r.id),ARRAY[]::text[]),
-COALESCE((SELECT array_agg(m.code ORDER BY m.code) FROM role_menus g JOIN menus m ON m.id=g.menu_id WHERE g.tenant_id=r.tenant_id AND g.role_id=r.id),ARRAY[]::text[])
-FROM roles r WHERE r.tenant_id=$1 AND r.id=$2`, tenantID, id).Scan(&databaseID, &value.TenantID, &value.Code, &value.DisplayName, &value.Status, &value.Managed, &value.Version, (*stringArray)(&value.PermissionCodes), (*stringArray)(&value.MenuCodes))
-	if err != nil {
-		return TenantRole{}, postgresError(err)
-	}
-	value.ID = roleIDString(databaseID)
-	return value, nil
+	return scanRole(queryer.QueryRowContext(ctx, roleSelect+` WHERE r.tenant_id=$1 AND r.id=$2`, tenantID, id))
 }
 
 func (s *PostgresStore) mutateRole(ctx context.Context, key TenantRoleKey, version uint64, rejectManaged bool, set string, value any) (TenantRole, error) {
@@ -610,7 +882,7 @@ func (s *PostgresStore) mutateRole(ctx context.Context, key TenantRoleKey, versi
 	}
 	query := `UPDATE roles SET ` + set + `,version=version+1 WHERE tenant_id=$2 AND id=$3 AND version=$4`
 	if rejectManaged {
-		query += ` AND r.managed=FALSE`
+		query += ` AND managed=FALSE`
 	}
 	result, err := s.db.ExecContext(ctx, query, value, tenantID, id, version)
 	if err != nil {

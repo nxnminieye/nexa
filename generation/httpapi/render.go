@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nxnminieye/nexa/generation/api"
+	"github.com/nxnminieye/nexa/generation/httpconvention"
 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
 	"github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/format"
 	goctlparser "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/parser"
@@ -21,10 +21,20 @@ func RenderGenerated(document Document) ([]byte, error) {
 		return nil, invalid("render_input_invalid", "", "", "render requires a generated HTTP API document")
 	}
 	var source strings.Builder
-	source.WriteString("syntax = \"v1\"\n\ninfo (\n  nexaContractVersion: \"nexa.dev/http-api/v1\"\n)\n\n")
+	source.WriteString("// @nexa $contract: \"nexa.dev/source-comment/v1\"\nsyntax = \"v1\"\n\ninfo (\n  nexaContractVersion: \"nexa.dev/http-convention/v1\"\n)\n\n")
 	for _, item := range document.state.types {
+		source.WriteString("// @nexa $source: " + strconv.Quote(item.firstSource.String()) + "\n")
+		if item.shape.kind != ValueObject {
+			typeText, err := renderValueType(item.shape)
+			if err != nil {
+				return nil, err
+			}
+			source.WriteString("type " + item.name + " " + typeText + "\n\n")
+			continue
+		}
 		source.WriteString("type " + item.name + " {\n")
 		for _, field := range item.fields {
+			source.WriteString("  // @nexa $source: " + strconv.Quote(field.firstSource.String()) + "\n")
 			if len(field.path) != 1 {
 				return nil, invalid("render_nested_field_unsupported", "", "", "generated nested fields must be represented by named types")
 			}
@@ -33,7 +43,10 @@ func RenderGenerated(document Document) ([]byte, error) {
 				return nil, err
 			}
 			source.WriteString("  " + field.path[0] + " " + typeText)
-			tags := renderFieldTags(field)
+			tags, err := renderFieldTags(document.state, item.name, field)
+			if err != nil {
+				return nil, err
+			}
 			if tags != "" {
 				source.WriteString(" `" + tags + "`")
 			}
@@ -42,27 +55,12 @@ func RenderGenerated(document Document) ([]byte, error) {
 		source.WriteString("}\n\n")
 	}
 	for _, operation := range document.state.operations {
-		source.WriteString("@server (\n")
-		metadata := [][2]string{{"nexaOperationId", operation.id}, {"nexaAuthMode", string(operation.auth.mode)}}
-		if len(operation.auth.credentials) == 1 {
-			credential := operation.auth.credentials[0]
-			metadata = append(metadata, [2]string{"nexaCredentialId", credential.id}, [2]string{"nexaCredentialType", string(credential.typeID)}, [2]string{"nexaCredentialLocation", string(credential.location)}, [2]string{"nexaCredentialName", credential.name})
-		}
-		if operation.permission != "" {
-			metadata = append(metadata, [2]string{"nexaPermission", operation.permission})
-		}
-		if operation.hasCapability {
-			metadata = append(metadata, [2]string{"nexaCapabilityId", operation.capability.id}, [2]string{"nexaCapabilityVersion", operation.capability.apiVersion})
-		}
-		for _, item := range metadata {
-			source.WriteString("  " + item[0] + ": " + strconv.Quote(item[1]) + "\n")
-		}
-		source.WriteString(")\nservice generated-api {\n  @handler generated" + hex.EncodeToString([]byte(operation.id)) + "\n  ")
+		source.WriteString("service generated-api {\n  // @nexa $source: " + strconv.Quote(operation.firstSource.String()) + "\n  @handler generated" + hex.EncodeToString([]byte(operation.id)) + "\n  ")
 		source.WriteString(strings.ToLower(string(operation.method)) + " " + renderRoutePath(operation.path))
 		if operation.requestType != "" {
 			source.WriteString(" (" + operation.requestType + ")")
 		}
-		if operation.responseBody == api.ResponseBodyJSON {
+		if operation.responseType != "" {
 			source.WriteString(" returns (" + operation.responseType + ")")
 		}
 		source.WriteString("\n}\n\n")
@@ -109,8 +107,8 @@ type renderedField struct {
 	Tags       [][2]string
 }
 type renderedRoute struct {
-	Metadata                        [][2]string
-	Method, Path, Request, Response string
+	Metadata                                 [][2]string
+	Handler, Method, Path, Request, Response string
 }
 type renderedDocument struct {
 	Types  []renderedType
@@ -146,7 +144,7 @@ func renderedSemantics(input *spec.ApiSpec) renderedDocument {
 		}
 		sort.Slice(metadata, func(i, j int) bool { return metadata[i][0] < metadata[j][0] })
 		for _, route := range group.Routes {
-			item := renderedRoute{Metadata: append([][2]string(nil), metadata...), Method: strings.ToUpper(route.Method), Path: route.Path}
+			item := renderedRoute{Metadata: append([][2]string(nil), metadata...), Handler: route.Handler, Method: strings.ToUpper(route.Method), Path: route.Path}
 			if route.RequestType != nil {
 				item.Request = route.RequestType.Name()
 			}
@@ -207,20 +205,66 @@ func renderValueType(value ValueType) (string, error) {
 		return "", invalid("value_type_invalid", "", "", "object values must use a named type")
 	}
 }
-func renderFieldTags(field *fieldState) string {
-	var tags []string
-	if field.hasBinding {
-		key := map[api.RequestBindingLocation]string{api.RequestBindingPath: "path", api.RequestBindingQuery: "form", api.RequestBindingHeader: "header", api.RequestBindingBody: "json"}[field.binding.location]
-		value := field.binding.name
-		if !field.required {
-			value += ",optional"
-		}
-		tags = append(tags, key+":"+strconv.Quote(value))
+func renderFieldTags(document *documentState, owner string, field *fieldState) (string, error) {
+	if len(field.path) != 1 {
+		return "", invalid("render_nested_field_unsupported", "", "", "generated nested fields must use named types")
 	}
+	name, err := httpconvention.CanonicalName(field.path[0])
+	if err != nil {
+		return "", invalid("render_field_name_invalid", "", "", err.Error())
+	}
+	key := "json"
+	var location httpconvention.Location
+	classified := false
+	for _, operation := range document.operations {
+		if operation.requestType != owner {
+			continue
+		}
+		fields := make([]string, 0, len(document.types[document.typeIndex[owner]].fields))
+		for _, requestField := range document.types[document.typeIndex[owner]].fields {
+			canonical, canonicalErr := httpconvention.CanonicalName(requestField.path[0])
+			if canonicalErr != nil {
+				return "", canonicalErr
+			}
+			fields = append(fields, canonical)
+		}
+		bindings, classifyErr := httpconvention.ClassifyRequest(string(operation.method), operation.path, fields)
+		if classifyErr != nil {
+			return "", classifyErr
+		}
+		var current httpconvention.Location
+		for _, binding := range bindings {
+			if binding.Name == name {
+				current = binding.Location
+				break
+			}
+		}
+		if classified && current != location {
+			return "", invalid("render_request_type_reused", "", "", "one request type has incompatible inferred locations")
+		}
+		location, classified = current, true
+	}
+	if classified {
+		switch location {
+		case httpconvention.LocationPath:
+			key = "path"
+		case httpconvention.LocationQuery:
+			key = "form"
+		case httpconvention.LocationBody:
+			key = "json"
+		default:
+			return "", invalid("render_location_invalid", "", "", "request field location is invalid")
+		}
+	}
+	value := name
+	if !field.required {
+		value += ",omitempty"
+	}
+	tags := []string{key + ":" + strconv.Quote(value)}
 	if field.hasOrigin {
 		tags = append(tags, originRefTag+":"+strconv.Quote(field.origin.Ref.String()), originDigestTag+":"+strconv.Quote(field.origin.Digest.String()))
 	}
-	return strings.Join(tags, " ")
+	return strings.Join(tags, " "), nil
 }
 func renderRoutePath(value string) string {
 	segments := strings.Split(value, "/")

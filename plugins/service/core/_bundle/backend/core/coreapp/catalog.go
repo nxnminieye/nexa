@@ -16,10 +16,17 @@ type PermissionCatalogEntry struct {
 }
 
 type MenuCatalogEntry struct {
-	Code        string
-	ParentCode  string
-	DisplayName string
-	Path        string
+	Code           string
+	ParentCode     string
+	DisplayName    string
+	RouteName      string
+	Path           string
+	Component      string
+	Icon           string
+	SortOrder      int32
+	PermissionCode string
+	KeepAlive      bool
+	Visible        bool
 }
 
 type CatalogSyncInput struct {
@@ -150,8 +157,15 @@ func canonicalMenus(values []MenuCatalogEntry) ([]MenuCatalogEntry, error) {
 		value.Code = strings.TrimSpace(value.Code)
 		value.ParentCode = strings.TrimSpace(value.ParentCode)
 		value.DisplayName = strings.TrimSpace(value.DisplayName)
+		value.RouteName = strings.TrimSpace(value.RouteName)
 		value.Path = strings.TrimSpace(value.Path)
+		value.Component = strings.TrimSpace(value.Component)
+		value.Icon = strings.TrimSpace(value.Icon)
+		value.PermissionCode = strings.TrimSpace(value.PermissionCode)
 		if !validCode(value.Code) || value.ParentCode != "" && !validCode(value.ParentCode) || value.DisplayName == "" {
+			return nil, ErrStoreFailedPrecondition
+		}
+		if value.PermissionCode != "" && !validCode(value.PermissionCode) {
 			return nil, ErrStoreFailedPrecondition
 		}
 		if previous, exists := byCode[value.Code]; exists && previous != value {

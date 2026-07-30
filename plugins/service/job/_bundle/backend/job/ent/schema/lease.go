@@ -1,24 +1,42 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 package schema
 
 import (
 	"entgo.io/ent"
-	entschema "entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
-	"github.com/nxnminieye/nexa/nexaent"
 )
 
+// @nexa label.zh-CN: "任务租约"
+// @nexa label.en-US: "Job lease"
+// @nexa description.zh-CN: "任务租约"
+// @nexa description.en-US: "Job lease"
+// @nexa scope: "global"
 type Lease struct{ ent.Schema }
 
 func (Lease) Config() ent.Config { return ent.Config{Table: "job_leases"} }
 
-func (Lease) Annotations() []entschema.Annotation {
-	return []entschema.Annotation{nexaent.Schema(schemaMeta("lease", "任务租约", "Job lease"))}
-}
-
 func (Lease) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("key").Unique().Immutable().Annotations(fieldMeta("lease.key", "租约标识", "Lease key", nexaent.UIHintReadonly, nexaent.VisibilityInternal)),
-		field.String("run_id").Immutable().Annotations(fieldMeta("lease.run_id", "运行标识", "Run ID", nexaent.UIHintReadonly, nexaent.VisibilityInternal)),
-		field.Time("expires_at").Annotations(fieldMeta("lease.expires_at", "过期时间", "Expires at", nexaent.UIHintDatetime, nexaent.VisibilityInternal)),
+		// @nexa label.zh-CN: "租约标识"
+		// @nexa label.en-US: "Lease key"
+		// @nexa description.zh-CN: "租约标识"
+		// @nexa description.en-US: "Lease key"
+		// @nexa ui.control: "readonly"
+		// @nexa visibility: "internal"
+		field.String("key").Unique().Immutable(),
+		// @nexa label.zh-CN: "运行标识"
+		// @nexa label.en-US: "Run ID"
+		// @nexa description.zh-CN: "运行标识"
+		// @nexa description.en-US: "Run ID"
+		// @nexa ui.control: "readonly"
+		// @nexa visibility: "internal"
+		field.String("run_id").Immutable(),
+		// @nexa label.zh-CN: "过期时间"
+		// @nexa label.en-US: "Expires at"
+		// @nexa description.zh-CN: "过期时间"
+		// @nexa description.en-US: "Expires at"
+		// @nexa ui.control: "datetime"
+		// @nexa visibility: "internal"
+		field.Time("expires_at"),
 	}
 }

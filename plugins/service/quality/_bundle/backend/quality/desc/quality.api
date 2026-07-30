@@ -1,44 +1,45 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 syntax = "v1"
 
-info (nexaContractVersion: "nexa.dev/http-api/v1")
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
 
 type RequirementCoverage {
-  Requirement string `json:"requirement"`
-  Title string `json:"title"`
-  Status string `json:"status"`
-  TestRefs []string `json:"testRefs"`
-  EvidenceRefs []string `json:"evidenceRefs"`
-  FreezeRefs []string `json:"freezeRefs"`
-  FreezeStatus string `json:"freezeStatus"`
-  GapCodes []string `json:"gapCodes"`
+  Requirement string
+  Title string
+  Status string
+  TestRefs []string
+  EvidenceRefs []string
+  FreezeRefs []string
+  FreezeStatus string
+  GapCodes []string
 }
 
 type SnapshotRequest {}
 
 type SnapshotResponse {
-  APIVersion string `json:"apiVersion"`
-  Kind string `json:"kind"`
-  SourceProfile string `json:"sourceProfile"`
-  ReadModelScope string `json:"readModelScope"`
-  Revision string `json:"revision"`
-  Requirements []RequirementCoverage `json:"requirements"`
+  APIVersion string
+  Kind string
+  SourceProfile string
+  ReadModelScope string
+  Revision string
+  Requirements []RequirementCoverage
 }
 
 type HealthRequest {}
 
 type HealthResponse {
-  Ready bool `json:"ready"`
-  Code string `json:"code"`
+  Ready bool
+  Code string
 }
 
-@server (nexaOperationId: "quality.snapshot.get" nexaAuthMode: "none")
 service quality-api {
-  @handler snapshot
+  // @nexa auth: "none"
+  @handler Snapshot
   get /quality/snapshot (SnapshotRequest) returns (SnapshotResponse)
 }
 
-@server (nexaOperationId: "quality.health.get" nexaAuthMode: "none")
 service quality-api {
-  @handler health
+  // @nexa auth: "none"
+  @handler Health
   get /health (HealthRequest) returns (HealthResponse)
 }

@@ -5,20 +5,16 @@
     "providerId": "quality-runtime",
     "modulePath": "github.com/nxnminieye/nexa",
     "packagePath": "github.com/nxnminieye/nexa/plugins/service/quality",
-    "version": "v0.1.0"
+    "version": "v0.3.0-alpha.2"
   },
   "files": [
-    {"path": "backend/quality/desc/quality.api", "size": 1173, "digest": "sha256:94dc7d37bc126a96d3d298bb7dae0f825ac9bdc9b7e237911062453bc368f760", "mode": "0644"},
+    {"path": "backend/quality/desc/quality.api", "size": 835, "digest": "sha256:66601a664e10810dd467471dfe1c2c19cbc35821b618640c2479ad6c8b9b13f0", "mode": "0644"},
     {"path": "backend/quality/desc/quality.proto", "size": 836, "digest": "sha256:d465015624fe9f8a7d727f565f47905a5319daa6aae736865692fd6c49414f67", "mode": "0644"},
     {"path": "backend/quality/qualityapp/error.go", "size": 796, "digest": "sha256:8530fafb4abf75883d00425bb4305a4932a6d9ee8e0e4559f3d5a98664613817", "mode": "0644"},
     {"path": "backend/quality/qualityapp/health.go", "size": 605, "digest": "sha256:0cb8768ee80793af8b3bd7269c58e31a9380af2b2ab83ec1ef994ef755315796", "mode": "0644"},
     {"path": "backend/quality/qualityapp/server.go", "size": 1495, "digest": "sha256:a7a87bb9eeacb5803f08a9087a12afe52d565a6bdb7389b9fd4a1f25f278a88f", "mode": "0644"},
-    {"path": "backend/quality/qualityapp/server_test.go", "size": 3036, "digest": "sha256:3129af96f2bc048d27ac5fe822ad589bbb74f3c6a50aa7b3f9de547f81a11359", "mode": "0644"},
-    {"path": "backend/quality/qualityapp/source.go", "size": 321, "digest": "sha256:1037d1e6921e673a036c8c9a320a4d50ed70445f018190905684614d79d490c9", "mode": "0644"},
-    {"path": "frontend/frontend/quality/locales/en-US.json", "size": 780, "digest": "sha256:60a7697fb1462cddc08e74d035a363dbc171c0687c7cb1f3b5f37a541fd488d1", "mode": "0644"},
-    {"path": "frontend/frontend/quality/locales/zh-CN.json", "size": 770, "digest": "sha256:9461030c0d7d5b4bd3b97f2c55efce50568070dc449a8b5d3ce87705de1c4588", "mode": "0644"},
-    {"path": "frontend/frontend/quality/object-schema/quality-read-model.json", "size": 1400, "digest": "sha256:c2a1135c5816a1d159b7116a80a665df9f511026775857a836856fa62bb2f381", "mode": "0644"},
-    {"path": "frontend/frontend/quality/pages/quality-read-model.json", "size": 212, "digest": "sha256:4515d0ee9fc4f91a46cacebae3cf2f5a0dff6145d695345539ea931d255d6ccc", "mode": "0644"}
+    {"path": "backend/quality/qualityapp/server_test.go", "size": 2896, "digest": "sha256:d01176d674c12453b5d372eee7a158203949d30f40cc2fb0c91863ed827ad107", "mode": "0644"},
+    {"path": "backend/quality/qualityapp/source.go", "size": 321, "digest": "sha256:1037d1e6921e673a036c8c9a320a4d50ed70445f018190905684614d79d490c9", "mode": "0644"}
   ],
   "profiles": [
     {
@@ -37,25 +33,6 @@
       "validations": [
         {"id": "quality-backend-test", "kind": "go-test", "workingDirectory": "backend/quality", "packages": ["./qualityapp"]}
       ]
-    },
-    {
-      "id": "frontend",
-      "files": [
-        "frontend/frontend/quality/locales/en-US.json",
-        "frontend/frontend/quality/locales/zh-CN.json",
-        "frontend/frontend/quality/object-schema/quality-read-model.json",
-        "frontend/frontend/quality/pages/quality-read-model.json"
-      ],
-      "requiresProfiles": [],
-      "requiresBundles": [],
-      "validations": []
-    },
-    {
-      "id": "full",
-      "files": [],
-      "requiresProfiles": ["backend", "frontend"],
-      "requiresBundles": [],
-      "validations": []
     }
   ]
 }

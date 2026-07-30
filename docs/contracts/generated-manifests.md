@@ -1,7 +1,7 @@
 # 生成清单
 
 生成清单 package 是为已有 consumer 保留的可重建状态投影数据结构。它不保存业务配置，也不是人工
-authoring surface；当前 official RPC/API direct generation command 不创建、读取或依赖这些 manifest，
+authoring surface；当前 official RPC/API/frontend direct generation command 不创建、读取或依赖这些 manifest，
 下述 managed/write lifecycle 也不是当前 official generation 契约。
 
 ## Owner
@@ -9,7 +9,6 @@ authoring surface；当前 official RPC/API direct generation command 不创建�
 | Manifest | Public owner | 表达内容 |
 | --- | --- | --- |
 | Artifact Manifest | `generation/artifact` | 一个 generator 管理的 artifact closure |
-| API Manifest | `generation/api` | HTTP schema、operation、binding 和 provenance projection |
 | Service Manifest | `generation/service` | 一个 consumer service 的 contract source closure |
 
 每个 owner 同时提供 immutable value、constructor/strict parser、canonical JSON 和 versioned schema。
@@ -42,12 +41,10 @@ Plan 从 previous manifest 和当前 facts 计算 next manifest。Write 先验�
 manifest；如果中途失败，不能发布一份声称未完成 artifact 已存在的 manifest。再次执行必须从当前 repository
 建立 fresh plan。
 
-## API 与 Service projection
-
-API Manifest 描述 merged native/generated HTTP contract，并保留每个 node 的 provenance。它供 generated
-API source 和 consumer 工具读取，不拥有原始 Proto、`.api` 或 Service Catalog。
+## Service projection
 
 Service Manifest 只包含当前 service contract sources 及其 closure digest。Source set 或 digest 改变时，
-check 返回 drift；它不表示 service 已部署、健康或获得业务批准。
+check 返回 drift；它不表示 service 已部署、健康或获得业务批准。HTTP contract 始终由 canonical `.api`
+和 HTTP Convention 直接提供，不存在独立 API Manifest。
 
 精确字段始终以 owner package schema accessor 为准。

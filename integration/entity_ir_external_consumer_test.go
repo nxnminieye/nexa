@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/nxnminieye/nexa/generation/entity"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -66,16 +66,14 @@ replace github.com/nxnminieye/nexa => %s
 	if err := os.MkdirAll(filepath.Join(helper, "tmp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	preparationEnvironment := overriddenEnvironment(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
+	runEntityIRGo(t, consumer, preparationEnvironment, "mod", "tidy")
+	runEntityIRGo(t, consumer, preparationEnvironment, "mod", "download", "all")
+	runEntityIRGo(t, helper, preparationEnvironment, "mod", "tidy")
+	runEntityIRGo(t, helper, preparationEnvironment, "mod", "download", "all")
 
-	environment := isolatedExternalGoEnvironment(t, temporary)
-	environment = replaceEnvironment(environment, "TMPDIR", filepath.Join(helper, "tmp"))
-	moduleCache := rootModuleCache(t)
-	environment = replaceEnvironment(environment, "GOMODCACHE", moduleCache)
-	environment = replaceEnvironment(environment, "GOPROXY", "file://"+filepath.ToSlash(filepath.Join(moduleCache, "cache", "download")))
-	runEntityIRGo(t, consumer, environment, "mod", "tidy")
-	runEntityIRGo(t, consumer, environment, "mod", "download", "all")
+	environment := replaceEnvironment(preparationEnvironment, "TMPDIR", filepath.Join(helper, "tmp"))
 	runEntityIRGo(t, helper, environment, "list", "-mod=mod", "-deps", "./cmd/entityir", "github.com/nxnminieye/nexa/generation/entconsumerfixture/schema")
-	runEntityIRGo(t, helper, environment, "mod", "download", "all")
 	before := entityIRFixtureTree(t, consumer)
 	schemaDir, err := filepath.Rel(repository, filepath.Join(consumer, "schema"))
 	if err != nil {
@@ -116,7 +114,7 @@ replace github.com/nxnminieye/nexa => %s
 		t.Fatal("Account missing")
 	}
 	crud, ok := account.CRUD()
-	if !ok || !sameCRUD(crud.Operations(), []nexaent.CRUDOperation{nexaent.CRUDList, nexaent.CRUDGet, nexaent.CRUDCreate}) {
+	if !ok || !sameCRUD(crud.Operations(), []sourcecomment.CRUDOperation{sourcecomment.CRUDList, sourcecomment.CRUDGet, sourcecomment.CRUDCreate}) {
 		t.Fatalf("Account CRUD = %#v, %v", crud.Operations(), ok)
 	}
 	audit, ok := snapshot.Entity("schema:AuditEntry")
@@ -127,10 +125,10 @@ replace github.com/nxnminieye/nexa => %s
 		t.Fatal("AuditEntry absence became CRUD opt-in")
 	}
 	if _, ok := account.Field("schema:Account/field:source"); !ok {
-		t.Fatal("shared mixin field missing from Account")
+		t.Fatal("materialized source field missing from Account")
 	}
 	if _, ok := audit.Field("schema:AuditEntry/field:source"); !ok {
-		t.Fatal("shared mixin field missing from AuditEntry")
+		t.Fatal("materialized source field missing from AuditEntry")
 	}
 	if len(snapshot.ProjectedSources()) != 7 {
 		t.Fatalf("source closure = %#v", snapshot.ProjectedSources())
@@ -210,7 +208,7 @@ func runEntityIRGo(t *testing.T, directory string, environment []string, argumen
 	}
 }
 
-func sameCRUD(left, right []nexaent.CRUDOperation) bool {
+func sameCRUD(left, right []sourcecomment.CRUDOperation) bool {
 	if len(left) != len(right) {
 		return false
 	}

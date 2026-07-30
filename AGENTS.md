@@ -44,6 +44,17 @@
    `overwrite-logic` 参数为 true 时才覆盖这些准确目标；
 5. 失败时返回非零结果和稳定错误，不掩盖已经发生的文件变化。
 
+`source-comment/v1` 的 Proto/`.api` source composer 是上述 generated output 规则之外的编译器输入阶段：
+它只处理 source configuration 显式列出的可编辑 source file，通过目标语言 AST/descriptor 组合上游
+projection 与当前阶段 local declaration。它不得扫描工作区、推断 ownership 或执行文本 merge；无法可靠
+语义组合的 family 必须使用独立 extension source。`generated/**` 和其他 replacement scope 仍按本节整树替换，
+不能携带需要保留的 local declaration。
+
+为区分 inherited deletion 与 upstream 新增，composer 只可使用版本化
+`nexa.dev/source-projection-lock/v1`：它记录上一轮 inherited semantic node/fact 的 source identity 与
+canonical digest，不记录 local ownership、整文件 digest或兼容映射，也不被 runtime 消费。不得把该窄化
+source identity lock 扩展成通用 ownership manifest。
+
 生成失败允许保留部分变更。生成器不负责恢复工作区；使用方通过 `git diff` 审阅实际变化，通过
 `git restore` 恢复，并在同一 Git worktree 中决定是否接受生成结果。用户代码已经由 Git 管理，
 不得在生成链中重复实现一套 staging、恢复、合并或 ownership 系统。
@@ -68,7 +79,7 @@
 - 自动回滚、事务协议、两阶段发布、plan/check/write 状态机或恢复日志；
 - ownership manifest、ownership digest、plan digest、冲突合并或 stale ownership 推断；
 - 文件描述符身份链、缓存目录身份跟踪、私有构建缓存或 OS 级隔离；
-- 自动 merge、diff3、`git apply`、Git staging、Git commit 或任何隐藏工作区变化的行为。
+- 自动文本 merge、diff3、`git apply`、Git staging、Git commit 或任何隐藏工作区变化的行为。
 
 生成验收只围绕契约和输出行为：
 
@@ -92,15 +103,18 @@ DG1 只建设满足上述验收的最小生成闭环。DG1 通过后立即进入
 
 ## 事实源治理
 
-- 同一事实必须归属于最接近其语法节点的权威源，放置优先级固定为：节点上的强类型 metadata、同一事实文件或 package 中的结构化声明、领域 owner 定义的强类型 relation document、只表达跨事实关系或服务拓扑的全局 catalog。更近层能够完整表达时，禁止另建远端配置或重复人工入口。
-- Ent schema、type 和 field 事实属于 typed `SchemaMeta`、`FieldMeta` 与专用 `schema.Annotation`；Schema 级 CRUD 通过 annotation presence 和闭合 operations enum 显式选择，annotation 缺失即不生成 CRUD。label、desc、i18n、UIHint 和 source binding 同样属于对应 typed annotation，不使用 Go comment DSL 或 `map[string]any`。
-- RPC、message 和 method 事实属于 Proto AST 与 custom options；HTTP route、type 和 field 事实属于 `.api` 正式 AST 与 typed metadata。GoDoc 可以说明代码，但不得成为机器消费的业务契约。
+- Nexa 的统一补充事实契约是 `nexa.dev/source-comment/v1`。Ent Go、Proto、`.api` 与经过批准的 comment-capable frontend source contract 统一使用严格的 `@nexa` 语法；解析结果必须先进入闭合集合 typed Fact Registry/FactGraph，generator 和 runtime 不得直接解释字符串 map。
+- 同一事实必须归属于最早且最接近其语法节点的权威源。存在 Ent 时，Ent 可表达的事实必须写在 Ent；没有 Ent 时 Proto 可以成为第一来源；原生 HTTP 可以从 `.api` 开始；UI-only 事实从 frontend source contract 开始。下游只能增加当前阶段新出现的 node/fact，不得覆盖、删除或重复声明上游事实。
+- Ent、Proto、`.api` 已由原生语法表达的类型、字段、编号、RPC、method 与 path 不得在 `@nexa` 中重复；frontend YAML 只原生表达 page identity。TypeScript/Vue 是生成输出，不是 v1 authoring carrier。`@nexa` 只承载 registry 已注册且原生语法不能表达的补充事实。
+- projected node 使用系统 `$source` 指示第一结构来源；CLI 必须按 AST/descriptor 重新计算语义来源，拒绝 inherited node/fact 修改或删除、伪造 source、重复、misplaced fact 和转换后标识符冲突，并指出最早应修改的文件。
+- 生成的 Proto 与 `.api` 不是整文件不可编辑。对应 source adapter 必须区分 upstream projection、downstream local addition 和非法 inherited modification；无可靠 semantic composer 的文件不得宣称支持就地扩展。
+- `nexaent` 不作为公共包、内部 typed model、序列化契约或 authoring API 保留；必要 Ent AST/descriptor/entc 接入只属于 compiler-internal Ent source adapter。Nexa-specific Proto custom option、`.api` metadata tag 和人工 JSON PageSpec 同样一次性删除，不提供兼容 reader、alias、fallback、双写期或 runtime normalizer。
 - Service Catalog 只拥有服务发现、服务拓扑和跨事实或跨服务 capability binding relation。Service Catalog v1 的 `CapabilityBinding` 仅包含 capability `id` 与 `apiVersion`；binding presence 只表达 service 到 capability contract 的关系，不保存 capability 本体或任何节点事实。前端专属交互事实属于对象 schema，部署实例属于部署事实，人工 gate 与审批属于其领域 review-decision 文件。
 - Service Catalog v1 不提供通用 `configRef`、开放 extension 或 generic sidecar path，因为通用引用无法在语义上证明被引用内容遵守最近事实源所有权。真实关系横跨多个权威源或原生格式无法表达时，领域 owner 必须先定义封闭的 typed relation schema；relation document 只保存关系或决策，并为所有原事实携带规范的 canonical `SourceRef` 与 `Digest`。需要由 catalog 暴露的关系通过新的 catalog `apiVersion` 引入；不属于 catalog 的领域关系由 capability-specific typed binding contract 及其领域 loader 消费。两条路径都不得扩展 Service Catalog v1。
-- Ent CRUD、label、desc、i18n、UIHint、source binding 和 Proto/API metadata 永远保留在各自最近权威源，不得复制到 Service Catalog 或 relation document。
+- Ent CRUD、label、desc、i18n、UIHint、source binding 和 Proto/API 补充事实通过统一 FactGraph 保持第一来源，不得复制到 Service Catalog 或 relation document。
 - Artifact Manifest、IR、SDK model、frontend export、generated docs 和 read model 都是可重建 projection，不是人工事实源，也不得反向驱动权威源。
 - 每个公共 contract 和生成链必须明确记录 `owner`、`authoring surface` 与 `derived projections`。发现 catalog、Go hardcode、comment、relation document 或 generated file 重复表达同一事实时，只保留最近的权威人工入口。
-- 框架只提供公共 schema、typed annotation、parser、IR、generator 和 validator；业务 contract、业务 metadata 实例、关系决策、部署实例与生成产物均留在 consumer repository。
+- 框架只提供公共 source-comment contract、typed registry/FactGraph、source adapter、IR、generator 和 validator；业务 contract、业务 fact 实例、关系决策、部署实例与生成产物均留在 consumer repository。
 
 ## 文档规则
 
@@ -129,7 +143,7 @@ DG1 只建设满足上述验收的最小生成闭环。DG1 通过后立即进入
 - 非内建命令由当前已审核的任务计划直接决定。计划必须写明准确命令、输入、affected files、允许的副作用、验证命令和回滚方式；不得从 capability presence、help、README、Make target 或历史执行记录自行扩大范围。
 - Inspection 与计划不一致、输入不完整或副作用超出计划时停止执行并报告差异。Repository write 前重新确认 affected files 和副作用范围。
 - 任何不直接服务 starter 或受控代码生成的新增框架能力，必须在设计、写计划或实现前交由用户审核。
-- V0.1 未选择 runtime `nexa` CLI、可发布的 Python SDK/wheel、HTTP parity、quality 或 deployment 扩展。Reference `nexactl` 当前会编入 governance validation、Skill sync 与 `sdk-python-assets` 工程命令；这些命令存在不等于 Python SDK 已发布，也不要求 consumer 选择对应 runtime 能力。不得探测缺失 runtime binary、创建占位事实或把 Skill 同步解释为 capability 选择。
+- V0.1 未选择 runtime `nexa` CLI、可发布的 Python SDK/wheel、HTTP parity、quality 或 deployment 扩展。Reference `nexactl` 当前只提供实际 inspection 中声明的 governance、Skill sync 和受控生成能力；旧 `sdk-python-assets` 工程命令及其 descriptor/runtime 已删除。不得恢复旧生成链、探测缺失 runtime binary、创建占位事实或把 Skill 同步解释为 capability 选择。
 - 采用、升级和回滚的公开最终态入口见 `docs/adoption/`；设计来源只作解释性 provenance，Nexa 的 public contract、schema 和行为 gate 始终权威。
 
 ## 测试规则

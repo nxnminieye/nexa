@@ -32,7 +32,7 @@ func TestOfficialSourceReferenceCoreExactPlan(t *testing.T) {
 		"--repo-root", t.TempDir(),
 		"--provider", ref.ProviderID(),
 		"--version", ref.Version(),
-		"--profile", "frontend",
+		"--profile", "backend",
 		"--target", "standard/core",
 		"--manifest-digest", ref.ManifestDigest().String(),
 		"--tree-digest", ref.TreeDigest().String(),
@@ -104,11 +104,11 @@ func TestOfficialSourceReferenceCoreBackendMaterializeAndCheck(t *testing.T) {
 			}
 		}
 	}
-	command := exec.Command("go", "test", "-mod=readonly", "./coreapp", "./ent/schema")
+	command := exec.Command("go", "test", "-mod=readonly", "./...")
 	command.Dir = filepath.Join(target, "backend", "core")
 	command.Env = append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("materialized Core tests: %v\n%s", err, output)
+		t.Fatalf("materialized Core module tests: %v\n%s", err, output)
 	}
 }
 

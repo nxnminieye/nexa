@@ -46,13 +46,13 @@ GOWORK=off go run github.com/nxnminieye/nexa/cmd/nexactl@<version> inspect --jso
 
 ## 当前边界
 
-- `nexaent.Schema`、`nexaent.Field` 和 `nexaent.CRUD` 是 Ent 业务元数据的强类型入口。
+- `nexa.dev/source-comment/v1` 是 Ent、Proto、`.api` 与 frontend source 的统一补充事实入口；原生结构仍由各语言语法拥有。
 - 已验证的 generation package 把 consumer-owned facts 投影为 versioned IR、普通源码和可重建 manifest。
 - Service Source Provider 可以交付标准服务源码；源码物化后由 consumer 修改、构建和运行。
 - `runtime/*` package 按 import 和 constructor 显式选择，不构成运行时插件系统。
 - S3 公共入口为 `runtime/s3`，AWS SDK v2 adapter 为可选的 `runtime/s3/aws`；完整边界见 [Runtime packages](docs/contracts/runtime-packages.md)。
 - 可发布的 Python SDK/wheel、runtime `nexa` CLI、动态插件、远程控制和产品私有规则不属于本 alpha 支持面；
-  reference CLI 中的 `sdk-python-assets` 工程命令不等于 Python SDK 已发布。
+  未发布的 Python SDK runtime 已随旧 `sdk/api` descriptor contract 删除。
 
 当前参考 CLI 提供 CRUD Proto 生成，但统一 CRUD logic 不属于本 alpha 支持面。源码目录或 exported API
 存在不能替代通过的 public behavior test，也不能据此推断 consumer 命令。

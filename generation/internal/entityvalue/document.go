@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/gowebpki/jcs"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -48,7 +48,7 @@ type wireField struct {
 	Sensitive     bool            `json:"sensitive"`
 	IsIdentity    bool            `json:"isIdentity"`
 	IsTenantField bool            `json:"isTenantField"`
-	FieldMeta     json.RawMessage `json:"fieldMeta"`
+	FieldFacts    json.RawMessage `json:"fieldFacts"`
 }
 type wireEdge struct {
 	ID             string `json:"id"`
@@ -62,14 +62,14 @@ type wireEdge struct {
 	Unique         bool   `json:"unique"`
 }
 type wireEntity struct {
-	ID         string           `json:"id"`
-	Name       string           `json:"name"`
-	SourceRef  string           `json:"sourceRef"`
-	SchemaMeta json.RawMessage  `json:"schemaMeta"`
-	CRUD       *json.RawMessage `json:"crud,omitempty"`
-	Identity   wireIdentity     `json:"identity"`
-	Fields     []wireField      `json:"fields"`
-	Edges      []wireEdge       `json:"edges"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	SourceRef   string           `json:"sourceRef"`
+	SchemaFacts json.RawMessage  `json:"schemaFacts"`
+	CRUD        *json.RawMessage `json:"crud,omitempty"`
+	Identity    wireIdentity     `json:"identity"`
+	Fields      []wireField      `json:"fields"`
+	Edges       []wireEdge       `json:"edges"`
 }
 type wireDocument struct {
 	APIVersion   string       `json:"apiVersion"`
@@ -84,19 +84,19 @@ type wireNodeIdentity struct {
 	Type string `json:"type"`
 }
 type wireEntityNode struct {
-	APIVersion string           `json:"apiVersion"`
-	CRUD       *json.RawMessage `json:"crud,omitempty"`
-	ID         string           `json:"id"`
-	Identity   wireNodeIdentity `json:"identity"`
-	Kind       string           `json:"kind"`
-	Name       string           `json:"name"`
-	SchemaMeta json.RawMessage  `json:"schemaMeta"`
+	APIVersion  string           `json:"apiVersion"`
+	CRUD        *json.RawMessage `json:"crud,omitempty"`
+	ID          string           `json:"id"`
+	Identity    wireNodeIdentity `json:"identity"`
+	Kind        string           `json:"kind"`
+	Name        string           `json:"name"`
+	SchemaFacts json.RawMessage  `json:"schemaFacts"`
 }
 type wireFieldNode struct {
 	APIVersion    string          `json:"apiVersion"`
 	EntityID      string          `json:"entityId"`
 	EnumValues    []wireEnumValue `json:"enumValues"`
-	FieldMeta     json.RawMessage `json:"fieldMeta"`
+	FieldFacts    json.RawMessage `json:"fieldFacts"`
 	HasDefault    bool            `json:"hasDefault"`
 	ID            string          `json:"id"`
 	Immutable     bool            `json:"immutable"`
@@ -171,12 +171,8 @@ func buildEntity(input EntityProjection, pointer string) (*entityState, error) {
 	if err := validateRef(input.SourceRef, "schema:"+input.Name); err != nil {
 		return nil, invalid("source_ref_invalid", pointer+"/sourceRef")
 	}
-	schemaMeta, err := nexaent.Schema(input.Meta).CanonicalJSON()
-	if err != nil {
-		return nil, err
-	}
-	if input.Meta.Identity != nexaent.IdentityEntID {
-		return nil, invalid("identity_strategy_invalid", pointer+"/identity")
+	if err := sourcecomment.ValidateSchemaFacts(input.Meta); err != nil {
+		return nil, invalid("schema_facts_invalid", pointer+"/schemaFacts")
 	}
 	identity, err := buildIdentity(input.Identity, pointer+"/identity")
 	if err != nil {
@@ -186,13 +182,11 @@ func buildEntity(input EntityProjection, pointer string) (*entityState, error) {
 	sort.SliceStable(fields, func(i, j int) bool { return fields[i].Name < fields[j].Name })
 	entity := &entityState{id: id, name: input.Name, meta: input.Meta, identity: identity, fields: make([]*fieldState, len(fields))}
 	if input.CRUD != nil {
-		crudBytes, crudErr := nexaent.CRUD(input.CRUD.Operations()...).CanonicalJSON()
-		if crudErr != nil {
-			return nil, crudErr
+		if crudErr := sourcecomment.ValidateCRUDOperations(*input.CRUD); crudErr != nil {
+			return nil, invalid("crud_facts_invalid", pointer+"/crud")
 		}
 		entity.crud = *input.CRUD
 		entity.hasCRUD = true
-		_ = crudBytes
 	}
 	seenFields := make(map[string]struct{}, len(fields))
 	for fieldIndex, fieldInput := range fields {
@@ -241,7 +235,11 @@ func buildEntity(input EntityProjection, pointer string) (*entityState, error) {
 			return nil, invalid("identity_composite_unsupported", pointer+"/identity")
 		}
 	}
-	entityBytes, err := canonicalEntityNode(entity, schemaMeta)
+	schemaFacts, err := sourcecomment.CanonicalSchemaFacts(entity.meta)
+	if err != nil {
+		return nil, err
+	}
+	entityBytes, err := canonicalEntityNode(entity, schemaFacts)
 	if err != nil {
 		return nil, invalid("canonical_invalid", pointer)
 	}
@@ -311,12 +309,12 @@ func buildField(entityID, entityName string, entitySourceRef provenance.SourceRe
 	if input.SourceRef.Path() != entitySourceRef.Path() {
 		return nil, invalid("source_ref_invalid", pointer+"/sourceRef")
 	}
-	meta := cloneFieldMeta(input.Meta)
-	if _, err := nexaent.Field(meta).CanonicalJSON(); err != nil {
-		return nil, err
+	meta := cloneFieldFacts(input.Meta)
+	if _, err := sourcecomment.CanonicalFieldFacts(meta); err != nil {
+		return nil, invalid("field_facts_invalid", pointer+"/fieldFacts")
 	}
-	if input.Immutable && meta.CRUD != nil && (meta.CRUD.Mutation == nexaent.MutationUpdate || meta.CRUD.Mutation == nexaent.MutationCreateUpdate) {
-		return nil, invalid("policy_conflict", pointer+"/fieldMeta/payload/crud")
+	if input.Immutable && meta.CRUD != nil && (meta.CRUD.Mutation == sourcecomment.MutationUpdate || meta.CRUD.Mutation == sourcecomment.MutationCreateUpdate) {
+		return nil, invalid("policy_conflict", pointer+"/fieldFacts/crud")
 	}
 	enums := append([]EnumValue(nil), input.EnumValues...)
 	sort.SliceStable(enums, func(i, j int) bool {
@@ -437,18 +435,15 @@ func validateDocumentSemantics(entities []*entityState) error {
 			}
 		}
 		for fieldIndex, field := range entity.fields {
-			base := "/entities/" + indexString(entityIndex) + "/fields/" + indexString(fieldIndex) + "/fieldMeta/payload/"
+			base := "/entities/" + indexString(entityIndex) + "/fields/" + indexString(fieldIndex) + "/fieldFacts/"
 			bound := localEdgesForField(entity, field.id)
-			if field.meta.LogicalReference != nil && len(bound) != 0 {
-				return invalid("logical_reference_edge_conflict", base+"logicalReference")
-			}
-			if field.meta.PhysicalDisplay != nil {
-				if len(bound) != 1 {
-					return invalid("physical_display_edge_invalid", base+"physicalDisplay")
+			if field.meta.Reference != nil {
+				target := byID["schema:"+field.meta.Reference.Target]
+				if target == nil || !hasFieldName(target, field.meta.Reference.Display) {
+					return invalid("reference_target_missing", base+"reference")
 				}
-				target := byID[bound[0].targetEntityID]
-				if target == nil || !hasFieldName(target, field.meta.PhysicalDisplay.Field) {
-					return invalid("physical_display_field_missing", base+"physicalDisplay/field")
+				if len(bound) > 1 || len(bound) == 1 && bound[0].targetEntityID != target.id {
+					return invalid("reference_edge_conflict", base+"reference")
 				}
 			}
 		}
@@ -484,8 +479,8 @@ func localEdgesForField(entity *entityState, id string) []*edgeState {
 
 func validateCRUDPolicies(entity *entityState, pointer string) error {
 	for index, field := range entity.fields {
-		base := pointer + "/fields/" + indexString(index) + "/fieldMeta/payload/crud"
-		if sensitiveTupleConflict(field.sensitive, field.meta.Visibility, field.meta.UIHint) {
+		base := pointer + "/fields/" + indexString(index) + "/fieldFacts/crud"
+		if sensitiveTupleConflict(field.sensitive, field.meta.Visibility, field.meta.Control) {
 			return invalid("policy_conflict", base)
 		}
 		policy := field.meta.CRUD
@@ -501,33 +496,33 @@ func validateCRUDPolicies(entity *entityState, pointer string) error {
 		if policy == nil {
 			continue
 		}
-		if field.meta.Visibility == nexaent.VisibilityInternal && (policy.Read != nexaent.ReadExclude || policy.Mutation != nexaent.MutationNone) {
+		if field.meta.Visibility == sourcecomment.VisibilityInternal && (policy.Read != sourcecomment.ReadExclude || policy.Mutation != sourcecomment.MutationNone) {
 			return invalid("policy_conflict", base)
 		}
-		if field.meta.Visibility == nexaent.VisibilitySensitive && policy.Read != nexaent.ReadExclude {
+		if field.meta.Visibility == sourcecomment.VisibilitySensitive && policy.Read != sourcecomment.ReadExclude {
 			return invalid("policy_conflict", base)
 		}
-		if field.meta.UIHint == nexaent.UIHintReadonly && policy.Mutation != nexaent.MutationNone {
+		if field.meta.Control == sourcecomment.UIControlReadonly && policy.Mutation != sourcecomment.MutationNone {
 			return invalid("policy_conflict", base)
 		}
-		if field.isIdentity && (policy.Read != nexaent.ReadInclude || policy.Mutation != nexaent.MutationNone) {
+		if field.isIdentity && (policy.Read != sourcecomment.ReadInclude || policy.Mutation != sourcecomment.MutationNone) {
 			return invalid("policy_conflict", base)
 		}
-		if field.immutable && (policy.Mutation == nexaent.MutationUpdate || policy.Mutation == nexaent.MutationCreateUpdate) {
+		if field.immutable && (policy.Mutation == sourcecomment.MutationUpdate || policy.Mutation == sourcecomment.MutationCreateUpdate) {
 			return invalid("policy_conflict", base)
 		}
 	}
 	return nil
 }
 
-func sensitiveTupleConflict(sensitive bool, visibility nexaent.FieldVisibility, hint nexaent.UIHint) bool {
-	return sensitive != (visibility == nexaent.VisibilitySensitive) || sensitive != (hint == nexaent.UIHintSensitive)
+func sensitiveTupleConflict(sensitive bool, visibility sourcecomment.FieldVisibility, hint sourcecomment.UIControl) bool {
+	return sensitive != (visibility == sourcecomment.VisibilitySensitive) || sensitive != (hint == sourcecomment.UIControlSensitive)
 }
 
 func validateLocalizedKeys(entities []*entityState) error {
 	type text struct{ zh, en string }
 	seen := map[string]text{}
-	add := func(value nexaent.LocalizedText, pointer string) error {
+	add := func(value sourcecomment.LocalizedText, pointer string) error {
 		current := text{value.ZhCN, value.EnUS}
 		if old, ok := seen[value.Key]; ok && old != current {
 			return invalid("localized_text_conflict", pointer)
@@ -537,14 +532,14 @@ func validateLocalizedKeys(entities []*entityState) error {
 	}
 	for ei, entity := range entities {
 		base := "/entities/" + indexString(ei)
-		if err := add(entity.meta.Label, base+"/schemaMeta/payload/label"); err != nil {
+		if err := add(entity.meta.Label, base+"/schemaFacts/label"); err != nil {
 			return err
 		}
-		if err := add(entity.meta.Description, base+"/schemaMeta/payload/description"); err != nil {
+		if err := add(entity.meta.Description, base+"/schemaFacts/description"); err != nil {
 			return err
 		}
 		for fi, field := range entity.fields {
-			fieldBase := base + "/fields/" + indexString(fi) + "/fieldMeta/payload"
+			fieldBase := base + "/fields/" + indexString(fi) + "/fieldFacts"
 			if err := add(field.meta.Label, fieldBase+"/label"); err != nil {
 				return err
 			}
@@ -581,10 +576,10 @@ func validScalar(value string) bool {
 	return false
 }
 
-func canonicalEntityNode(entity *entityState, schemaMeta []byte) ([]byte, error) {
-	doc := wireEntityNode{APIVersion: "nexa.dev/entity-node/v1", ID: entity.id, Identity: wireNodeIdentity{Kind: entity.identity.kind, Name: entity.identity.name, Type: entity.identity.typeID}, Kind: "Entity", Name: entity.name, SchemaMeta: schemaMeta}
+func canonicalEntityNode(entity *entityState, schemaFacts []byte) ([]byte, error) {
+	doc := wireEntityNode{APIVersion: "nexa.dev/entity-node/v2", ID: entity.id, Identity: wireNodeIdentity{Kind: entity.identity.kind, Name: entity.identity.name, Type: entity.identity.typeID}, Kind: "Entity", Name: entity.name, SchemaFacts: schemaFacts}
 	if entity.hasCRUD {
-		raw, err := nexaent.CRUD(entity.crud.Operations()...).CanonicalJSON()
+		raw, err := sourcecomment.CanonicalCRUDOperations(entity.crud)
 		if err != nil {
 			return nil, err
 		}
@@ -595,11 +590,11 @@ func canonicalEntityNode(entity *entityState, schemaMeta []byte) ([]byte, error)
 }
 
 func canonicalFieldNode(entityID string, field *fieldState) ([]byte, error) {
-	meta, err := nexaent.Field(field.meta).CanonicalJSON()
+	meta, err := sourcecomment.CanonicalFieldFacts(field.meta)
 	if err != nil {
 		return nil, err
 	}
-	return canonicalize(wireFieldNode{APIVersion: "nexa.dev/entity-field-node/v2", EntityID: entityID, EnumValues: wireEnums(field.enumValues), FieldMeta: meta, HasDefault: field.hasDefault, ID: field.id, Immutable: field.immutable, IsIdentity: field.isIdentity, IsTenantField: field.isTenantField, Kind: "Field", Name: field.name, Nillable: field.nillable, Optional: field.optional, Sensitive: field.sensitive, Type: field.typeID})
+	return canonicalize(wireFieldNode{APIVersion: "nexa.dev/entity-field-node/v3", EntityID: entityID, EnumValues: wireEnums(field.enumValues), FieldFacts: meta, HasDefault: field.hasDefault, ID: field.id, Immutable: field.immutable, IsIdentity: field.isIdentity, IsTenantField: field.isTenantField, Kind: "Field", Name: field.name, Nillable: field.nillable, Optional: field.optional, Sensitive: field.sensitive, Type: field.typeID})
 }
 func canonicalEdgeNode(entityID string, edge *edgeState) ([]byte, error) {
 	return canonicalize(wireEdgeNode{APIVersion: "nexa.dev/entity-edge-node/v1", BoundFieldID: edge.boundFieldID, Direction: edge.direction, EntityID: entityID, ID: edge.id, InverseName: edge.inverseName, Kind: "Edge", Name: edge.name, TargetEntityID: edge.targetEntityID, Optional: edge.optional, Unique: edge.unique})
@@ -616,13 +611,13 @@ func computeSourceDigest(sources []provenance.Source) (provenance.Digest, error)
 func canonicalDocument(state *documentState) ([]byte, error) {
 	doc := wireDocument{APIVersion: apiVersion, Kind: kind, SourceDigest: state.sourceDigest.String(), Sources: wireSources(state.sources), Entities: make([]wireEntity, len(state.entities))}
 	for i, entity := range state.entities {
-		schemaMeta, err := nexaent.Schema(entity.meta).CanonicalJSON()
+		schemaFacts, err := sourcecomment.CanonicalSchemaFacts(entity.meta)
 		if err != nil {
 			return nil, err
 		}
-		item := wireEntity{ID: entity.id, Name: entity.name, SourceRef: entity.source.Ref.String(), SchemaMeta: schemaMeta, Identity: wireIdentity{Kind: entity.identity.kind, Name: entity.identity.name, Type: entity.identity.typeID, SourceRef: entity.identity.source.Ref.String()}, Fields: make([]wireField, len(entity.fields)), Edges: make([]wireEdge, len(entity.edges))}
+		item := wireEntity{ID: entity.id, Name: entity.name, SourceRef: entity.source.Ref.String(), SchemaFacts: schemaFacts, Identity: wireIdentity{Kind: entity.identity.kind, Name: entity.identity.name, Type: entity.identity.typeID, SourceRef: entity.identity.source.Ref.String()}, Fields: make([]wireField, len(entity.fields)), Edges: make([]wireEdge, len(entity.edges))}
 		if entity.hasCRUD {
-			raw, err := nexaent.CRUD(entity.crud.Operations()...).CanonicalJSON()
+			raw, err := sourcecomment.CanonicalCRUDOperations(entity.crud)
 			if err != nil {
 				return nil, err
 			}
@@ -630,11 +625,11 @@ func canonicalDocument(state *documentState) ([]byte, error) {
 			item.CRUD = &value
 		}
 		for j, field := range entity.fields {
-			meta, err := nexaent.Field(field.meta).CanonicalJSON()
+			meta, err := sourcecomment.CanonicalFieldFacts(field.meta)
 			if err != nil {
 				return nil, err
 			}
-			item.Fields[j] = wireField{ID: field.id, Name: field.name, SourceRef: field.source.Ref.String(), Type: field.typeID, EnumValues: wireEnums(field.enumValues), Optional: field.optional, Nillable: field.nillable, Immutable: field.immutable, HasDefault: field.hasDefault, Sensitive: field.sensitive, IsIdentity: field.isIdentity, IsTenantField: field.isTenantField, FieldMeta: meta}
+			item.Fields[j] = wireField{ID: field.id, Name: field.name, SourceRef: field.source.Ref.String(), Type: field.typeID, EnumValues: wireEnums(field.enumValues), Optional: field.optional, Nillable: field.nillable, Immutable: field.immutable, HasDefault: field.hasDefault, Sensitive: field.sensitive, IsIdentity: field.isIdentity, IsTenantField: field.isTenantField, FieldFacts: meta}
 		}
 		for j, edge := range entity.edges {
 			item.Edges[j] = wireEdge{ID: edge.id, Name: edge.name, SourceRef: edge.source.Ref.String(), TargetEntityID: edge.targetEntityID, Direction: edge.direction, InverseName: edge.inverseName, BoundFieldID: edge.boundFieldID, Optional: edge.optional, Unique: edge.unique}

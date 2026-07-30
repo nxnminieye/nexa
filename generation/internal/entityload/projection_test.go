@@ -1,6 +1,7 @@
 package entityload
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,142 +10,81 @@ import (
 	"entgo.io/ent/entc/load"
 	entfield "entgo.io/ent/schema/field"
 	"github.com/nxnminieye/nexa/generation/entity"
-	"github.com/nxnminieye/nexa/generation/internal/entipc"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
-func TestProjectionSkipsNodeWithoutSchemaMetaOrCRUD(t *testing.T) {
-	legacy := &load.Schema{
-		Name: "LegacyAccount", Pos: "schema/legacy_account.go:10",
-		Annotations: map[string]any{
-			"NexaSchemaMeta": map[string]any{"identity": "ent-id"},
-		},
-		Fields: []*load.Field{{
-			Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString},
-			Annotations: map[string]any{"NexaFieldMeta": map[string]any{"uiHint": "text"}},
-		}},
-	}
-	unannotated := &load.Schema{
-		Name: "Unannotated", Pos: "schema/unannotated.go:20",
-		Fields: []*load.Field{{Name: "value", Info: &entfield.TypeInfo{Type: entfield.TypeString}}},
-	}
+func TestProjectionSkipsNodeWithoutSourceFacts(t *testing.T) {
+	legacy := &load.Schema{Name: "LegacyAccount", Pos: "schema/legacy_account.go:10", Fields: []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}}}}
+	unannotated := &load.Schema{Name: "Unannotated", Pos: "schema/unannotated.go:20", Fields: []*load.Field{{Name: "value", Info: &entfield.TypeInfo{Type: entfield.TypeString}}}}
 	graph, err := gen.NewGraph(&gen.Config{}, legacy, unannotated)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolverCalls := 0
-	projection, err := projectGraph(graph, nil, func(string) (provenance.DomainSource, error) {
+	projection, err := projectGraph(graph, sourcecomment.FactGraph{}, nil, func(string) (provenance.DomainSource, error) {
 		resolverCalls++
 		return provenance.DomainSource{}, errors.New("resolver must not be called for skipped nodes")
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.Entities) != 0 {
-		t.Fatalf("entities = %#v, want none", projection.Entities)
-	}
-	if resolverCalls != 0 {
-		t.Fatalf("resolver calls = %d, want 0", resolverCalls)
+	if len(projection.Entities) != 0 || resolverCalls != 0 {
+		t.Fatalf("projection = %#v, resolver calls = %d", projection.Entities, resolverCalls)
 	}
 }
 
 func TestProjectGraphIncludesSchemaOnlyNode(t *testing.T) {
-	node := &load.Schema{
-		Name: "AuditEntry", Pos: "schema/audit_entry.go:10",
-		Annotations: typedAnnotations(t, testSchemaMeta("audit_entry"), nil),
-		Fields: []*load.Field{{
-			Name: "actor", Info: &entfield.TypeInfo{Type: entfield.TypeString},
-			Annotations: fieldAnnotations(t, testFieldMeta("audit_entry.actor")),
-		}},
-	}
+	node := &load.Schema{Name: "AuditEntry", Pos: "schema/audit_entry.go:10", Fields: []*load.Field{{Name: "actor", Info: &entfield.TypeInfo{Type: entfield.TypeString}}}}
 	graph, err := gen.NewGraph(&gen.Config{}, node)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, err := projectGraph(graph, nil, testSourceResolver(t, node))
+	projection, err := projectGraph(graph, testFactGraph(t, []*load.Schema{node}, factOptions{}), nil, testSourceResolver(t, node))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.Entities) != 1 || projection.Entities[0].Name != "AuditEntry" {
+	if len(projection.Entities) != 1 || projection.Entities[0].Name != "AuditEntry" || projection.Entities[0].CRUD != nil {
 		t.Fatalf("entities = %#v", projection.Entities)
 	}
-	if projection.Entities[0].CRUD != nil {
-		t.Fatalf("CRUD = %#v, want nil", projection.Entities[0].CRUD)
-	}
 }
 
-func TestProjectionRejectsCRUDWithoutSchemaMeta(t *testing.T) {
-	node := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10",
-		Annotations: map[string]any{
-			nexaent.CRUDAnnotationName: transportValue(t, nexaent.CRUD(nexaent.CRUDList)),
-		},
-	}
+func TestProjectionRejectsCRUDWithoutSchemaFacts(t *testing.T) {
+	node := &load.Schema{Name: "Account", Pos: "schema/account.go:10"}
 	graph, err := gen.NewGraph(&gen.Config{}, node)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = projectGraph(graph, nil, func(string) (provenance.DomainSource, error) {
-		t.Fatal("resolver called before selection validation")
+	facts := testFactGraph(t, []*load.Schema{node}, factOptions{omitSchema: map[string]bool{"Account": true}, crud: map[string][]sourcecomment.CRUDOperation{"Account": {sourcecomment.CRUDList}}})
+	_, err = projectGraph(graph, facts, nil, func(string) (provenance.DomainSource, error) {
+		t.Fatal("resolver called before fact validation")
 		return provenance.DomainSource{}, nil
 	})
-	if err == nil || err.Error() != "schema metadata is required" {
-		t.Fatalf("error = %v, want schema metadata is required", err)
+	if err == nil || err.Error() != "schema facts are required" {
+		t.Fatalf("error = %v, want schema facts are required", err)
 	}
 }
 
-func TestProjectGraphRequiresFieldMetaForSelectedSchema(t *testing.T) {
-	node := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10",
-		Annotations: typedAnnotations(t, testSchemaMeta("account"), nil),
-		Fields:      []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}}},
-	}
+func TestProjectGraphRequiresFieldFactsForSelectedSchema(t *testing.T) {
+	node := &load.Schema{Name: "Account", Pos: "schema/account.go:10", Fields: []*load.Field{{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}}}}
 	graph, err := gen.NewGraph(&gen.Config{}, node)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = projectGraph(graph, nil, testSourceResolver(t, node))
-	if err == nil || err.Error() != "field metadata is required" {
-		t.Fatalf("error = %v, want field metadata is required", err)
+	facts := testFactGraph(t, []*load.Schema{node}, factOptions{omitFields: map[string]bool{"Account.name": true}})
+	_, err = projectGraph(graph, facts, nil, testSourceResolver(t, node))
+	if err == nil || err.Error() != "fact Account.name:label.zh-CN is required" {
+		t.Fatalf("error = %v, want missing field fact error", err)
 	}
 }
 
-func TestProjectGraphRejectsMalformedCurrentSelectionAnnotation(t *testing.T) {
-	node := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10",
-		Annotations: map[string]any{
-			nexaent.SchemaAnnotationName: map[string]any{"apiVersion": nexaent.SchemaAnnotationName},
-		},
-	}
-	graph, err := gen.NewGraph(&gen.Config{}, node)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = projectGraph(graph, nil, func(string) (provenance.DomainSource, error) {
-		t.Fatal("resolver called before annotation validation")
-		return provenance.DomainSource{}, nil
-	})
-	if err == nil || !strings.Contains(err.Error(), nexaent.SchemaAnnotationName) {
-		t.Fatalf("error = %v, want malformed current schema annotation error", err)
-	}
-}
-
-func TestProjectGraphUsesTypedDescriptorsAndExplicitCRUDOnly(t *testing.T) {
-	account := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10",
-		Annotations: typedAnnotations(t, testSchemaMeta("account"), []nexaent.CRUDOperation{nexaent.CRUDList, nexaent.CRUDGet}),
-		Fields: []*load.Field{
-			{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Optional: true, Annotations: fieldAnnotations(t, testFieldMeta("account.name"))},
-			{Name: "state", Info: &entfield.TypeInfo{Type: entfield.TypeEnum}, Enums: []struct{ N, V string }{{N: "Active", V: "active"}, {N: "Disabled", V: "disabled"}}, Immutable: true, Default: true, Annotations: fieldAnnotations(t, immutableFieldMeta("account.state"))},
-		},
-	}
-	audit := &load.Schema{
-		Name: "AuditEntry", Pos: "schema/audit_entry.go:20",
-		Annotations: typedAnnotations(t, testSchemaMeta("audit_entry"), nil),
-		Fields:      []*load.Field{{Name: "actor", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Annotations: fieldAnnotations(t, task2NoCRUDFieldMeta("audit_entry.actor"))}},
-	}
+func TestProjectGraphUsesEntDescriptorsAndExplicitCRUDOnly(t *testing.T) {
+	account := &load.Schema{Name: "Account", Pos: "schema/account.go:10", Fields: []*load.Field{
+		{Name: "name", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Optional: true},
+		{Name: "state", Info: &entfield.TypeInfo{Type: entfield.TypeEnum}, Enums: []struct{ N, V string }{{N: "Active", V: "active"}, {N: "Disabled", V: "disabled"}}, Immutable: true, Default: true},
+	}}
+	audit := &load.Schema{Name: "AuditEntry", Pos: "schema/audit_entry.go:20", Fields: []*load.Field{{Name: "actor", Info: &entfield.TypeInfo{Type: entfield.TypeString}}}}
 	graph, err := gen.NewGraph(&gen.Config{}, account, audit)
 	if err != nil {
 		t.Fatal(err)
@@ -154,13 +94,11 @@ func TestProjectGraphUsesTypedDescriptorsAndExplicitCRUDOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	moduleSources := []provenance.Source{{Ref: moduleRef, Digest: provenance.SHA256([]byte("module consumer"))}}
-	projection, err := projectGraph(graph, moduleSources, func(position string) (provenance.DomainSource, error) {
-		files := map[string]string{
-			"schema/account.go:10":     "schema/account.go",
-			"schema/audit_entry.go:20": "schema/audit_entry.go",
-		}
-		return provenance.ParseDomainSource(files[position])
+	facts := testFactGraph(t, []*load.Schema{account, audit}, factOptions{
+		crud:       map[string][]sourcecomment.CRUDOperation{"Account": {sourcecomment.CRUDList, sourcecomment.CRUDGet}},
+		fieldFacts: map[string]sourcecomment.FieldFacts{"Account.state": immutableFieldFacts("account.state")},
 	})
+	projection, err := projectGraph(graph, facts, moduleSources, testSourceResolver(t, account, audit))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,15 +110,14 @@ func TestProjectGraphUsesTypedDescriptorsAndExplicitCRUDOnly(t *testing.T) {
 	if len(entities) != 2 || entities[0].Name() != "Account" || entities[1].Name() != "AuditEntry" {
 		t.Fatalf("entities = %#v", entities)
 	}
-	accountEntity := entities[0]
-	crud, present := accountEntity.CRUD()
-	if !present || !equalOperations(crud.Operations(), []nexaent.CRUDOperation{nexaent.CRUDList, nexaent.CRUDGet}) {
+	crud, present := entities[0].CRUD()
+	if !present || !equalOperations(crud.Operations(), []sourcecomment.CRUDOperation{sourcecomment.CRUDList, sourcecomment.CRUDGet}) {
 		t.Fatalf("Account CRUD = %#v, %v", crud.Operations(), present)
 	}
 	if _, present := entities[1].CRUD(); present {
-		t.Fatal("annotation absence became CRUD opt-in")
+		t.Fatal("source fact absence became CRUD opt-in")
 	}
-	state, ok := accountEntity.Field("schema:Account/field:state")
+	state, ok := entities[0].Field("schema:Account/field:state")
 	if !ok || state.Type() != "enum" || !state.Immutable() || !state.HasDefault() || len(state.EnumValues()) != 2 {
 		t.Fatalf("state projection = %#v, %v", state, ok)
 	}
@@ -190,43 +127,27 @@ func TestProjectGraphUsesTypedDescriptorsAndExplicitCRUDOnly(t *testing.T) {
 }
 
 func TestProjectionDoesNotInferTenantFromFieldNameOrScope(t *testing.T) {
-	node := &load.Schema{
-		Name: "Account", Pos: "schema/account.go:10",
-		Annotations: typedAnnotations(t, testSchemaMeta("account"), nil),
-		Fields: []*load.Field{{
-			Name: "tenant_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}, Immutable: true,
-			Annotations: fieldAnnotations(t, testFieldMeta("account.tenant_id")),
-		}},
-	}
+	node := &load.Schema{Name: "Account", Pos: "schema/account.go:10", Fields: []*load.Field{{Name: "tenant_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}, Immutable: true}}}
 	graph, err := gen.NewGraph(&gen.Config{}, node)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, err := projectGraph(graph, nil, testSourceResolver(t, node))
+	projection, err := projectGraph(graph, testFactGraph(t, []*load.Schema{node}, factOptions{}), nil, testSourceResolver(t, node))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.Entities) != 1 || len(projection.Entities[0].Fields) != 1 {
+	if len(projection.Entities) != 1 || len(projection.Entities[0].Fields) != 1 || projection.Entities[0].Fields[0].IsTenantField {
 		t.Fatalf("projection = %#v", projection)
-	}
-	if projection.Entities[0].Fields[0].IsTenantField {
-		t.Fatal("tenant marker inferred from field name or schema scope")
 	}
 }
 
-func TestEntityLoadProjectsInvalidEntityIRIntoClosedHelperDomainTuple(t *testing.T) {
-	schema := &load.Schema{
-		Name: "SecretRecord", Pos: "schema/secret_record.go:10", Annotations: typedAnnotations(t, testSchemaMeta("secret_record"), nil),
-		Fields: []*load.Field{{
-			Name: "secret", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Sensitive: true,
-			Annotations: fieldAnnotations(t, task2NoCRUDFieldMeta("secret_record.secret")),
-		}},
-	}
+func TestEntityLoadProjectsSensitivePolicyConflictIntoDomainTuple(t *testing.T) {
+	schema := &load.Schema{Name: "SecretRecord", Pos: "schema/secret_record.go:10", Fields: []*load.Field{{Name: "secret", Info: &entfield.TypeInfo{Type: entfield.TypeString}, Sensitive: true}}}
 	graph, err := gen.NewGraph(&gen.Config{}, schema)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, err := projectGraph(graph, nil, testSourceResolver(t, schema))
+	projection, err := projectGraph(graph, testFactGraph(t, []*load.Schema{schema}, factOptions{}), nil, testSourceResolver(t, schema))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,22 +155,104 @@ func TestEntityLoadProjectsInvalidEntityIRIntoClosedHelperDomainTuple(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = adoptProjection(projection, source)
+	_, err = adoptProjection(projection, testFactGraph(t, []*load.Schema{schema}, factOptions{}), source)
 	owner, ok := err.(*entity.Error)
-	if !ok || owner.Code() != "entity_ir_invalid" || owner.Reason() != "policy_conflict" || owner.Pointer() != "/entities/0/fields/0/fieldMeta/payload/crud" || owner.Source() != source.String() {
+	if !ok || owner.Code() != "entity_ir_invalid" || owner.Reason() != "policy_conflict" || owner.Pointer() != "/entities/0/fields/0/fieldFacts/crud" || owner.Source() != source.String() {
 		t.Fatalf("load error = %T %#v", err, err)
-	}
-	_, recognized, transportErr := entipc.ResultFromDomainError(err)
-	if transportErr != nil || !recognized {
-		t.Fatalf("helper transport = recognized %v, error %v", recognized, transportErr)
 	}
 }
 
-func typedAnnotations(t *testing.T, meta nexaent.SchemaMeta, operations []nexaent.CRUDOperation) map[string]any {
+type factOptions struct {
+	omitSchema map[string]bool
+	omitFields map[string]bool
+	crud       map[string][]sourcecomment.CRUDOperation
+	fieldFacts map[string]sourcecomment.FieldFacts
+}
+
+func testFactGraph(t *testing.T, schemas []*load.Schema, options factOptions) sourcecomment.FactGraph {
 	t.Helper()
-	result := map[string]any{nexaent.SchemaAnnotationName: transportValue(t, nexaent.Schema(meta))}
-	if operations != nil {
-		result[nexaent.CRUDAnnotationName] = transportValue(t, nexaent.CRUD(operations...))
+	var nodes []sourcecomment.NodeInput
+	for _, schema := range schemas {
+		file := strings.Split(schema.Pos, ":")[0]
+		if !options.omitSchema[schema.Name] {
+			target := testFactTarget(t, sourcecomment.NodeSchema, schema.Name, file, schema.Name)
+			meta := testSchemaFacts(strings.ToLower(schema.Name))
+			nodes = append(nodes, sourcecomment.NodeInput{SemanticID: schema.Name, Kind: sourcecomment.NodeSchema, Stage: sourcecomment.StageEnt, Source: target.Source, Location: sourcecomment.Location{File: file, Line: 1}, NativeCanonical: []byte("schema:" + schema.Name), Facts: schemaDirectives(t, target, meta, options.crud[schema.Name])})
+		} else if operations := options.crud[schema.Name]; len(operations) > 0 {
+			target := testFactTarget(t, sourcecomment.NodeSchema, schema.Name, file, schema.Name)
+			nodes = append(nodes, sourcecomment.NodeInput{SemanticID: schema.Name, Kind: sourcecomment.NodeSchema, Stage: sourcecomment.StageEnt, Source: target.Source, Location: sourcecomment.Location{File: file, Line: 1}, NativeCanonical: []byte("schema:" + schema.Name), Facts: []sourcecomment.Directive{testDirective(t, target, "crud.operations", operations)}})
+		}
+		for _, field := range schema.Fields {
+			semanticID := schema.Name + "." + field.Name
+			if options.omitFields[semanticID] {
+				continue
+			}
+			target := testFactTarget(t, sourcecomment.NodeField, semanticID, file, semanticID)
+			meta, ok := options.fieldFacts[semanticID]
+			if !ok {
+				meta = testFieldFacts(strings.ToLower(strings.ReplaceAll(semanticID, ".", "_")))
+				if len(options.crud[schema.Name]) == 0 {
+					meta.CRUD = nil
+				}
+			}
+			nodes = append(nodes, sourcecomment.NodeInput{SemanticID: semanticID, Kind: sourcecomment.NodeField, Stage: sourcecomment.StageEnt, Source: target.Source, Location: sourcecomment.Location{File: file, Line: 2}, NativeCanonical: []byte("field:" + semanticID), Facts: fieldDirectives(t, target, meta)})
+		}
+	}
+	graph, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{Nodes: nodes})
+	if len(diagnostics) != 0 {
+		t.Fatalf("build test fact graph: %#v", diagnostics)
+	}
+	return graph
+}
+
+func testFactTarget(t *testing.T, kind sourcecomment.NodeKind, semanticID, file, symbol string) sourcecomment.Target {
+	t.Helper()
+	ref, err := sourcecomment.ParseSourceRef("ent://" + file + "#" + symbol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sourcecomment.Target{SemanticID: semanticID, Kind: kind, Stage: sourcecomment.StageEnt, Source: ref}
+}
+
+func testDirective(t *testing.T, target sourcecomment.Target, key string, value any) sourcecomment.Directive {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directive, selected, diagnostic := sourcecomment.ParseLine(sourcecomment.Line{Text: "// @nexa " + key + ": " + string(encoded), CommentPrefix: "//", Location: sourcecomment.Location{File: target.Source.Path(), Line: 1, Column: 1}, Target: &target})
+	if diagnostic != nil || !selected {
+		t.Fatalf("parse %s: selected=%v diagnostic=%#v", key, selected, diagnostic)
+	}
+	return directive
+}
+
+func schemaDirectives(t *testing.T, target sourcecomment.Target, meta sourcecomment.SchemaFacts, operations []sourcecomment.CRUDOperation) []sourcecomment.Directive {
+	values := []struct {
+		key   string
+		value any
+	}{{"label.zh-CN", meta.Label.ZhCN}, {"label.en-US", meta.Label.EnUS}, {"description.zh-CN", meta.Description.ZhCN}, {"description.en-US", meta.Description.EnUS}, {"scope", meta.Scope}}
+	result := make([]sourcecomment.Directive, 0, len(values)+1)
+	for _, value := range values {
+		result = append(result, testDirective(t, target, value.key, value.value))
+	}
+	if len(operations) > 0 {
+		result = append(result, testDirective(t, target, "crud.operations", operations))
+	}
+	return result
+}
+
+func fieldDirectives(t *testing.T, target sourcecomment.Target, meta sourcecomment.FieldFacts) []sourcecomment.Directive {
+	values := []struct {
+		key   string
+		value any
+	}{{"label.zh-CN", meta.Label.ZhCN}, {"label.en-US", meta.Label.EnUS}, {"description.zh-CN", meta.Description.ZhCN}, {"description.en-US", meta.Description.EnUS}, {"ui.control", meta.Control}, {"visibility", meta.Visibility}}
+	result := make([]sourcecomment.Directive, 0, len(values)+2)
+	for _, value := range values {
+		result = append(result, testDirective(t, target, value.key, value.value))
+	}
+	if meta.CRUD != nil {
+		result = append(result, testDirective(t, target, "crud.read", meta.CRUD.Read), testDirective(t, target, "crud.mutation", meta.CRUD.Mutation))
 	}
 	return result
 }
@@ -269,31 +272,29 @@ func testSourceResolver(t *testing.T, schemas ...*load.Schema) sourceResolver {
 	}
 }
 
-func fieldAnnotations(t *testing.T, meta nexaent.FieldMeta) map[string]any {
-	t.Helper()
-	return map[string]any{nexaent.FieldAnnotationName: transportValue(t, nexaent.Field(meta))}
+func testSchemaFacts(prefix string) sourcecomment.SchemaFacts {
+	return sourcecomment.SchemaFacts{Label: sourcecomment.LocalizedText{Key: prefix + ".label", ZhCN: prefix, EnUS: prefix}, Description: sourcecomment.LocalizedText{Key: prefix + ".description", ZhCN: prefix + " desc", EnUS: prefix + " desc"}, Scope: sourcecomment.ScopeTenant}
 }
 
-func testSchemaMeta(prefix string) nexaent.SchemaMeta {
-	return nexaent.SchemaMeta{
-		Label:       nexaent.LocalizedText{Key: prefix + ".label", ZhCN: prefix, EnUS: prefix},
-		Description: nexaent.LocalizedText{Key: prefix + ".description", ZhCN: prefix + " desc", EnUS: prefix + " desc"},
-		Identity:    nexaent.IdentityEntID, Scope: nexaent.ScopeTenant,
-	}
+func testFieldFacts(prefix string) sourcecomment.FieldFacts {
+	return sourcecomment.FieldFacts{Label: sourcecomment.LocalizedText{Key: prefix + ".label", ZhCN: prefix, EnUS: prefix}, Description: sourcecomment.LocalizedText{Key: prefix + ".description", ZhCN: prefix + " desc", EnUS: prefix + " desc"}, Control: sourcecomment.UIControlText, Visibility: sourcecomment.VisibilityPublic, CRUD: &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreateUpdate}}
 }
 
-func testFieldMeta(prefix string) nexaent.FieldMeta {
-	return nexaent.FieldMeta{
-		Label:       nexaent.LocalizedText{Key: prefix + ".label", ZhCN: prefix, EnUS: prefix},
-		Description: nexaent.LocalizedText{Key: prefix + ".description", ZhCN: prefix + " desc", EnUS: prefix + " desc"},
-		UIHint:      nexaent.UIHintText, Visibility: nexaent.VisibilityPublic,
-		CRUD: &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate},
-	}
-}
-
-func immutableFieldMeta(prefix string) nexaent.FieldMeta {
-	meta := testFieldMeta(prefix)
-	meta.UIHint = nexaent.UIHintSelect
-	meta.CRUD.Mutation = nexaent.MutationCreate
+func immutableFieldFacts(prefix string) sourcecomment.FieldFacts {
+	meta := testFieldFacts(prefix)
+	meta.Control = sourcecomment.UIControlSelect
+	meta.CRUD.Mutation = sourcecomment.MutationCreate
 	return meta
+}
+
+func equalOperations(left, right []sourcecomment.CRUDOperation) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

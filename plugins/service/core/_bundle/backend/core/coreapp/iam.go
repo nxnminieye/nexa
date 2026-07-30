@@ -34,9 +34,37 @@ type TenantRole struct {
 	DisplayName     string
 	Status          IAMStatus
 	Managed         bool
+	DefaultRouter   string
 	PermissionCodes []string
 	MenuCodes       []string
 	Version         uint64
+}
+
+type Menu struct {
+	ID             string
+	SourceID       string
+	Code           string
+	ParentCode     string
+	DisplayName    string
+	RouteName      string
+	Path           string
+	Component      string
+	Icon           string
+	SortOrder      int32
+	PermissionCode string
+	KeepAlive      bool
+	Visible        bool
+	Status         IAMStatus
+}
+
+type Permission struct {
+	ID           string
+	SourceID     string
+	ResourceCode string
+	Code         string
+	DisplayName  string
+	Description  string
+	Status       IAMStatus
 }
 
 type PolicyResourceKind string
@@ -72,9 +100,45 @@ func NewIAMService(store IAMStore, hasher PasswordHasher, reconciler PolicyRecon
 	return &IAMService{store: store, hasher: hasher, reconciler: reconciler}, nil
 }
 
+func (s *IAMService) ListIdentityAccounts(ctx context.Context, input ListIdentityAccountsInput) (IdentityAccountPage, error) {
+	const operation = "iam.list-accounts"
+	query, err := normalizeListQuery(operation, input.ListQuery)
+	if err != nil {
+		return IdentityAccountPage{}, err
+	}
+	page, err := s.store.ListIdentityAccounts(ctx, ListIdentityAccountsInput{ListQuery: query})
+	if err != nil {
+		return IdentityAccountPage{}, mapIAMStoreError(operation, err)
+	}
+	for _, account := range page.Items {
+		if account.ID == "" || !validIAMStatus(account.Status) {
+			return IdentityAccountPage{}, coreError(operation, CodeFailedPrecondition, nil)
+		}
+	}
+	page.Items = append([]IdentityAccount(nil), page.Items...)
+	return page, nil
+}
+
+func (s *IAMService) GetIdentityAccount(ctx context.Context, accountID IdentityAccountID) (IdentityAccount, error) {
+	const operation = "iam.get-account"
+	accountID = IdentityAccountID(strings.TrimSpace(string(accountID)))
+	if accountID == "" {
+		return IdentityAccount{}, invalid(operation)
+	}
+	account, err := s.store.GetIdentityAccount(ctx, accountID)
+	if err != nil {
+		return IdentityAccount{}, mapIAMStoreError(operation, err)
+	}
+	if account.ID != accountID || !validIAMStatus(account.Status) {
+		return IdentityAccount{}, coreError(operation, CodeFailedPrecondition, nil)
+	}
+	return account, nil
+}
+
 type ProvisionTenantInput struct {
 	TenantCode     string
 	DisplayName    string
+	DefaultRouter  string
 	OwnerAccountID IdentityAccountID
 	OwnerUsername  string
 	OwnerEmail     string
@@ -88,10 +152,11 @@ func (s *IAMService) ProvisionTenant(ctx context.Context, input ProvisionTenantI
 	}
 	command := ProvisionTenantStoreInput{
 		TenantCode: strings.TrimSpace(input.TenantCode), DisplayName: strings.TrimSpace(input.DisplayName),
+		DefaultRouter:  strings.TrimSpace(input.DefaultRouter),
 		OwnerAccountID: input.OwnerAccountID, OwnerUsername: strings.TrimSpace(input.OwnerUsername),
 		OwnerEmail: strings.TrimSpace(input.OwnerEmail), OwnerName: strings.TrimSpace(input.OwnerName),
 	}
-	if command.TenantCode == "" || command.DisplayName == "" || command.OwnerAccountID == "" {
+	if command.TenantCode == "" || command.DisplayName == "" || !strings.HasPrefix(command.DefaultRouter, "/") || command.OwnerAccountID == "" {
 		return ProvisionTenantResult{}, invalid(operation)
 	}
 	result, err := s.store.ProvisionTenant(ctx, command)
@@ -105,6 +170,70 @@ func (s *IAMService) ProvisionTenant(ctx context.Context, input ProvisionTenantI
 		return ProvisionTenantResult{}, err
 	}
 	return result, nil
+}
+
+func (s *IAMService) ListTenants(ctx context.Context, input ListTenantsInput) (TenantPage, error) {
+	const operation = "iam.list-tenants"
+	query, err := normalizeListQuery(operation, input.ListQuery)
+	if err != nil {
+		return TenantPage{}, err
+	}
+	page, err := s.store.ListTenants(ctx, ListTenantsInput{ListQuery: query})
+	if err != nil {
+		return TenantPage{}, mapIAMStoreError(operation, err)
+	}
+	for _, tenant := range page.Items {
+		if tenant.ID == "" || tenant.Code == "" || !validIAMStatus(tenant.Status) || tenant.Version == 0 {
+			return TenantPage{}, coreError(operation, CodeFailedPrecondition, nil)
+		}
+	}
+	page.Items = append([]Tenant(nil), page.Items...)
+	return page, nil
+}
+
+func (s *IAMService) GetTenant(ctx context.Context, tenantID string) (Tenant, error) {
+	const operation = "iam.get-tenant"
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return Tenant{}, invalid(operation)
+	}
+	tenant, err := s.store.GetTenant(ctx, tenantID)
+	if err != nil {
+		return Tenant{}, mapIAMStoreError(operation, err)
+	}
+	if tenant.ID != tenantID || tenant.Code == "" || !validIAMStatus(tenant.Status) || tenant.Version == 0 {
+		return Tenant{}, coreError(operation, CodeFailedPrecondition, nil)
+	}
+	return tenant, nil
+}
+
+type UpdateTenantInput struct {
+	Actor           SystemActor
+	TenantID        string
+	DisplayName     string
+	ExpectedVersion uint64
+}
+
+func (s *IAMService) UpdateTenant(ctx context.Context, input UpdateTenantInput) (Tenant, error) {
+	const operation = "iam.update-tenant"
+	if !input.Actor.System {
+		return Tenant{}, coreError(operation, CodePermissionDenied, nil)
+	}
+	command := UpdateTenantStoreInput{TenantID: strings.TrimSpace(input.TenantID), DisplayName: strings.TrimSpace(input.DisplayName), ExpectedVersion: input.ExpectedVersion}
+	if command.TenantID == "" || command.DisplayName == "" || command.ExpectedVersion == 0 {
+		return Tenant{}, invalid(operation)
+	}
+	tenant, err := s.store.UpdateTenant(ctx, command)
+	if err != nil {
+		return Tenant{}, mapIAMStoreError(operation, err)
+	}
+	if tenant.ID != command.TenantID || tenant.DisplayName != command.DisplayName || tenant.Version == 0 {
+		return Tenant{}, coreError(operation, CodeFailedPrecondition, nil)
+	}
+	if err := s.reconcile(ctx, operation, PolicyReconcileInput{Kind: PolicyResourceTenant, TenantID: tenant.ID, ResourceID: tenant.ID}); err != nil {
+		return Tenant{}, err
+	}
+	return tenant, nil
 }
 
 type SetTenantStatusInput struct {
@@ -136,24 +265,30 @@ func (s *IAMService) SetTenantStatus(ctx context.Context, input SetTenantStatusI
 	return tenant, nil
 }
 
-func (s *IAMService) ListTenantMembers(ctx context.Context, tenantID string) ([]TenantMember, error) {
+func (s *IAMService) ListTenantMembers(ctx context.Context, input ListTenantMembersInput) (TenantMemberPage, error) {
 	const operation = "iam.list-members"
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		return nil, invalid(operation)
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	query, err := normalizeListQuery(operation, input.ListQuery)
+	if err != nil || input.TenantID == "" {
+		if err != nil {
+			return TenantMemberPage{}, err
+		}
+		return TenantMemberPage{}, invalid(operation)
 	}
-	members, err := s.store.ListTenantMembers(ctx, ListTenantMembersInput{TenantID: tenantID})
+	input.ListQuery = query
+	page, err := s.store.ListTenantMembers(ctx, input)
 	if err != nil {
-		return nil, mapIAMStoreError(operation, err)
+		return TenantMemberPage{}, mapIAMStoreError(operation, err)
 	}
-	result := make([]TenantMember, len(members))
-	for index, member := range members {
-		if member.ID == "" || member.TenantID != tenantID {
-			return nil, coreError(operation, CodeFailedPrecondition, nil)
+	result := make([]TenantMember, len(page.Items))
+	for index, member := range page.Items {
+		if member.ID == "" || member.TenantID != input.TenantID || member.AccountID == "" || member.Version == 0 {
+			return TenantMemberPage{}, coreError(operation, CodeFailedPrecondition, nil)
 		}
 		result[index] = cloneTenantMember(member)
 	}
-	return result, nil
+	page.Items = result
+	return page, nil
 }
 
 func (s *IAMService) GetTenantMember(ctx context.Context, key TenantMemberKey) (TenantMember, error) {
@@ -271,6 +406,48 @@ type ReplaceRoleMenusInput struct {
 	ExpectedVersion uint64
 }
 
+func (s *IAMService) ListTenantRoles(ctx context.Context, input ListTenantRolesInput) (TenantRolePage, error) {
+	const operation = "iam.list-roles"
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	query, err := normalizeListQuery(operation, input.ListQuery)
+	if err != nil || input.TenantID == "" {
+		if err != nil {
+			return TenantRolePage{}, err
+		}
+		return TenantRolePage{}, invalid(operation)
+	}
+	input.ListQuery = query
+	page, err := s.store.ListTenantRoles(ctx, input)
+	if err != nil {
+		return TenantRolePage{}, mapIAMStoreError(operation, err)
+	}
+	result := make([]TenantRole, len(page.Items))
+	for index, role := range page.Items {
+		if role.ID == "" || role.TenantID != input.TenantID || role.Code == "" || role.Version == 0 {
+			return TenantRolePage{}, coreError(operation, CodeFailedPrecondition, nil)
+		}
+		result[index] = cloneTenantRole(role)
+	}
+	page.Items = result
+	return page, nil
+}
+
+func (s *IAMService) GetTenantRole(ctx context.Context, key TenantRoleKey) (TenantRole, error) {
+	const operation = "iam.get-role"
+	key, err := normalizeRoleKey(operation, key)
+	if err != nil {
+		return TenantRole{}, err
+	}
+	role, err := s.store.GetTenantRole(ctx, key)
+	if err != nil {
+		return TenantRole{}, mapIAMStoreError(operation, err)
+	}
+	if role.ID != key.RoleID || role.TenantID != key.TenantID || role.Code == "" || role.Version == 0 {
+		return TenantRole{}, coreError(operation, CodeFailedPrecondition, nil)
+	}
+	return cloneTenantRole(role), nil
+}
+
 func (s *IAMService) CreateTenantRole(ctx context.Context, input CreateTenantRoleInput) (TenantRole, error) {
 	const operation = "iam.create-role"
 	command := CreateTenantRoleStoreInput{TenantID: strings.TrimSpace(input.TenantID), Code: strings.TrimSpace(input.Code), DisplayName: strings.TrimSpace(input.DisplayName)}
@@ -349,6 +526,76 @@ func (s *IAMService) ReplaceRoleMenus(ctx context.Context, input ReplaceRoleMenu
 		return TenantRole{}, mapIAMStoreError(operation, err)
 	}
 	return s.finishRoleMutation(ctx, operation, key.TenantID, role)
+}
+
+func (s *IAMService) ListMenus(ctx context.Context, input ListMenusInput) (MenuPage, error) {
+	const operation = "iam.list-menus"
+	query, err := normalizeListQuery(operation, input.ListQuery)
+	if err != nil {
+		return MenuPage{}, err
+	}
+	page, err := s.store.ListMenus(ctx, ListMenusInput{ListQuery: query})
+	if err != nil {
+		return MenuPage{}, mapIAMStoreError(operation, err)
+	}
+	for _, menu := range page.Items {
+		if menu.Code == "" || !validIAMStatus(menu.Status) {
+			return MenuPage{}, coreError(operation, CodeFailedPrecondition, nil)
+		}
+	}
+	page.Items = append([]Menu(nil), page.Items...)
+	return page, nil
+}
+
+func (s *IAMService) GetMenu(ctx context.Context, code string) (Menu, error) {
+	const operation = "iam.get-menu"
+	code = strings.TrimSpace(code)
+	if !validCode(code) {
+		return Menu{}, invalid(operation)
+	}
+	menu, err := s.store.GetMenu(ctx, code)
+	if err != nil {
+		return Menu{}, mapIAMStoreError(operation, err)
+	}
+	if menu.Code != code || !validIAMStatus(menu.Status) {
+		return Menu{}, coreError(operation, CodeFailedPrecondition, nil)
+	}
+	return menu, nil
+}
+
+func (s *IAMService) ListPermissions(ctx context.Context, input ListPermissionsInput) (PermissionPage, error) {
+	const operation = "iam.list-permissions"
+	query, err := normalizeListQuery(operation, input.ListQuery)
+	if err != nil {
+		return PermissionPage{}, err
+	}
+	page, err := s.store.ListPermissions(ctx, ListPermissionsInput{ListQuery: query})
+	if err != nil {
+		return PermissionPage{}, mapIAMStoreError(operation, err)
+	}
+	for _, permission := range page.Items {
+		if permission.Code == "" || !validIAMStatus(permission.Status) {
+			return PermissionPage{}, coreError(operation, CodeFailedPrecondition, nil)
+		}
+	}
+	page.Items = append([]Permission(nil), page.Items...)
+	return page, nil
+}
+
+func (s *IAMService) GetPermission(ctx context.Context, code string) (Permission, error) {
+	const operation = "iam.get-permission"
+	code = strings.TrimSpace(code)
+	if !validCode(code) {
+		return Permission{}, invalid(operation)
+	}
+	permission, err := s.store.GetPermission(ctx, code)
+	if err != nil {
+		return Permission{}, mapIAMStoreError(operation, err)
+	}
+	if permission.Code != code || !validIAMStatus(permission.Status) {
+		return Permission{}, coreError(operation, CodeFailedPrecondition, nil)
+	}
+	return permission, nil
 }
 
 type SetAccountStatusInput struct {
@@ -488,6 +735,20 @@ func normalizeRoleKey(operation string, key TenantRoleKey) (TenantRoleKey, error
 
 func validIAMStatus(status IAMStatus) bool {
 	return status == IAMStatusEnabled || status == IAMStatusDisabled
+}
+
+func normalizeListQuery(operation string, query ListQuery) (ListQuery, error) {
+	query.Keyword = strings.TrimSpace(query.Keyword)
+	if query.Status != "" && !validIAMStatus(query.Status) {
+		return ListQuery{}, invalid(operation)
+	}
+	if query.Limit == 0 {
+		query.Limit = 50
+	}
+	if query.Limit > 200 {
+		return ListQuery{}, invalid(operation)
+	}
+	return query, nil
 }
 
 func canonicalStrings(values []string) ([]string, error) {

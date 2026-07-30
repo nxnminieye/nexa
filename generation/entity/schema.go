@@ -8,9 +8,9 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-const entitySchemaURL = "https://nexa.dev/schemas/generation/entity/entity-ir-v2.schema.json"
+const entitySchemaURL = "https://nexa.dev/schemas/generation/entity/entity-ir-v3.schema.json"
 
-//go:embed entity-ir-v2.schema.json
+//go:embed entity-ir-v3.schema.json
 var embeddedSchema []byte
 
 func Schema() []byte { return append([]byte(nil), embeddedSchema...) }

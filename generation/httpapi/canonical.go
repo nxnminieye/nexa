@@ -20,11 +20,6 @@ type canonicalValue struct {
 	Key     *canonicalValue `json:"key,omitempty"`
 	Value   *canonicalValue `json:"value,omitempty"`
 }
-type canonicalBinding struct {
-	Location apiLocation `json:"in"`
-	Name     string      `json:"name"`
-}
-type apiLocation = string
 type canonicalOrigin struct {
 	Ref    string `json:"ref"`
 	Digest string `json:"digest"`
@@ -36,42 +31,28 @@ type canonicalTypeNode struct {
 	Shape      canonicalValue `json:"shape"`
 }
 type canonicalFieldNode struct {
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	OwnerType  string            `json:"ownerType"`
-	Path       []string          `json:"path"`
-	Required   bool              `json:"required"`
-	ValueType  canonicalValue    `json:"valueType"`
-	Binding    *canonicalBinding `json:"binding,omitempty"`
-	Origin     *canonicalOrigin  `json:"origin,omitempty"`
-}
-type canonicalCredential struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Location string `json:"in"`
-	Name     string `json:"name"`
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	OwnerType  string           `json:"ownerType"`
+	Path       []string         `json:"path"`
+	Required   bool             `json:"required"`
+	ValueType  canonicalValue   `json:"valueType"`
+	Transport  string           `json:"transport,omitempty"`
+	Origin     *canonicalOrigin `json:"origin,omitempty"`
 }
 type canonicalAuth struct {
-	Mode        string                `json:"mode"`
-	Credentials []canonicalCredential `json:"credentials"`
-}
-type canonicalCapability struct {
-	ID         string `json:"id"`
-	APIVersion string `json:"apiVersion"`
+	Mode string `json:"mode"`
 }
 type canonicalRouteNode struct {
-	APIVersion       string               `json:"apiVersion"`
-	Kind             string               `json:"kind"`
-	OperationID      string               `json:"operationId"`
-	Method           string               `json:"method"`
-	Path             string               `json:"path"`
-	RequestType      string               `json:"requestType"`
-	ResponseBody     string               `json:"responseBody"`
-	ResponseType     string               `json:"responseType,omitempty"`
-	Auth             canonicalAuth        `json:"auth"`
-	Permission       string               `json:"permission"`
-	Capability       *canonicalCapability `json:"capability,omitempty"`
-	ErrorProjections []any                `json:"errorProjections"`
+	APIVersion   string        `json:"apiVersion"`
+	Kind         string        `json:"kind"`
+	OperationID  string        `json:"operationId"`
+	Method       string        `json:"method"`
+	Path         string        `json:"path"`
+	RequestType  string        `json:"requestType,omitempty"`
+	ResponseType string        `json:"responseType,omitempty"`
+	Auth         canonicalAuth `json:"auth"`
+	Permission   string        `json:"permission"`
 }
 
 func canonicalize(value any) ([]byte, error) {

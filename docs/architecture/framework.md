@@ -28,9 +28,9 @@ optional runtime package --------------------------------> consumer runtime
 
 领域事实尽量留在最近 owner：
 
-- Ent schema 使用 `nexaent` typed annotations 表达 schema、field、CRUD 和 tenant scope；
-- Proto 拥有 RPC/message/method 及其 typed transport metadata；
-- `.api` 拥有 native HTTP route/type/field；
+- Ent schema 用原生语法表达结构，并用严格 `@nexa` directive 补充 schema、field、CRUD 和 tenant scope；
+- Proto 拥有 RPC/message/method，并只用严格 `@nexa` directive 补充需要投影为 HTTP 的事实；
+- `.api` 拥有 native HTTP route/type/field，并用同一 Source Comment registry 补充 auth/permission；
 - Service Catalog 只表达服务拓扑和 service-to-capability binding；
 - manifest 和 source lock 没有人工 authoring surface，由 owner package 从当前输入重建。
 
@@ -39,9 +39,9 @@ projection。具体 ownership 见[业务事实](../contracts/business-facts.md)�
 
 ## IR 与 generation
 
-当前 official generation 把 typed RPC/API owner facts 投影为 Protocol、HTTP API 和 Composition IR，再通过
-受信任 direct tool 形成普通源码。Project provider 只定位 consumer 入口、声明 generated/extensions scopes
-并绑定工具，不复制业务事实。
+当前 official generation 把 typed RPC/API/PageSpec owner facts 投影为 Protocol、HTTP API、Composition IR 和
+FrontendIR，再通过受信任 direct tool 形成普通源码。Project provider 只定位 consumer 入口、声明
+generated/extensions scopes 并绑定工具，不复制业务事实。
 
 直接生成、replace-tree、generated/extensions 路径隔离与失败语义由
 [受控生成](../contracts/controlled-generation.md)统一说明。架构层不维护命令或 flag 清单。

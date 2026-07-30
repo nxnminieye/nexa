@@ -16,7 +16,6 @@ import (
 	"github.com/nxnminieye/nexa/nexactl/plugin"
 	"github.com/nxnminieye/nexa/plugins/nexactl/generation"
 	"github.com/nxnminieye/nexa/plugins/nexactl/governance"
-	sdkpythonplugin "github.com/nxnminieye/nexa/plugins/nexactl/sdkpython"
 	sourceadapter "github.com/nxnminieye/nexa/plugins/nexactl/source"
 	core "github.com/nxnminieye/nexa/plugins/service/core"
 	"github.com/nxnminieye/nexa/sourceplugin"
@@ -53,10 +52,6 @@ func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourc
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
-	sdkPythonPlugin, err := sdkpythonplugin.New(sdkpythonplugin.Options{})
-	if err != nil {
-		return writeBootstrapFailure(args, stdout, stderr)
-	}
 	if sourceFactory == nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
@@ -65,7 +60,7 @@ func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourc
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
 	defer cleanup()
-	composed, err := host.New(host.Options{Version: version}, governancePlugin, generationPlugin, sdkPythonPlugin, sourcePlugin)
+	composed, err := host.New(host.Options{Version: version}, governancePlugin, generationPlugin, sourcePlugin)
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}

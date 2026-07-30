@@ -1,4 +1,4 @@
-package qualityapp_test
+package qualityapp
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"example.com/quality-runtime/backend/quality/qualityapp"
 	"github.com/nxnminieye/nexa/provenance"
 	"github.com/nxnminieye/nexa/quality/readmodel"
 )
@@ -22,7 +21,7 @@ func (s projectionSource) Load(context.Context) (readmodel.Snapshot, error) {
 }
 
 func TestNilSourceReturnsCanonicalEmptyAndHealthy(t *testing.T) {
-	server, err := qualityapp.NewServer(nil)
+	server, err := NewServer(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +51,7 @@ func TestConfiguredSourceIsImmutableAndConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := qualityapp.NewServer(projectionSource{snapshot: snapshot})
+	server, err := NewServer(projectionSource{snapshot: snapshot})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,23 +80,23 @@ func TestConfiguredSourceIsImmutableAndConcurrent(t *testing.T) {
 
 func TestSourceErrorAndCancellationAreStable(t *testing.T) {
 	secret := errors.New("private source detail")
-	server, err := qualityapp.NewServer(projectionSource{err: secret})
+	server, err := NewServer(projectionSource{err: secret})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = server.Snapshot(context.Background())
-	var projected *qualityapp.Error
-	if !errors.As(err, &projected) || projected.Code() != qualityapp.CodeProjectionUnavailable || errors.Is(err, secret) || bytes.Contains([]byte(err.Error()), []byte("private")) {
+	var projected *Error
+	if !errors.As(err, &projected) || projected.Code() != CodeProjectionUnavailable || errors.Is(err, secret) || bytes.Contains([]byte(err.Error()), []byte("private")) {
 		t.Fatalf("source error = %#v", err)
 	}
-	if health := server.Health(context.Background()); health.Ready() || health.Code() != qualityapp.CodeProjectionUnavailable {
+	if health := server.Health(context.Background()); health.Ready() || health.Code() != CodeProjectionUnavailable {
 		t.Fatalf("health = %#v", health)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = server.Snapshot(ctx)
-	if !errors.As(err, &projected) || projected.Code() != qualityapp.CodeOperationCanceled {
+	if !errors.As(err, &projected) || projected.Code() != CodeOperationCanceled {
 		t.Fatalf("cancellation = %#v", err)
 	}
 }

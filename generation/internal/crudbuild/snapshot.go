@@ -42,7 +42,7 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 	importSet := make(map[string]struct{}, len(state.imports))
 	for importIndex, value := range state.imports {
 		switch value {
-		case "google/protobuf/field_mask.proto", "google/protobuf/struct.proto", "google/protobuf/timestamp.proto", "nexa/protocol/v1/options.proto":
+		case "google/protobuf/field_mask.proto", "google/protobuf/struct.proto", "google/protobuf/timestamp.proto":
 			importSet[value] = struct{}{}
 		default:
 			return Snapshot{}, lockError("document_invalid", "/imports/"+itoa(importIndex), source.String())
@@ -176,9 +176,6 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 			if fieldWire.Repeated && fieldWire.Optional {
 				return Snapshot{}, lockError("wire_type_invalid", fieldPointer+"/optional", source.String())
 			}
-			if fieldWire.TenantContext && (!fieldWire.Internal || fieldWire.Type != "int64" || fieldWire.Name != "tenant_id" || fieldWire.Repeated || fieldWire.Optional) {
-				return Snapshot{}, lockError("wire_type_invalid", fieldPointer+"/tenantContext", source.String())
-			}
 			if _, duplicate := seenFieldIDs[fieldWire.ID]; duplicate {
 				return Snapshot{}, lockError("history_duplicate", fieldPointer+"/id", source.String())
 			}
@@ -215,12 +212,11 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 				return Snapshot{}, lockError("source_digest_invalid", fieldPointer+"/source", source.String())
 			}
 			usedSources[ref.String()] = fieldSource
-			message.fields = append(message.fields, &fieldState{id: fieldWire.ID, name: fieldWire.Name, number: fieldWire.Number, wireType: fieldWire.Type, repeated: fieldWire.Repeated, optional: fieldWire.Optional, internal: fieldWire.Internal, tenantContext: fieldWire.TenantContext, source: fieldSource})
+			message.fields = append(message.fields, &fieldState{id: fieldWire.ID, name: fieldWire.Name, number: fieldWire.Number, wireType: fieldWire.Type, repeated: fieldWire.Repeated, optional: fieldWire.Optional, source: fieldSource})
 		}
 		state.messages = append(state.messages, message)
 	}
 	seenServiceIDs, seenServiceNames := map[string]struct{}{}, map[string]struct{}{}
-	usedTenantContextFields := map[string]struct{}{}
 	for serviceIndex, serviceWire := range wire.Services {
 		if serviceIndex > 0 && serviceWire.Name <= wire.Services[serviceIndex-1].Name {
 			return Snapshot{}, lockError("canonical_order_invalid", "/services/"+itoa(serviceIndex), source.String())
@@ -260,52 +256,9 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 			if _, ok := seenMessageNames[methodWire.Output]; !ok {
 				return Snapshot{}, lockError("document_invalid", methodPointer+"/output", source.String())
 			}
-			context := &rpcContextState{contextFields: []*contextBindingState{}}
-			for bindingIndex, binding := range methodWire.RPCContext.ContextFields {
-				bindingPointer := methodPointer + "/rpcContext/contextFields/" + itoa(bindingIndex)
-				if _, ok := importSet["nexa/protocol/v1/options.proto"]; !ok {
-					return Snapshot{}, lockError("document_invalid", bindingPointer, source.String())
-				}
-				if binding.Source != string(ContextTenantID) || binding.RPCField != "tenant_id" || len(context.contextFields) != 0 {
-					return Snapshot{}, lockError("document_invalid", bindingPointer, source.String())
-				}
-				request := stateMessageByName(state, methodWire.Input)
-				if request == nil || !hasTenantContextField(request, binding.RPCField) {
-					return Snapshot{}, lockError("document_invalid", bindingPointer+"/rpcField", source.String())
-				}
-				usedTenantContextFields[methodWire.Input+"\x00"+binding.RPCField] = struct{}{}
-				context.contextFields = append(context.contextFields, &contextBindingState{source: ContextTenantID, rpcField: binding.RPCField})
-			}
-			service.methods = append(service.methods, &methodState{id: methodWire.ID, name: methodWire.Name, input: methodWire.Input, output: methodWire.Output, rpcContext: context})
+			service.methods = append(service.methods, &methodState{id: methodWire.ID, name: methodWire.Name, input: methodWire.Input, output: methodWire.Output})
 		}
 		state.services = append(state.services, service)
-	}
-	tenantSet := make(map[string]struct{}, len(state.tenantEntityIDs))
-	for _, id := range state.tenantEntityIDs {
-		tenantSet[id] = struct{}{}
-	}
-	for serviceIndex, service := range state.services {
-		entityID := service.id
-		if suffix := "/service:crud"; len(entityID) > len(suffix) && entityID[len(entityID)-len(suffix):] == suffix {
-			entityID = entityID[:len(entityID)-len(suffix)]
-		}
-		_, tenant := tenantSet[entityID]
-		for methodIndex, method := range service.methods {
-			hasContext := method.rpcContext != nil && len(method.rpcContext.contextFields) != 0
-			if tenant != hasContext {
-				return Snapshot{}, lockError("document_invalid", "/services/"+itoa(serviceIndex)+"/methods/"+itoa(methodIndex)+"/rpcContext", source.String())
-			}
-		}
-	}
-	for messageIndex, message := range state.messages {
-		for fieldIndex, field := range message.fields {
-			if !field.tenantContext {
-				continue
-			}
-			if _, used := usedTenantContextFields[message.name+"\x00"+field.name]; !used {
-				return Snapshot{}, lockError("document_invalid", "/messages/"+itoa(messageIndex)+"/fields/"+itoa(fieldIndex)+"/tenantContext", source.String())
-			}
-		}
 	}
 	if len(usedSources) != len(sourceSet) {
 		return Snapshot{}, lockError("source_digest_invalid", "/sources", source.String())
@@ -319,24 +272,6 @@ func ParseSnapshot(source provenance.DomainSource, data []byte) (Snapshot, error
 	}
 	state.canonical = append([]byte(nil), canonical...)
 	return Snapshot{state: &snapshotState{document: state, canonical: canonical}}, nil
-}
-
-func stateMessageByName(state *documentState, name string) *messageState {
-	for _, message := range state.messages {
-		if message.name == name {
-			return message
-		}
-	}
-	return nil
-}
-
-func hasTenantContextField(message *messageState, name string) bool {
-	for _, field := range message.fields {
-		if field.name == name && field.tenantContext && field.internal && field.wireType == "int64" {
-			return true
-		}
-	}
-	return false
 }
 
 func importForType(value string) string {

@@ -98,7 +98,13 @@ func (e *Engine) executeLifecycle(ctx context.Context, request PlanRequest, writ
 		return Result{}, err
 	}
 	defer prepared.cleanup()
-	if recipes := closure.Validations(); len(recipes) > 0 {
+	recipes := closure.Validations()
+	if len(recipes) > 0 || len(closure.GoModuleRequirements()) > 0 {
+		if err := prepareValidationModuleContext(root, request.Selection, closure, &prepared); err != nil {
+			return Result{}, err
+		}
+	}
+	if len(recipes) > 0 {
 		if e.executor == nil {
 			return Result{}, validationError(ErrInput, "source_validation_invalid", "executor_required", "/executor")
 		}

@@ -10,35 +10,154 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nxnminieye/nexa/generation/composition"
+	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/generation/toolchain"
 	"github.com/nxnminieye/nexa/nexactl/plugin"
 	"github.com/nxnminieye/nexa/plugins/nexactl/generation"
+	"github.com/nxnminieye/nexa/provenance"
 )
 
-func TestNewExposesOnlyDirectRPCAndAPIGeneration(t *testing.T) {
+func TestNewExposesDirectRPCAPIAndFrontendGeneration(t *testing.T) {
 	provider := testProvider{descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{
 		{Role: generation.ToolRoleRPCGo, Tool: delegated("consumer.rpc")},
 		{Role: generation.ToolRoleAPIGo, Tool: delegated("consumer.api")},
+		{Role: generation.ToolRoleFrontendRender, Tool: frontendDelegated("consumer.frontend")},
 	}}}
 	candidate, err := generation.New(generation.Options{Providers: []generation.ProjectProvider{provider}, Runner: &testRunner{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec := candidate.Spec()
-	if !reflect.DeepEqual(spec.Descriptor.Provides, []plugin.Capability{{ID: "generation.rpc", Version: "v1.0.0"}, {ID: "generation.api", Version: "v1.0.0"}}) {
+	if !reflect.DeepEqual(spec.Descriptor.Provides, []plugin.Capability{{ID: "generation.rpc", Version: "v1.0.0"}, {ID: "generation.api", Version: "v1.0.0"}, {ID: "generation.frontend", Version: "v1.0.0"}}) {
 		t.Fatalf("capabilities = %#v", spec.Descriptor.Provides)
 	}
 	paths := make([]string, len(spec.Commands))
 	for index, command := range spec.Commands {
 		paths[index] = strings.Join(command.Path, " ")
-		if command.SideEffect != plugin.SideEffectRepositoryWrite || len(command.Flags) != 4 || len(command.DelegatedTools) != 1 {
+		wantFlags := 4
+		if command.Path[1] == "frontend" {
+			wantFlags = 3
+		}
+		if command.SideEffect != plugin.SideEffectRepositoryWrite || len(command.Flags) != wantFlags || len(command.DelegatedTools) != 1 {
 			t.Fatalf("command = %#v", command)
 		}
 	}
-	if !reflect.DeepEqual(paths, []string{"generation rpc generate", "generation api generate"}) {
+	if !reflect.DeepEqual(paths, []string{"generation rpc generate", "generation api generate", "generation frontend generate"}) {
 		t.Fatalf("commands = %#v", paths)
+	}
+}
+
+func TestFrontendGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T) {
+	repository := t.TempDir()
+	mustWrite(t, filepath.Join(repository, "generated/frontend/stale.ts"), []byte("stale"))
+	extension := []byte("export const manual = true;\n")
+	mustWrite(t, filepath.Join(repository, "extensions/frontend/manual.ts"), extension)
+	document := frontendDocument(t, repository)
+	tool := directTool("consumer.frontend")
+	lockDigest := provenance.SHA256([]byte("frontend source lock"))
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleFrontendRender, Tool: frontendDelegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", Frontend: &generation.FrontendProject{
+			Facts: document, Tool: tool, GeneratedScope: "generated/frontend", ExtensionScopes: []string{"extensions/frontend"}, FrontendSourceLockDigest: lockDigest,
+		}}}},
+	}
+	runner := &testRunner{}
+	command := generationCommand(t, provider, runner, "frontend")
+	result, err := command.Run(context.Background(), frontendInvocation(repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(repository, "generated/frontend"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty frontend tree = %#v, %v", entries, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(repository, "extensions/frontend/manual.ts")); err != nil || !reflect.DeepEqual(data, extension) {
+		t.Fatalf("extension changed: %q %v", data, err)
+	}
+	wantArgs := []string{"render", "--service", "sample", "--generated-scope", "generated/frontend"}
+	if !reflect.DeepEqual(runner.request.Args, wantArgs) {
+		t.Fatalf("delegated args = %#v, want %#v", runner.request.Args, wantArgs)
+	}
+	wantStdin, err := genfrontend.CanonicalRenderRequest(genfrontend.RenderRequest{
+		FrontendIR: document, RepositoryRoot: runner.request.RepositoryRoot, GeneratedScope: "generated/frontend",
+		ExtensionScopes: []string{"extensions/frontend"}, FrontendSourceLockDigest: lockDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runner.request.Stdin, wantStdin) {
+		t.Fatal("delegated frontend stdin is not canonical FrontendRenderRequest")
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || !strings.Contains(string(encoded), `"userLogic":[]`) {
+		t.Fatalf("frontend result = %s, %v", encoded, err)
+	}
+}
+
+func TestFrontendGenerationRejectsNonEmptyOutputForEmptyPageSet(t *testing.T) {
+	repository := t.TempDir()
+	document := frontendDocument(t, repository)
+	tool := directTool("consumer.frontend")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleFrontendRender, Tool: frontendDelegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", Frontend: &generation.FrontendProject{
+			Facts: document, Tool: tool, GeneratedScope: "generated/frontend", FrontendSourceLockDigest: provenance.SHA256([]byte("lock")),
+		}}}},
+	}
+	runner := &testRunner{writePath: "generated/frontend/unexpected.ts", writeData: []byte("unexpected")}
+	command := generationCommand(t, provider, runner, "frontend")
+	if _, err := command.Run(context.Background(), frontendInvocation(repository)); err == nil {
+		t.Fatal("non-empty output accepted for empty page set")
+	}
+	if data, err := os.ReadFile(filepath.Join(repository, "generated/frontend/unexpected.ts")); err != nil || string(data) != "unexpected" {
+		t.Fatalf("partial output was not preserved: %q, %v", data, err)
+	}
+}
+
+func TestFrontendGenerationValidatesRequestBeforeReplacingTree(t *testing.T) {
+	repository := t.TempDir()
+	stale := filepath.Join(repository, "generated/frontend/stale.ts")
+	mustWrite(t, stale, []byte("stale"))
+	document := frontendDocument(t, repository)
+	tool := directTool("consumer.frontend")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleFrontendRender, Tool: frontendDelegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", Frontend: &generation.FrontendProject{
+			Facts: document, Tool: tool, GeneratedScope: "generated/frontend/../frontend", FrontendSourceLockDigest: provenance.SHA256([]byte("lock")),
+		}}}},
+	}
+	command := generationCommand(t, provider, &testRunner{}, "frontend")
+	if _, err := command.Run(context.Background(), frontendInvocation(repository)); err == nil {
+		t.Fatal("non-canonical generated scope accepted")
+	}
+	if data, err := os.ReadFile(stale); err != nil || string(data) != "stale" {
+		t.Fatalf("tree changed before request validation: %q, %v", data, err)
+	}
+}
+
+func TestFrontendProviderRequiresExactDelegatedMetadata(t *testing.T) {
+	_, err := generation.New(generation.Options{Providers: []generation.ProjectProvider{testProvider{descriptor: generation.ProviderDescriptor{
+		ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleFrontendRender, Tool: delegated("consumer.frontend")}},
+	}}}})
+	if err == nil {
+		t.Fatal("frontend delegated tool with generic metadata accepted")
+	}
+}
+
+func TestAPIProviderRequiresExactDelegatedMetadata(t *testing.T) {
+	provider := testProvider{descriptor: generation.ProviderDescriptor{
+		ID:      "consumer",
+		Version: "v1.0.0",
+		Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: plugin.DelegatedToolSpec{
+			ID: "consumer.api", Version: "v1.0.0", Inputs: []string{"typed-facts", "repository"}, Writes: []string{"repository"},
+		}}},
+	}}
+	_, err := generation.New(generation.Options{Providers: []generation.ProjectProvider{provider}})
+	if err == nil {
+		t.Fatal("API delegated tool with serialized typed-facts metadata accepted")
 	}
 }
 
@@ -100,11 +219,11 @@ func TestDirectRPCGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T
 func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	repository := t.TempDir()
 	tool := directTool("consumer.api")
-	document := apiDocument(t, repository)
+	apiDocument(t, repository)
 	provider := testProvider{
 		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
 		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
-			Facts: document, Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
 		}}}},
 	}
 	runner := &testRunner{writePath: "generated/api/sample.go", writeData: []byte("package apigenerated\n")}
@@ -112,16 +231,59 @@ func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	if _, err := command.Run(context.Background(), invocation(repository)); err != nil {
 		t.Fatal(err)
 	}
-	wantArgs := []string{"generate", "--service", "sample", "--generated-scope", "generated/api"}
+	wantArgs := []string{"generate", "--service", "sample", "--entry-file", "sample.api", "--generated-scope", "generated/api"}
 	if !reflect.DeepEqual(runner.request.Args, wantArgs) {
 		t.Fatalf("delegated args = %#v, want %#v", runner.request.Args, wantArgs)
 	}
-	wantStdin, err := httpapi.CanonicalJSON(document)
-	if err != nil {
+	if len(runner.request.Stdin) != 0 {
+		t.Fatal("delegated API received serialized HTTP API facts")
+	}
+}
+
+func TestDirectAPIGenerationRejectsInvalidSourceBeforeReplacingTree(t *testing.T) {
+	repository := t.TempDir()
+	stale := filepath.Join(repository, "generated/api/stale.go")
+	mustWrite(t, stale, []byte("stale"))
+	apiDocument(t, repository)
+	mustWrite(t, filepath.Join(repository, "sample.api"), []byte("syntax = \"v1\"\ntype Broken {\n"))
+	tool := directTool("consumer.api")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api",
+		}}}},
+	}
+	command := generationCommand(t, provider, &testRunner{}, "api")
+	if _, err := command.Run(context.Background(), invocation(repository)); err == nil {
+		t.Fatal("invalid API source accepted")
+	}
+	if data, err := os.ReadFile(stale); err != nil || string(data) != "stale" {
+		t.Fatalf("tree changed before API source validation: %q, %v", data, err)
+	}
+}
+
+func TestDirectAPIGenerationRejectsSourceSymlinkBeforeReplacingTree(t *testing.T) {
+	repository := t.TempDir()
+	stale := filepath.Join(repository, "generated/api/stale.go")
+	mustWrite(t, stale, []byte("stale"))
+	target := filepath.Join(t.TempDir(), "sample.api")
+	apiDocument(t, filepath.Dir(target))
+	if err := os.Symlink(target, filepath.Join(repository, "sample.api")); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(runner.request.Stdin, wantStdin) {
-		t.Fatal("delegated API stdin is not canonical HTTP API IR")
+	tool := directTool("consumer.api")
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api",
+		}}}},
+	}
+	command := generationCommand(t, provider, &testRunner{}, "api")
+	if _, err := command.Run(context.Background(), invocation(repository)); err == nil {
+		t.Fatal("API source symlink accepted")
+	}
+	if data, err := os.ReadFile(stale); err != nil || string(data) != "stale" {
+		t.Fatalf("tree changed before API source symlink validation: %q, %v", data, err)
 	}
 }
 
@@ -210,6 +372,10 @@ func invocation(repository string) plugin.Invocation {
 	return plugin.Invocation{Flags: map[string]any{"repo-root": repository, "provider": "consumer", "service": "sample", "overwrite-logic": false}}
 }
 
+func frontendInvocation(repository string) plugin.Invocation {
+	return plugin.Invocation{Flags: map[string]any{"repo-root": repository, "provider": "consumer", "service": "sample"}}
+}
+
 type testProvider struct {
 	descriptor generation.ProviderDescriptor
 	project    generation.Project
@@ -238,7 +404,15 @@ func (r *testRunner) Run(_ context.Context, request toolchain.Request) (toolchai
 }
 
 func delegated(id string) plugin.DelegatedToolSpec {
-	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: []string{"typed-facts", "repository"}, Writes: []string{"repository"}}
+	inputs := []string{"typed-facts", "repository"}
+	if strings.HasSuffix(id, ".api") {
+		inputs = []string{generation.APISourceInput, "repository"}
+	}
+	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: inputs, Writes: []string{"repository"}}
+}
+
+func frontendDelegated(id string) plugin.DelegatedToolSpec {
+	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: []string{"nexa.dev/frontend-renderer/v1", "frontend-ir", "repository"}, Writes: []string{"repository"}}
 }
 
 func directTool(id string) toolchain.Tool {
@@ -262,8 +436,21 @@ func rpcDocument(t *testing.T) genprotocol.Document {
 
 func apiDocument(t *testing.T, repository string) httpapi.Document {
 	t.Helper()
-	mustWrite(t, filepath.Join(repository, "sample.api"), []byte("syntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-api/v1\")\ntype Request {}\ntype Response { OK bool }\n@server (nexaOperationId: \"sample.get\" nexaAuthMode: \"none\")\nservice sample-api { @handler sample get /sample (Request) returns (Response) }\n"))
+	mustWrite(t, filepath.Join(repository, "sample.api"), []byte("// @nexa $contract: \"nexa.dev/source-comment/v1\"\nsyntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-convention/v1\")\ntype Request {}\ntype Response { OK bool }\nservice sample-api {\n  // @nexa auth: \"none\"\n  @handler Sample\n  get /sample (Request) returns (Response)\n}\n"))
 	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: "sample.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func frontendDocument(t *testing.T, repository string) genfrontend.Document {
+	t.Helper()
+	closure, err := composition.FrontendClosure(apiDocument(t, repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := genfrontend.Build(closure, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

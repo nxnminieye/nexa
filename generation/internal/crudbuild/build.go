@@ -8,7 +8,7 @@ import (
 	"unicode"
 
 	"github.com/nxnminieye/nexa/generation/entity"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -21,17 +21,18 @@ var (
 )
 
 type desiredField struct {
-	id, name, wireType      string
-	preferred               int32
-	repeated, optional      bool
-	internal, tenantContext bool
-	source                  provenance.Source
+	id, name, wireType string
+	preferred          int32
+	repeated, optional bool
+	source             provenance.Source
+	firstSource        sourcecomment.SourceRef
 }
 
 type desiredMessage struct {
-	schemaID string
-	id, name string
-	fields   []desiredField
+	schemaID    string
+	id, name    string
+	firstSource sourcecomment.SourceRef
+	fields      []desiredField
 }
 
 type desiredEntity struct {
@@ -66,7 +67,7 @@ func Build(entities entity.Document, spec Spec) (Document, LockProposal, error) 
 	desired := make([]desiredEntity, 0)
 	tenantEntityIDs := []string{}
 	for entityIndex, item := range entities.Entities() {
-		tenantField, hasTenantField := entityTenantField(item)
+		hasTenantField := entityHasTenantField(item)
 		if hasTenantField && !spec.MultiTenant.Enabled {
 			return Document{}, LockProposal{}, buildError("multi_tenant_disabled", "/entities/"+itoa(entityIndex)+"/fields")
 		}
@@ -77,7 +78,7 @@ func Build(entities entity.Document, spec Spec) (Document, LockProposal, error) 
 		if !optedIn {
 			continue
 		}
-		built, err := buildEntity(item, crud, entityIndex, spec.MultiTenant.Enabled, tenantField, hasTenantField)
+		built, err := buildEntity(item, crud, entityIndex)
 		if err != nil {
 			return Document{}, LockProposal{}, err
 		}
@@ -143,7 +144,7 @@ func Build(entities entity.Document, spec Spec) (Document, LockProposal, error) 
 			if err != nil {
 				return Document{}, LockProposal{}, err
 			}
-			documentState.messages = append(documentState.messages, &messageState{id: message.id, name: message.name, fields: fields, reservedNames: append([]string(nil), lockMessage.reservedNames...), reservedNumbers: append([]int32(nil), lockMessage.reservedNumbers...)})
+			documentState.messages = append(documentState.messages, &messageState{id: message.id, name: message.name, firstSource: message.firstSource, fields: fields, reservedNames: append([]string(nil), lockMessage.reservedNames...), reservedNumbers: append([]int32(nil), lockMessage.reservedNumbers...)})
 			for _, field := range fields {
 				sourceSet[field.source.Ref.String()] = field.source
 			}
@@ -165,10 +166,6 @@ func Build(entities entity.Document, spec Spec) (Document, LockProposal, error) 
 		return documentState.sources[i].Ref.String() < documentState.sources[j].Ref.String()
 	})
 	documentState.imports = importsFor(documentState.messages)
-	if servicesUseRPCContext(documentState.services) {
-		documentState.imports = append(documentState.imports, "nexa/protocol/v1/options.proto")
-		sort.Strings(documentState.imports)
-	}
 	if err := validateProtocolSymbols(documentState); err != nil {
 		return Document{}, LockProposal{}, err
 	}
@@ -183,17 +180,6 @@ func Build(entities entity.Document, spec Spec) (Document, LockProposal, error) 
 	changed := before == nil || !bytes.Equal(before.canonical, afterLock.state.canonical)
 	proposal := &lockProposalState{before: before, after: afterLock.state, digest: provenance.SHA256(afterLock.state.canonical), changed: changed}
 	return document, LockProposal{state: proposal}, nil
-}
-
-func servicesUseRPCContext(services []*serviceState) bool {
-	for _, service := range services {
-		for _, method := range service.methods {
-			if method.rpcContext != nil && len(method.rpcContext.contextFields) != 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func validateProtocolSymbols(state *documentState) error {
@@ -266,7 +252,11 @@ func validateProtocolSymbols(state *documentState) error {
 	return nil
 }
 
-func buildEntity(item entity.Entity, crud nexaent.CRUDSpec, entityIndex int, multiTenantEnabled bool, tenantField entity.Field, hasTenantField bool) (desiredEntity, error) {
+func buildEntity(item entity.Entity, crud sourcecomment.CRUDOperations, entityIndex int) (desiredEntity, error) {
+	schemaSource, err := sourceCommentSource(item.Source(), item.Name())
+	if err != nil {
+		return desiredEntity{}, buildError("document_state_invalid", "/entities/"+itoa(entityIndex)+"/source")
+	}
 	identity := item.Identity()
 	if !supportedIdentity(identity.Type()) {
 		return desiredEntity{}, buildError("identity_type_unsupported", "/entities/"+itoa(entityIndex)+"/identity/type")
@@ -276,13 +266,17 @@ func buildEntity(item entity.Entity, crud nexaent.CRUDSpec, entityIndex int, mul
 		return desiredEntity{}, buildError("crud_operation_invalid", "/entities/"+itoa(entityIndex)+"/crud/operations")
 	}
 	entityResult := desiredEntity{schemaID: item.ID(), enums: []*enumState{}}
-	identityField := desiredField{id: item.ID() + "/identity:" + identity.Name(), name: identity.Name(), wireType: identityWireType(identity.Type()), preferred: 1, source: identity.Source()}
+	identityField := desiredField{id: item.ID() + "/identity:" + identity.Name(), name: identity.Name(), wireType: identityWireType(identity.Type()), preferred: 1, source: identity.Source(), firstSource: schemaSource}
 	itemFields := []desiredField{identityField}
 	if identity.Kind() == entity.IdentityField {
 		itemFields = nil
 		for _, field := range item.Fields() {
 			if field.IsIdentity() && field.Name() == identity.Name() && field.Type() == identity.Type() {
-				identityField.id, identityField.source = field.ID(), field.Source()
+				fieldSource, sourceErr := sourceCommentSource(field.Source(), item.Name()+"."+field.Name())
+				if sourceErr != nil {
+					return desiredEntity{}, buildError("document_state_invalid", "/entities/"+itoa(entityIndex)+"/identity")
+				}
+				identityField.id, identityField.source, identityField.firstSource = field.ID(), field.Source(), fieldSource
 				break
 			}
 		}
@@ -306,35 +300,39 @@ func buildEntity(item entity.Entity, crud nexaent.CRUDSpec, entityIndex int, mul
 		if meta.CRUD == nil {
 			return desiredEntity{}, buildError("read_policy_conflict", "/entities/"+itoa(entityIndex)+"/fields/"+itoa(fieldIndex)+"/fieldMeta/crud")
 		}
-		projection := desiredField{id: field.ID(), name: field.Name(), wireType: wireType, optional: field.Nillable(), source: field.Source()}
+		fieldSource, sourceErr := sourceCommentSource(field.Source(), item.Name()+"."+field.Name())
+		if sourceErr != nil {
+			return desiredEntity{}, buildError("document_state_invalid", "/entities/"+itoa(entityIndex)+"/fields/"+itoa(fieldIndex)+"/source")
+		}
+		projection := desiredField{id: field.ID(), name: field.Name(), wireType: wireType, optional: field.Nillable(), source: field.Source(), firstSource: fieldSource}
 		if field.IsIdentity() {
-			if identity.Kind() != entity.IdentityField || field.ID() != identityField.id || meta.CRUD.Read != nexaent.ReadInclude {
+			if identity.Kind() != entity.IdentityField || field.ID() != identityField.id || meta.CRUD.Read != sourcecomment.ReadInclude {
 				return desiredEntity{}, buildError("read_policy_conflict", "/entities/"+itoa(entityIndex)+"/fields/"+itoa(fieldIndex)+"/fieldMeta/crud/read")
 			}
-			if meta.CRUD.Mutation != nexaent.MutationNone {
+			if meta.CRUD.Mutation != sourcecomment.MutationNone {
 				return desiredEntity{}, buildError("mutation_policy_conflict", "/entities/"+itoa(entityIndex)+"/fields/"+itoa(fieldIndex)+"/fieldMeta/crud/mutation")
 			}
 			identityField.wireType = wireType
 			itemFields = append(itemFields, identityField)
 			continue
 		}
-		if meta.CRUD.Read == nexaent.ReadInclude {
+		if meta.CRUD.Read == sourcecomment.ReadInclude {
 			if field.Sensitive() {
 				return desiredEntity{}, buildError("read_policy_conflict", "/entities/"+itoa(entityIndex)+"/fields/"+itoa(fieldIndex)+"/fieldMeta/crud/read")
 			}
 			itemFields = append(itemFields, projection)
-		} else if meta.CRUD.Read != nexaent.ReadExclude {
+		} else if meta.CRUD.Read != sourcecomment.ReadExclude {
 			return desiredEntity{}, buildError("read_policy_conflict", "/entities/"+itoa(entityIndex)+"/fields/"+itoa(fieldIndex)+"/fieldMeta/crud/read")
 		}
 		switch meta.CRUD.Mutation {
-		case nexaent.MutationNone:
-		case nexaent.MutationCreate:
+		case sourcecomment.MutationNone:
+		case sourcecomment.MutationCreate:
 			projection.optional = field.Optional() || field.Nillable() || field.HasDefault()
 			createFields = append(createFields, projection)
-		case nexaent.MutationUpdate:
+		case sourcecomment.MutationUpdate:
 			projection.optional = true
 			updateFields = append(updateFields, projection)
-		case nexaent.MutationCreateUpdate:
+		case sourcecomment.MutationCreateUpdate:
 			createProjection := projection
 			createProjection.optional = field.Optional() || field.Nillable() || field.HasDefault()
 			createFields = append(createFields, createProjection)
@@ -345,56 +343,48 @@ func buildEntity(item entity.Entity, crud nexaent.CRUDSpec, entityIndex int, mul
 		}
 	}
 
-	entityResult.messages = append(entityResult.messages, &desiredMessage{schemaID: item.ID(), id: messageID(item, item.Name()), name: item.Name(), fields: itemFields})
+	entityResult.messages = append(entityResult.messages, &desiredMessage{schemaID: item.ID(), id: messageID(item, item.Name()), name: item.Name(), firstSource: schemaSource, fields: itemFields})
 	methods := make([]*methodState, 0, len(operations))
 	for operationIndex, operation := range operations {
 		requestName, responseName := operationMessageNames(item.Name(), operation)
 		var requestFields, responseFields []desiredField
 		switch operation {
-		case nexaent.CRUDList:
-			requestFields = []desiredField{fixedField(item, operation, "offset", "uint64", 1), fixedField(item, operation, "limit", "uint64", 2)}
-			responseFields = []desiredField{fixedRepeatedField(item, operation, "items", item.Name(), 1), fixedField(item, operation, "offset", "uint64", 2), fixedField(item, operation, "limit", "uint64", 3), fixedField(item, operation, "total", "uint64", 4)}
-		case nexaent.CRUDGet:
+		case sourcecomment.CRUDList:
+			requestFields = []desiredField{fixedField(item, operation, "offset", "uint64", 1, schemaSource), fixedField(item, operation, "limit", "uint64", 2, schemaSource)}
+			responseFields = []desiredField{fixedRepeatedField(item, operation, "items", item.Name(), 1, schemaSource), fixedField(item, operation, "total", "uint64", 2, schemaSource)}
+		case sourcecomment.CRUDGet:
 			requestFields = []desiredField{identityField}
-			responseFields = []desiredField{fixedField(item, operation, "item", item.Name(), 1)}
-		case nexaent.CRUDCreate:
+			responseFields = []desiredField{fixedField(item, operation, "item", item.Name(), 1, schemaSource)}
+		case sourcecomment.CRUDCreate:
 			requestFields = cloneDesiredFields(createFields)
-			responseFields = []desiredField{fixedField(item, operation, "item", item.Name(), 1)}
-		case nexaent.CRUDUpdate:
-			requestFields = []desiredField{identityField, fixedField(item, operation, "update_mask", "google.protobuf.FieldMask", 2)}
+			responseFields = []desiredField{fixedField(item, operation, "item", item.Name(), 1, schemaSource)}
+		case sourcecomment.CRUDUpdate:
+			requestFields = []desiredField{identityField, fixedField(item, operation, "update_mask", "google.protobuf.FieldMask", 2, schemaSource)}
 			requestFields = append(requestFields, cloneDesiredFields(updateFields)...)
-			responseFields = []desiredField{fixedField(item, operation, "item", item.Name(), 1)}
-		case nexaent.CRUDDelete:
+			responseFields = []desiredField{fixedField(item, operation, "item", item.Name(), 1, schemaSource)}
+		case sourcecomment.CRUDDelete:
 			requestFields = []desiredField{identityField}
 			responseFields = []desiredField{}
 		default:
 			return desiredEntity{}, buildError("crud_operation_invalid", "/entities/"+itoa(entityIndex)+"/crud/operations/"+itoa(operationIndex))
 		}
-		var rpcContext *rpcContextState
-		if multiTenantEnabled && hasTenantField {
-			tenant := desiredField{id: item.ID() + "/operation:" + string(operation) + "/field:tenant_id", name: "tenant_id", wireType: "int64", source: tenantField.Source(), internal: true, tenantContext: true}
-			requestFields = append(requestFields, tenant)
-			rpcContext = &rpcContextState{contextFields: []*contextBindingState{{source: ContextTenantID, rpcField: "tenant_id"}}}
-		} else {
-			rpcContext = &rpcContextState{contextFields: []*contextBindingState{}}
-		}
 		entityResult.messages = append(entityResult.messages,
-			&desiredMessage{schemaID: item.ID(), id: operationMessageID(item, operation, "request"), name: requestName, fields: requestFields},
-			&desiredMessage{schemaID: item.ID(), id: operationMessageID(item, operation, "response"), name: responseName, fields: responseFields},
+			&desiredMessage{schemaID: item.ID(), id: operationMessageID(item, operation, "request"), name: requestName, firstSource: schemaSource, fields: requestFields},
+			&desiredMessage{schemaID: item.ID(), id: operationMessageID(item, operation, "response"), name: responseName, firstSource: schemaSource, fields: responseFields},
 		)
-		methods = append(methods, &methodState{id: item.ID() + "/operation:" + string(operation), name: titleOperation(operation), input: requestName, output: responseName, rpcContext: rpcContext})
+		methods = append(methods, &methodState{id: item.ID() + "/operation:" + string(operation), name: titleOperation(operation), input: requestName, output: responseName, firstSource: schemaSource})
 	}
-	entityResult.service = &serviceState{id: item.ID() + "/service:crud", name: item.Name() + "CRUDService", methods: methods}
+	entityResult.service = &serviceState{id: item.ID() + "/service:crud", name: item.Name() + "CRUDService", firstSource: schemaSource, methods: methods}
 	return entityResult, nil
 }
 
-func entityTenantField(item entity.Entity) (entity.Field, bool) {
+func entityHasTenantField(item entity.Entity) bool {
 	for _, field := range item.Fields() {
 		if field.IsTenantField() {
-			return field, true
+			return true
 		}
 	}
-	return entity.Field{}, false
+	return false
 }
 
 func reconcileEnum(lockEnum *lockEnumState, desired *enumState) (*enumState, error) {
@@ -582,7 +572,7 @@ func reconcileMessage(lockMessage *lockMessageState, desired *desiredMessage) ([
 			occupied[number] = struct{}{}
 		}
 		lockMessage.current = append(lockMessage.current, assignment)
-		fields = append(fields, &fieldState{id: field.id, name: field.name, wireType: field.wireType, number: assignment.number, repeated: field.repeated, optional: field.optional, internal: field.internal, tenantContext: field.tenantContext, source: field.source})
+		fields = append(fields, &fieldState{id: field.id, name: field.name, wireType: field.wireType, number: assignment.number, repeated: field.repeated, optional: field.optional, source: field.source, firstSource: field.firstSource})
 	}
 	lockMessage.active = true
 	sort.SliceStable(lockMessage.current, func(i, j int) bool { return lockMessage.current[i].fieldID < lockMessage.current[j].fieldID })
@@ -744,24 +734,31 @@ func identityWireType(value entity.ScalarType) string {
 	return string(value)
 }
 func messageID(item entity.Entity, name string) string { return item.ID() + "/message:" + name }
-func operationMessageID(item entity.Entity, operation nexaent.CRUDOperation, side string) string {
+func operationMessageID(item entity.Entity, operation sourcecomment.CRUDOperation, side string) string {
 	return item.ID() + "/operation:" + string(operation) + "/message:" + side
 }
-func operationMessageNames(entityName string, operation nexaent.CRUDOperation) (string, string) {
+func operationMessageNames(entityName string, operation sourcecomment.CRUDOperation) (string, string) {
 	prefix := titleOperation(operation) + entityName
 	return prefix + "Request", prefix + "Response"
 }
-func titleOperation(operation nexaent.CRUDOperation) string {
+func titleOperation(operation sourcecomment.CRUDOperation) string {
 	value := string(operation)
 	return strings.ToUpper(value[:1]) + value[1:]
 }
-func fixedField(item entity.Entity, operation nexaent.CRUDOperation, name, typ string, number int32) desiredField {
-	return desiredField{id: item.ID() + "/operation:" + string(operation) + "/field:" + name, name: name, wireType: typ, preferred: number, source: item.Source()}
+func fixedField(item entity.Entity, operation sourcecomment.CRUDOperation, name, typ string, number int32, firstSource sourcecomment.SourceRef) desiredField {
+	return desiredField{id: item.ID() + "/operation:" + string(operation) + "/field:" + name, name: name, wireType: typ, preferred: number, source: item.Source(), firstSource: firstSource}
 }
-func fixedRepeatedField(item entity.Entity, operation nexaent.CRUDOperation, name, typ string, number int32) desiredField {
-	value := fixedField(item, operation, name, typ, number)
+func fixedRepeatedField(item entity.Entity, operation sourcecomment.CRUDOperation, name, typ string, number int32, firstSource sourcecomment.SourceRef) desiredField {
+	value := fixedField(item, operation, name, typ, number, firstSource)
 	value.repeated = true
 	return value
+}
+
+func sourceCommentSource(source provenance.Source, symbol string) (sourcecomment.SourceRef, error) {
+	if source.Ref.Path() == "" || symbol == "" {
+		return sourcecomment.SourceRef{}, buildError("document_state_invalid", "/source")
+	}
+	return sourcecomment.ParseSourceRef("ent://" + source.Ref.Path() + "#" + symbol)
 }
 
 func importsFor(messages []*messageState) []string {

@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/frontend/frontend-ir-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "httpConvention",
+    "types",
+    "operations",
+    "locales",
+    "pages"
+  ],
+  "properties": {
+    "apiVersion": { "const": "nexa.dev/frontend-ir/v1" },
+    "kind": { "const": "FrontendIR" },
+    "httpConvention": { "const": "nexa.dev/http-convention/v1" },
+    "types": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/closureType" }
+    },
+    "operations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/closureOperation" }
+    },
+    "locales": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/locale" }
+    },
+    "pages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/page" }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:[a-z][a-zA-Z0-9]*|[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$"
+      }
+    },
+    "closureValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/scalarClosureValue" },
+        { "$ref": "#/$defs/refClosureValue" },
+        { "$ref": "#/$defs/arrayClosureValue" },
+        { "$ref": "#/$defs/optionalClosureValue" }
+      ]
+    },
+    "scalarClosureValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "const": "scalar" },
+        "name": { "enum": ["string", "bool", "int32", "uint32", "int64", "uint64", "float32", "float64"] }
+      }
+    },
+    "refClosureValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "const": "ref" },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "arrayClosureValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "element"],
+      "properties": {
+        "kind": { "const": "array" },
+        "element": { "$ref": "#/$defs/closureValue" }
+      }
+    },
+    "optionalClosureValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "element"],
+      "properties": {
+        "kind": { "const": "optional" },
+        "element": { "$ref": "#/$defs/closureValue" }
+      }
+    },
+    "closureField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "required", "valueType"],
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "required": { "type": "boolean" },
+        "valueType": { "$ref": "#/$defs/closureValue" }
+      }
+    },
+    "closureType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "typescriptName", "fields"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "typescriptName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$" },
+        "shape": { "$ref": "#/$defs/closureValue" },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/closureField" }
+        }
+      }
+    },
+    "closureOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clientName", "id", "method", "path", "auth", "permission", "requestType", "responseType"],
+      "properties": {
+        "clientName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$" },
+        "id": { "type": "string", "minLength": 1 },
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": { "type": "string", "minLength": 1 },
+        "auth": { "enum": ["none", "required"] },
+        "permission": { "type": "string" },
+        "requestType": { "type": "string", "minLength": 1 },
+        "responseType": { "type": "string" }
+      }
+    },
+    "locale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locale", "messages"],
+      "properties": {
+        "locale": { "type": "string", "minLength": 1 },
+        "messages": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "name"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "menu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "titleKey", "path", "order"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "parentId": { "type": "string", "minLength": 1 },
+        "titleKey": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "icon": { "type": "string", "minLength": 1 },
+        "order": { "type": "integer" }
+      }
+    },
+    "pageOperations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["list"],
+      "properties": {
+        "list": { "type": "string", "minLength": 1 },
+        "create": { "type": "string", "minLength": 1 },
+        "get": { "type": "string", "minLength": 1 },
+        "update": { "type": "string", "minLength": 1 },
+        "delete": { "type": "string", "minLength": 1 }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "labelKey", "surfaces"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^(?:[a-z][a-zA-Z0-9]*|[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$" },
+        "labelKey": { "type": "string", "minLength": 1 },
+        "surfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["search", "list", "create", "edit"] }
+        },
+        "control": { "enum": ["text", "textarea", "number", "switch", "select", "multi-select", "datetime", "readonly", "sensitive", "member", "reference", "attachment", "tags", "component", "i18n", "iconify", "permission", "route", "scope", "http-method", "http-path", "module", "locale", "timezone"] }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "titleKey", "route", "pageSize", "operations", "fields"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "titleKey": { "type": "string", "minLength": 1 },
+        "route": { "$ref": "#/$defs/route" },
+        "extensionComponent": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.vue$"
+        },
+        "menu": { "$ref": "#/$defs/menu" },
+        "pageSize": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "operations": { "$ref": "#/$defs/pageOperations" },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
+        }
+      }
+    }
+  }
+}

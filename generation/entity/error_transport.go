@@ -220,9 +220,9 @@ func validEntityIRPointer(reason, pointer string) bool {
 	}
 	if reason == "localized_text_conflict" {
 		joined := strings.Join(parts[2:], "/")
-		return joined == "schemaMeta/payload/label" || joined == "schemaMeta/payload/description" ||
+		return joined == "schemaFacts/label" || joined == "schemaFacts/description" ||
 			len(parts) >= 6 && parts[2] == "fields" && canonicalIndex(parts[3]) &&
-				(strings.Join(parts[4:], "/") == "fieldMeta/payload/label" || strings.Join(parts[4:], "/") == "fieldMeta/payload/description")
+				(strings.Join(parts[4:], "/") == "fieldFacts/label" || strings.Join(parts[4:], "/") == "fieldFacts/description")
 	}
 	if len(parts) == 3 {
 		switch reason {
@@ -230,8 +230,8 @@ func validEntityIRPointer(reason, pointer string) bool {
 			return parts[2] == "name"
 		case "entity_id_duplicate":
 			return parts[2] == "id"
-		case "schema_meta_missing":
-			return parts[2] == "schemaMeta"
+		case "schema_facts_invalid":
+			return parts[2] == "schemaFacts"
 		case "entity_kind_unsupported":
 			return parts[2] == "kind"
 		case "identity_missing", "identity_composite_unsupported", "identity_strategy_invalid":
@@ -248,8 +248,8 @@ func validEntityIRPointer(reason, pointer string) bool {
 			return len(parts) == 5 && parts[4] == "name"
 		case "field_id_duplicate":
 			return len(parts) == 5 && parts[4] == "id"
-		case "field_meta_missing":
-			return len(parts) == 5 && parts[4] == "fieldMeta"
+		case "field_facts_invalid":
+			return len(parts) == 5 && parts[4] == "fieldFacts"
 		case "field_type_unsupported":
 			return len(parts) == 5 && parts[4] == "type"
 		case "enum_invalid":
@@ -258,13 +258,9 @@ func validEntityIRPointer(reason, pointer string) bool {
 		case "enum_duplicate":
 			return len(parts) == 7 && parts[4] == "enumValues" && canonicalIndex(parts[5]) && (parts[6] == "name" || parts[6] == "value")
 		case "policy_conflict", "policy_presence_conflict":
-			return strings.Join(parts[4:], "/") == "fieldMeta/payload/crud"
-		case "logical_reference_edge_conflict":
-			return strings.Join(parts[4:], "/") == "fieldMeta/payload/logicalReference"
-		case "physical_display_edge_invalid":
-			return strings.Join(parts[4:], "/") == "fieldMeta/payload/physicalDisplay"
-		case "physical_display_field_missing":
-			return strings.Join(parts[4:], "/") == "fieldMeta/payload/physicalDisplay/field"
+			return strings.Join(parts[4:], "/") == "fieldFacts/crud"
+		case "reference_target_missing", "reference_edge_conflict":
+			return strings.Join(parts[4:], "/") == "fieldFacts/reference"
 		case "source_ref_invalid", "source_digest_invalid":
 			return len(parts) == 5 && parts[4] == "sourceRef"
 		}

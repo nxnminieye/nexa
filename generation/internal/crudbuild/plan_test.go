@@ -4,15 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/bufbuild/protocompile"
 	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/entity"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/protocol"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
+
+type sourceProjectionResolver map[string]string
+
+func (r sourceProjectionResolver) Open(_ context.Context, path string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(r[path])), nil
+}
 
 func TestBuildPlanSnapshotsAndCompilesRenderedProto(t *testing.T) {
 	document := planEntityDocument(t, true)
@@ -49,6 +58,78 @@ func TestBuildPlanSnapshotsAndCompilesRenderedProto(t *testing.T) {
 	if err != nil || second.PlanDigest() != plan.PlanDigest() {
 		t.Fatalf("deterministic plan = %s, %v", second.PlanDigest().String(), err)
 	}
+}
+
+func TestRenderedCRUDProtoExtendsEntGraphAndRejectsInheritedMutation(t *testing.T) {
+	entities := planEntityDocument(t, true)
+	plan, err := BuildPlan(entities, Spec{
+		ServiceID: "accounts", ProtoPackage: "acme.accounts.v1", GoPackage: "example.com/acme/accounts/v1;accountsv1",
+		ProtoArtifactPath: "api/accounts.crud.generated.proto", LockPath: "api/accounts.crud-protocol.lock.json", RequestDigest: provenance.SHA256([]byte("source-comment")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := string(plan.ProtoBytes())
+	if !strings.HasPrefix(generated, "// @nexa $contract: ") || !strings.Contains(generated, " @nexa $source: ") {
+		t.Fatalf("generated Proto is missing source comments:\n%s", generated)
+	}
+	baselineText := stripGeneratedSources(generated)
+	baseline, err := protocol.Compile(context.Background(), protocol.CompileOptions{
+		ServiceID: "accounts", EntryFiles: []string{plan.ProtoPath()}, Resolver: sourceProjectionResolver{plan.ProtoPath(): baselineText},
+	})
+	if err != nil {
+		t.Fatalf("compile generated baseline: %v", err)
+	}
+	document, _, err := Build(entities, Spec{ServiceID: "accounts", ProtoPackage: "acme.accounts.v1", GoPackage: "example.com/acme/accounts/v1;accountsv1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := ProtocolProjection(document, plan.ProtoPath(), baseline, entities.FactGraph())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := sourcecomment.NewProjectionLock(projection.Nodes, projection.InheritedFacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection.Lock = &lock
+	compiled, err := protocol.Compile(context.Background(), protocol.CompileOptions{
+		ServiceID: "accounts", EntryFiles: []string{plan.ProtoPath()}, Resolver: sourceProjectionResolver{plan.ProtoPath(): generated}, SourceProjection: &projection,
+	})
+	if err != nil {
+		t.Fatalf("compile source projection: %v", err)
+	}
+	if !compiled.FactGraph().Valid() {
+		t.Fatal("projected Proto has no FactGraph")
+	}
+
+	localAddition := strings.Replace(generated, "string name = 2;", "string name = 2;\n  string local_note = 99;", 1)
+	if _, err := protocol.Compile(context.Background(), protocol.CompileOptions{
+		ServiceID: "accounts", EntryFiles: []string{plan.ProtoPath()}, Resolver: sourceProjectionResolver{plan.ProtoPath(): localAddition}, SourceProjection: &projection,
+	}); err != nil {
+		t.Fatalf("local Proto addition was rejected: %v", err)
+	}
+
+	drifted := strings.Replace(generated, "string name = 2;", "int64 name = 2;", 1)
+	_, err = protocol.Compile(context.Background(), protocol.CompileOptions{
+		ServiceID: "accounts", EntryFiles: []string{plan.ProtoPath()}, Resolver: sourceProjectionResolver{plan.ProtoPath(): drifted}, SourceProjection: &projection,
+	})
+	owner, ok := err.(*protocol.Error)
+	if !ok || owner.Reason() != string(sourcecomment.CodeInheritedNodeChanged) {
+		t.Fatalf("inherited Proto mutation error = %#v", err)
+	}
+}
+
+func stripGeneratedSources(value string) string {
+	lines := strings.Split(value, "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.Contains(line, " @nexa $source: ") {
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.Join(result, "\n")
 }
 
 func TestBuildPlanKeepsCompatibilityInputsOutOfProtoSourceRefs(t *testing.T) {
@@ -224,8 +305,8 @@ func TestEntityDocumentRejectsCRUDFieldWithoutPolicy(t *testing.T) {
 }
 
 func TestTask2ScopeDoesNotChangeCRUDProtoOrCompatibilityAssignments(t *testing.T) {
-	global := planEntityDocumentWithScope(t, nexaent.ScopeGlobal)
-	tenant := planEntityDocumentWithScope(t, nexaent.ScopeTenant)
+	global := planEntityDocumentWithScope(t, sourcecomment.ScopeGlobal)
+	tenant := planEntityDocumentWithScope(t, sourcecomment.ScopeTenant)
 	spec := Spec{
 		ServiceID: "accounts", ProtoPackage: "acme.accounts.v1", GoPackage: "example.com/acme/accounts/v1;accountsv1",
 		ProtoArtifactPath: "api/accounts.crud.generated.proto", LockPath: "api/accounts.crud-protocol.lock.json", RequestDigest: provenance.SHA256([]byte("request")),
@@ -374,11 +455,11 @@ func TestTask2CRUDCreateOmitsRequiredInternalExcludedField(t *testing.T) {
 	projection := planEntityProjection(t, true, true)
 	projection.Entities[0].Name = "NeutralRecord"
 	projection.Entities[0].SourceRef = mustPlanRepositoryRef(t, "fixtures/generation/ent-consumer/schema/neutral_record.go", "schema:NeutralRecord")
-	projection.Entities[0].Meta.Scope = nexaent.ScopeTenant
+	projection.Entities[0].Meta.Scope = sourcecomment.ScopeTenant
 	projection.Entities[0].Fields[0].Name = "required_internal"
 	projection.Entities[0].Fields[0].SourceRef = mustPlanRepositoryRef(t, "fixtures/generation/ent-consumer/schema/neutral_record.go", "schema:NeutralRecord/field:required_internal")
-	projection.Entities[0].Fields[0].Meta.Visibility = nexaent.VisibilityInternal
-	projection.Entities[0].Fields[0].Meta.CRUD = &nexaent.CRUDFieldPolicy{Read: nexaent.ReadExclude, Mutation: nexaent.MutationNone}
+	projection.Entities[0].Fields[0].Meta.Visibility = sourcecomment.VisibilityInternal
+	projection.Entities[0].Fields[0].Meta.CRUD = &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadExclude, Mutation: sourcecomment.MutationNone}
 	value, err := entityvalue.NewDocument(projection)
 	if err != nil {
 		t.Fatalf("NewDocument: %v", err)
@@ -400,7 +481,7 @@ func TestTask2CRUDCreateOmitsRequiredInternalExcludedField(t *testing.T) {
 	}
 }
 
-func planEntityDocumentWithScope(t *testing.T, scope nexaent.RecordScope) entity.Document {
+func planEntityDocumentWithScope(t *testing.T, scope sourcecomment.RecordScope) entity.Document {
 	t.Helper()
 	document := planEntityProjection(t, true, true)
 	document.Entities[0].Meta.Scope = scope
@@ -444,18 +525,14 @@ func planEntityProjection(t *testing.T, withCRUD, withFieldPolicy bool) entityva
 	if err != nil {
 		t.Fatal(err)
 	}
-	schemaMeta := nexaent.SchemaMeta{Label: localized("account", "Account"), Description: localized("account.desc", "Account record"), Identity: nexaent.IdentityEntID, Scope: nexaent.ScopeTenant}
-	fieldMeta := nexaent.FieldMeta{Label: localized("account.name", "Name"), Description: localized("account.name.desc", "Account name"), UIHint: nexaent.UIHintText, Visibility: nexaent.VisibilityPublic, CRUD: &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate}}
+	schemaMeta := sourcecomment.SchemaFacts{Label: localized("account", "Account"), Description: localized("account.desc", "Account record"), Scope: sourcecomment.ScopeTenant}
+	fieldMeta := sourcecomment.FieldFacts{Label: localized("account.name", "Name"), Description: localized("account.name.desc", "Account name"), Control: sourcecomment.UIControlText, Visibility: sourcecomment.VisibilityPublic, CRUD: &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreateUpdate}}
 	if !withFieldPolicy {
 		fieldMeta.CRUD = nil
 	}
 	projection := entityvalue.Projection{Entities: []entityvalue.EntityProjection{{Name: "Account", SourceRef: ref, Meta: schemaMeta, Identity: entityvalue.IdentityProjection{Kind: string(entity.IdentityImplicit), Name: "id", Type: string(entity.ScalarInt64)}, Fields: []entityvalue.FieldProjection{{Name: "name", SourceRef: fieldRef, Type: string(entity.ScalarString), Meta: fieldMeta}}}}}
 	if withCRUD {
-		raw, err := nexaent.CRUD(nexaent.CRUDList, nexaent.CRUDGet, nexaent.CRUDCreate).CanonicalJSON()
-		if err != nil {
-			t.Fatal(err)
-		}
-		crud, err := nexaent.DecodeCRUD(raw)
+		crud, err := sourcecomment.NewCRUDOperations(sourcecomment.CRUDList, sourcecomment.CRUDGet, sourcecomment.CRUDCreate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,8 +541,8 @@ func planEntityProjection(t *testing.T, withCRUD, withFieldPolicy bool) entityva
 	return projection
 }
 
-func localized(key, english string) nexaent.LocalizedText {
-	return nexaent.LocalizedText{Key: key, ZhCN: english, EnUS: english}
+func localized(key, english string) sourcecomment.LocalizedText {
+	return sourcecomment.LocalizedText{Key: key, ZhCN: english, EnUS: english}
 }
 
 func planTenantField(t *testing.T) entityvalue.FieldProjection {
@@ -473,7 +550,7 @@ func planTenantField(t *testing.T) entityvalue.FieldProjection {
 	return entityvalue.FieldProjection{
 		Name: "tenant_id", SourceRef: mustPlanRepositoryRef(t, "fixtures/generation/ent-consumer/schema/account.go", "schema:Account/field:tenant_id"),
 		Type: string(entity.ScalarInt64), Immutable: true, IsTenantField: true,
-		Meta: nexaent.FieldMeta{Label: localized("tenant.id", "Tenant ID"), Description: localized("tenant.id.desc", "Tenant identifier"), UIHint: nexaent.UIHintReadonly, Visibility: nexaent.VisibilityInternal},
+		Meta: sourcecomment.FieldFacts{Label: localized("tenant.id", "Tenant ID"), Description: localized("tenant.id.desc", "Tenant identifier"), Control: sourcecomment.UIControlReadonly, Visibility: sourcecomment.VisibilityInternal},
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 
 	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -18,17 +18,17 @@ func TestTypedProjectionCanonicalSnapshotRoundTrip(t *testing.T) {
 	accountRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account")
 	nameRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account/field:name")
 	auditRef := mustRepositoryRef(t, "ent/schema/audit_entry.go", "schema:AuditEntry")
-	crud := mustCRUDSpec(t, nexaent.CRUDGet, nexaent.CRUDUpdate)
+	crud := mustCRUDSpec(t, sourcecomment.CRUDGet, sourcecomment.CRUDUpdate)
 	projection := entityvalue.Projection{Entities: []entityvalue.EntityProjection{
 		{
-			Name: "AuditEntry", SourceRef: auditRef, Meta: validSchemaMeta("audit_entry"),
+			Name: "AuditEntry", SourceRef: auditRef, Meta: validSchemaFacts("audit_entry"),
 			Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)},
 		},
 		{
-			Name: "Account", SourceRef: accountRef, Meta: validSchemaMeta("account"), CRUD: &crud,
+			Name: "Account", SourceRef: accountRef, Meta: validSchemaFacts("account"), CRUD: &crud,
 			Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)},
 			Fields: []entityvalue.FieldProjection{{
-				Name: "name", SourceRef: nameRef, Type: string(ScalarString), Meta: validFieldMeta("account.name"),
+				Name: "name", SourceRef: nameRef, Type: string(ScalarString), Meta: validFieldFacts("account.name"),
 			}},
 		},
 	}}
@@ -40,6 +40,17 @@ func TestTypedProjectionCanonicalSnapshotRoundTrip(t *testing.T) {
 	document, err := AdoptLoadedDocument(value)
 	if err != nil {
 		t.Fatalf("AdoptLoadedDocument() error = %v", err)
+	}
+	if !document.FactGraph().Valid() {
+		t.Fatal("EntityIR did not retain a typed source-comment graph")
+	}
+	if scope, ok := document.FactGraph().Fact(sourcecomment.FactID{SemanticID: "Account", Key: "scope"}); !ok {
+		t.Fatal("EntityIR source-comment graph lost schema facts")
+	} else if value, _ := scope.Value().String(); value != string(sourcecomment.ScopeTenant) {
+		t.Fatalf("Account scope fact = %q", value)
+	}
+	if _, ok := document.FactGraph().Fact(sourcecomment.FactID{SemanticID: "Account.name", Key: "ui.control"}); !ok {
+		t.Fatal("EntityIR source-comment graph lost field facts")
 	}
 	canonical, err := CanonicalJSON(document)
 	if err != nil {
@@ -64,7 +75,7 @@ func TestTypedProjectionCanonicalSnapshotRoundTrip(t *testing.T) {
 		t.Fatal("Account missing")
 	}
 	gotCRUD, ok := account.CRUD()
-	if !ok || !equalCRUDOperations(gotCRUD.Operations(), []nexaent.CRUDOperation{nexaent.CRUDGet, nexaent.CRUDUpdate}) {
+	if !ok || !equalCRUDOperations(gotCRUD.Operations(), []sourcecomment.CRUDOperation{sourcecomment.CRUDGet, sourcecomment.CRUDUpdate}) {
 		t.Fatalf("Account CRUD = %#v, %v", gotCRUD.Operations(), ok)
 	}
 	audit, ok := document.Entity("schema:AuditEntry")
@@ -91,14 +102,14 @@ func TestTask2EdgeCanonicalSnapshotRoundTrip(t *testing.T) {
 	memberRef := mustRepositoryRef(t, "ent/schema/member.go", "schema:Member")
 	memberAccountRef := mustRepositoryRef(t, "ent/schema/member.go", "schema:Member/field:account_id")
 	memberEdgeRef := mustRepositoryRef(t, "ent/schema/member.go", "schema:Member/edge:account")
-	accountNameMeta := validFieldMeta("account.name")
-	accountNameMeta.CRUD = nil
-	memberAccountMeta := validFieldMeta("member.account")
-	memberAccountMeta.CRUD = nil
-	memberAccountMeta.PhysicalDisplay = &nexaent.PhysicalDisplay{Field: "name"}
+	accountNameFacts := validFieldFacts("account.name")
+	accountNameFacts.CRUD = nil
+	memberAccountFacts := validFieldFacts("member.account")
+	memberAccountFacts.CRUD = nil
+	memberAccountFacts.Reference = &sourcecomment.ResolvedReference{Target: "Account", Display: "name"}
 	projection := entityvalue.Projection{Entities: []entityvalue.EntityProjection{
-		{Name: "Account", SourceRef: accountRef, Meta: validSchemaMeta("account"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}, Fields: []entityvalue.FieldProjection{{Name: "name", SourceRef: accountNameRef, Type: string(ScalarString), Meta: accountNameMeta}}, Edges: []entityvalue.EdgeProjection{{Name: "members", SourceRef: accountMembersRef, TargetEntityID: "schema:Member", Direction: string(EdgeDirectionFrom), InverseName: "account", BoundFieldID: "schema:Member/field:account_id", Optional: true}}},
-		{Name: "Member", SourceRef: memberRef, Meta: validSchemaMeta("member"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}, Fields: []entityvalue.FieldProjection{{Name: "account_id", SourceRef: memberAccountRef, Type: string(ScalarInt64), Meta: memberAccountMeta}}, Edges: []entityvalue.EdgeProjection{{Name: "account", SourceRef: memberEdgeRef, TargetEntityID: "schema:Account", Direction: string(EdgeDirectionTo), InverseName: "members", BoundFieldID: "schema:Member/field:account_id", Unique: true}}},
+		{Name: "Account", SourceRef: accountRef, Meta: validSchemaFacts("account"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}, Fields: []entityvalue.FieldProjection{{Name: "name", SourceRef: accountNameRef, Type: string(ScalarString), Meta: accountNameFacts}}, Edges: []entityvalue.EdgeProjection{{Name: "members", SourceRef: accountMembersRef, TargetEntityID: "schema:Member", Direction: string(EdgeDirectionFrom), InverseName: "account", BoundFieldID: "schema:Member/field:account_id", Optional: true}}},
+		{Name: "Member", SourceRef: memberRef, Meta: validSchemaFacts("member"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}, Fields: []entityvalue.FieldProjection{{Name: "account_id", SourceRef: memberAccountRef, Type: string(ScalarInt64), Meta: memberAccountFacts}}, Edges: []entityvalue.EdgeProjection{{Name: "account", SourceRef: memberEdgeRef, TargetEntityID: "schema:Account", Direction: string(EdgeDirectionTo), InverseName: "members", BoundFieldID: "schema:Member/field:account_id", Unique: true}}},
 	}}
 	value, err := entityvalue.NewDocument(projection)
 	if err != nil {
@@ -148,19 +159,19 @@ func TestTask2EdgeCanonicalSnapshotRoundTrip(t *testing.T) {
 		t.Fatalf("snapshot round trip = %s, %v", roundTrip, err)
 	}
 
-	memberAccountMeta.PhysicalDisplay.Field = "mutated"
+	memberAccountFacts.Reference.Display = "mutated"
 	field, _ := member.Field("schema:Member/field:account_id")
 	first := field.Meta()
-	first.PhysicalDisplay.Field = "changed"
+	first.Reference.Display = "changed"
 	second := field.Meta()
-	if second.PhysicalDisplay == nil || second.PhysicalDisplay.Field != "name" {
-		t.Fatalf("PhysicalDisplay aliased: %#v", second)
+	if second.Reference == nil || second.Reference.Display != "name" {
+		t.Fatalf("Reference aliased: %#v", second)
 	}
 }
 
 func TestEntityIRDefensiveCopiesAndZeroState(t *testing.T) {
 	ref := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account")
-	meta := validSchemaMeta("account")
+	meta := validSchemaFacts("account")
 	value, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
 		Name: "Account", SourceRef: ref, Meta: meta,
 		Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)},
@@ -210,14 +221,14 @@ func TestEntityIRDefensiveCopiesAndZeroState(t *testing.T) {
 func TestEntityIRFieldCRUDPolicyDefensiveCopies(t *testing.T) {
 	entityRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account")
 	fieldRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account/field:name")
-	policy := &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate}
-	fieldMeta := validFieldMeta("account.name")
-	fieldMeta.CRUD = policy
-	crud := mustCRUDSpec(t, nexaent.CRUDCreate, nexaent.CRUDUpdate)
+	policy := &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreateUpdate}
+	fieldFacts := validFieldFacts("account.name")
+	fieldFacts.CRUD = policy
+	crud := mustCRUDSpec(t, sourcecomment.CRUDCreate, sourcecomment.CRUDUpdate)
 	value, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
-		Name: "Account", SourceRef: entityRef, Meta: validSchemaMeta("account"), CRUD: &crud,
+		Name: "Account", SourceRef: entityRef, Meta: validSchemaFacts("account"), CRUD: &crud,
 		Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)},
-		Fields:   []entityvalue.FieldProjection{{Name: "name", SourceRef: fieldRef, Type: string(ScalarString), Meta: fieldMeta}},
+		Fields:   []entityvalue.FieldProjection{{Name: "name", SourceRef: fieldRef, Type: string(ScalarString), Meta: fieldFacts}},
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -226,14 +237,14 @@ func TestEntityIRFieldCRUDPolicyDefensiveCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy.Read = nexaent.ReadExclude
+	policy.Read = sourcecomment.ReadExclude
 	field, ok := document.Entities()[0].Field("schema:Account/field:name")
-	if !ok || field.Meta().CRUD == nil || field.Meta().CRUD.Read != nexaent.ReadInclude {
+	if !ok || field.Meta().CRUD == nil || field.Meta().CRUD.Read != sourcecomment.ReadInclude {
 		t.Fatalf("constructor retained CRUD pointer: %#v", field.Meta().CRUD)
 	}
 	returned := field.Meta()
-	returned.CRUD.Mutation = nexaent.MutationNone
-	if got := field.Meta().CRUD; got == nil || got.Mutation != nexaent.MutationCreateUpdate {
+	returned.CRUD.Mutation = sourcecomment.MutationNone
+	if got := field.Meta().CRUD; got == nil || got.Mutation != sourcecomment.MutationCreateUpdate {
 		t.Fatalf("Meta() returned aliased CRUD pointer: %#v", got)
 	}
 }
@@ -244,17 +255,17 @@ func TestEntityIRRejectsInvalidTypedProjection(t *testing.T) {
 		name       string
 		projection entityvalue.Projection
 	}{
-		{name: "missing name", projection: entityvalue.Projection{Entities: []entityvalue.EntityProjection{{SourceRef: ref, Meta: validSchemaMeta("account")}}}},
+		{name: "missing name", projection: entityvalue.Projection{Entities: []entityvalue.EntityProjection{{SourceRef: ref, Meta: validSchemaFacts("account")}}}},
 		{
 			name: "invalid scalar",
 			projection: entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
-				Name: "Account", SourceRef: ref, Meta: validSchemaMeta("account"),
+				Name: "Account", SourceRef: ref, Meta: validSchemaFacts("account"),
 				Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: "decimal"},
 			}}},
 		},
 		{name: "duplicate", projection: entityvalue.Projection{Entities: []entityvalue.EntityProjection{
-			{Name: "Account", SourceRef: ref, Meta: validSchemaMeta("account"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}},
-			{Name: "Account", SourceRef: ref, Meta: validSchemaMeta("account"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}},
+			{Name: "Account", SourceRef: ref, Meta: validSchemaFacts("account"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}},
+			{Name: "Account", SourceRef: ref, Meta: validSchemaFacts("account"), Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)}},
 		}}},
 	}
 	for _, test := range tests {
@@ -270,10 +281,10 @@ func TestEntityIRRejectsFieldOwnedByDifferentSourceFile(t *testing.T) {
 	entityRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account")
 	fieldRef := mustRepositoryRef(t, "ent/schema/other.go", "schema:Account/field:name")
 	_, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
-		Name: "Account", SourceRef: entityRef, Meta: validSchemaMeta("account"),
+		Name: "Account", SourceRef: entityRef, Meta: validSchemaFacts("account"),
 		Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)},
 		Fields: []entityvalue.FieldProjection{{
-			Name: "name", SourceRef: fieldRef, Type: string(ScalarString), Meta: validFieldMeta("account.name"),
+			Name: "name", SourceRef: fieldRef, Type: string(ScalarString), Meta: validFieldFacts("account.name"),
 		}},
 	}}})
 	owner, ok := err.(*entityvalue.Error)
@@ -288,23 +299,23 @@ func TestEntityIRRejectsFieldOwnedByDifferentSourceFile(t *testing.T) {
 func TestEntityIRNodeDigestsAndSourceClosure(t *testing.T) {
 	entityRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account")
 	fieldRef := mustRepositoryRef(t, "ent/schema/account.go", "schema:Account/field:name")
-	crud := mustCRUDSpec(t, nexaent.CRUDGet)
+	crud := mustCRUDSpec(t, sourcecomment.CRUDGet)
 	value, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
 		Name: "Account", SourceRef: entityRef,
-		Meta: nexaent.SchemaMeta{
-			Label:       nexaent.LocalizedText{Key: "account.label", ZhCN: "账户", EnUS: "Account"},
-			Description: nexaent.LocalizedText{Key: "account.description", ZhCN: "账户记录", EnUS: "Account record"},
-			Identity:    nexaent.IdentityEntID, Scope: nexaent.ScopeTenant,
+		Meta: sourcecomment.SchemaFacts{
+			Label:       sourcecomment.LocalizedText{Key: "account.label", ZhCN: "账户", EnUS: "Account"},
+			Description: sourcecomment.LocalizedText{Key: "account.description", ZhCN: "账户记录", EnUS: "Account record"},
+			Scope:       sourcecomment.ScopeTenant,
 		},
 		CRUD:     &crud,
 		Identity: entityvalue.IdentityProjection{Kind: string(IdentityImplicit), Name: "id", Type: string(ScalarInt64)},
 		Fields: []entityvalue.FieldProjection{{
 			Name: "name", SourceRef: fieldRef, Type: string(ScalarString),
-			Meta: nexaent.FieldMeta{
-				Label:       nexaent.LocalizedText{Key: "account.name.label", ZhCN: "名称", EnUS: "Name"},
-				Description: nexaent.LocalizedText{Key: "account.name.description", ZhCN: "账户名称", EnUS: "Account name"},
-				UIHint:      nexaent.UIHintText, Visibility: nexaent.VisibilityPublic,
-				CRUD: &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate},
+			Meta: sourcecomment.FieldFacts{
+				Label:       sourcecomment.LocalizedText{Key: "account.name.label", ZhCN: "名称", EnUS: "Name"},
+				Description: sourcecomment.LocalizedText{Key: "account.name.description", ZhCN: "账户名称", EnUS: "Account name"},
+				Control:     sourcecomment.UIControlText, Visibility: sourcecomment.VisibilityPublic,
+				CRUD: &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreateUpdate},
 			},
 		}},
 	}}})
@@ -316,11 +327,11 @@ func TestEntityIRNodeDigestsAndSourceClosure(t *testing.T) {
 		t.Fatal(err)
 	}
 	account, _ := document.Entity("schema:Account")
-	if got := account.Source().Digest.String(); got != "sha256:6eb11eb15ca30faf4e9fcd9fb8155340ee2822bc0d3c8fc67b5133f1bbb95600" {
+	if got := account.Source().Digest.String(); got != "sha256:54896a9f7a98c6efdd889dc91e1fe86dd5e71d3cb91b45404719d0cda593f590" {
 		t.Fatalf("entity digest = %s", got)
 	}
 	name, _ := account.Field("schema:Account/field:name")
-	if got := name.Source().Digest.String(); got != "sha256:54aeb275e425399efa8af52a4ba9dcd6e792e3c6c92d079a689d63c6baca944b" {
+	if got := name.Source().Digest.String(); got != "sha256:7d853d5d3c712453e8c7f7fa5273e592ae81fab7fae0b9fcbd99e81e43b1d2aa" {
 		t.Fatalf("field digest = %s", got)
 	}
 	entityBytes := account.CanonicalSourceJSON()
@@ -440,32 +451,27 @@ func TestEntityIRProducerSourceTuplesRemainTransportClosed(t *testing.T) {
 	}
 }
 
-func validSchemaMeta(prefix string) nexaent.SchemaMeta {
-	return nexaent.SchemaMeta{
-		Label:       nexaent.LocalizedText{Key: prefix + ".label", ZhCN: "标签", EnUS: "Label"},
-		Description: nexaent.LocalizedText{Key: prefix + ".description", ZhCN: "说明", EnUS: "Description"},
-		Identity:    nexaent.IdentityEntID,
-		Scope:       nexaent.ScopeTenant,
+func validSchemaFacts(prefix string) sourcecomment.SchemaFacts {
+	return sourcecomment.SchemaFacts{
+		Label:       sourcecomment.LocalizedText{Key: prefix + ".label", ZhCN: "标签", EnUS: "Label"},
+		Description: sourcecomment.LocalizedText{Key: prefix + ".description", ZhCN: "说明", EnUS: "Description"},
+		Scope:       sourcecomment.ScopeTenant,
 	}
 }
 
-func validFieldMeta(prefix string) nexaent.FieldMeta {
-	return nexaent.FieldMeta{
-		Label:       nexaent.LocalizedText{Key: prefix + ".label", ZhCN: "名称", EnUS: "Name"},
-		Description: nexaent.LocalizedText{Key: prefix + ".description", ZhCN: "名称说明", EnUS: "Name description"},
-		UIHint:      nexaent.UIHintText,
-		Visibility:  nexaent.VisibilityPublic,
-		CRUD:        &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate},
+func validFieldFacts(prefix string) sourcecomment.FieldFacts {
+	return sourcecomment.FieldFacts{
+		Label:       sourcecomment.LocalizedText{Key: prefix + ".label", ZhCN: "名称", EnUS: "Name"},
+		Description: sourcecomment.LocalizedText{Key: prefix + ".description", ZhCN: "名称说明", EnUS: "Name description"},
+		Control:     sourcecomment.UIControlText,
+		Visibility:  sourcecomment.VisibilityPublic,
+		CRUD:        &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreateUpdate},
 	}
 }
 
-func mustCRUDSpec(t *testing.T, operations ...nexaent.CRUDOperation) nexaent.CRUDSpec {
+func mustCRUDSpec(t *testing.T, operations ...sourcecomment.CRUDOperation) sourcecomment.CRUDOperations {
 	t.Helper()
-	canonical, err := nexaent.CRUD(operations...).CanonicalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec, err := nexaent.DecodeCRUD(canonical)
+	spec, err := sourcecomment.NewCRUDOperations(operations...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +496,7 @@ func mustDomainSource(t *testing.T, value string) provenance.DomainSource {
 	return source
 }
 
-func equalCRUDOperations(left, right []nexaent.CRUDOperation) bool {
+func equalCRUDOperations(left, right []sourcecomment.CRUDOperation) bool {
 	if len(left) != len(right) {
 		return false
 	}

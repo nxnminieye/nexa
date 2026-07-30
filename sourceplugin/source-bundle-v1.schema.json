@@ -58,6 +58,15 @@
         "treeDigest": {"$ref": "#/$defs/digest"}
       }
     },
+    "goModuleRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modulePath", "version"],
+      "properties": {
+        "modulePath": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1}
+      }
+    },
     "validation": {
       "type": "object",
       "additionalProperties": false,
@@ -78,6 +87,7 @@
         "files": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "requiresProfiles": {"type": "array", "items": {"$ref": "#/$defs/stableId"}},
         "requiresBundles": {"type": "array", "items": {"$ref": "#/$defs/bundleRequirement"}},
+        "requiresGoModules": {"type": "array", "items": {"$ref": "#/$defs/goModuleRequirement"}},
         "validations": {"type": "array", "items": {"$ref": "#/$defs/validation"}}
       }
     }

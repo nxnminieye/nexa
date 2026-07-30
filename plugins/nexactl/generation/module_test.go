@@ -11,11 +11,12 @@ import (
 
 func TestDirectAPIGenerationConsumesTypedFacts(t *testing.T) {
 	repository := t.TempDir()
+	apiDocument(t, repository)
 	tool := directTool("consumer.api")
 	provider := testProvider{
 		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0", Tools: []generation.ProviderTool{{Role: generation.ToolRoleAPIGo, Tool: delegated(tool.ID)}}},
 		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
-			Facts: apiDocument(t, repository), Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
+			EntryFile: "sample.api", Tool: tool, GeneratedScope: "generated/api", ExtensionScopes: []string{"extensions/api"},
 		}}}},
 	}
 	runner := &testRunner{writePath: "generated/api/routes.go", writeData: []byte("package apigenerated\n")}

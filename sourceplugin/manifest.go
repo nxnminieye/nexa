@@ -93,6 +93,19 @@ func (r BundleRequirement) ProfileID() string                 { return r.profile
 func (r BundleRequirement) ManifestDigest() provenance.Digest { return r.manifestDigest }
 func (r BundleRequirement) TreeDigest() provenance.Digest     { return r.treeDigest }
 
+type GoModuleRequirementSpec struct {
+	ModulePath string
+	Version    string
+}
+
+type GoModuleRequirement struct {
+	modulePath string
+	version    string
+}
+
+func (r GoModuleRequirement) ModulePath() string { return r.modulePath }
+func (r GoModuleRequirement) Version() string    { return r.version }
+
 type ValidationKind string
 
 const (
@@ -120,19 +133,21 @@ func (r ValidationRecipe) WorkingDirectory() string { return r.workingDirectory 
 func (r ValidationRecipe) Packages() []string       { return append([]string(nil), r.packages...) }
 
 type ProfileSpec struct {
-	ID               string
-	Files            []string
-	RequiresProfiles []string
-	RequiresBundles  []BundleRequirementSpec
-	Validations      []ValidationRecipeSpec
+	ID                string
+	Files             []string
+	RequiresProfiles  []string
+	RequiresBundles   []BundleRequirementSpec
+	RequiresGoModules []GoModuleRequirementSpec
+	Validations       []ValidationRecipeSpec
 }
 
 type Profile struct {
-	id               string
-	filePaths        []string
-	requiredProfiles []string
-	requirements     []BundleRequirement
-	validations      []ValidationRecipe
+	id                   string
+	filePaths            []string
+	requiredProfiles     []string
+	requirements         []BundleRequirement
+	goModuleRequirements []GoModuleRequirement
+	validations          []ValidationRecipe
 }
 
 func (p Profile) ID() string { return p.id }
@@ -144,6 +159,9 @@ func (p Profile) RequiredProfileIDs() []string {
 }
 func (p Profile) BundleRequirements() []BundleRequirement {
 	return append([]BundleRequirement(nil), p.requirements...)
+}
+func (p Profile) GoModuleRequirements() []GoModuleRequirement {
+	return append([]GoModuleRequirement(nil), p.goModuleRequirements...)
 }
 func (p Profile) Validations() []ValidationRecipe {
 	result := make([]ValidationRecipe, len(p.validations))
@@ -225,11 +243,12 @@ func (m Manifest) Digest() provenance.Digest { return m.digest }
 
 func cloneProfile(profile Profile) Profile {
 	result := Profile{
-		id:               profile.id,
-		filePaths:        append([]string(nil), profile.filePaths...),
-		requiredProfiles: append([]string(nil), profile.requiredProfiles...),
-		requirements:     append([]BundleRequirement(nil), profile.requirements...),
-		validations:      make([]ValidationRecipe, len(profile.validations)),
+		id:                   profile.id,
+		filePaths:            append([]string(nil), profile.filePaths...),
+		requiredProfiles:     append([]string(nil), profile.requiredProfiles...),
+		requirements:         append([]BundleRequirement(nil), profile.requirements...),
+		goModuleRequirements: append([]GoModuleRequirement(nil), profile.goModuleRequirements...),
+		validations:          make([]ValidationRecipe, len(profile.validations)),
 	}
 	for index, recipe := range profile.validations {
 		result.validations[index] = cloneValidation(recipe)

@@ -3,12 +3,12 @@ package entity
 import (
 	"encoding/json"
 
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 )
 
 const (
-	entityNodeAPIVersion = "nexa.dev/entity-node/v1"
-	fieldNodeAPIVersion  = "nexa.dev/entity-field-node/v2"
+	entityNodeAPIVersion = "nexa.dev/entity-node/v2"
+	fieldNodeAPIVersion  = "nexa.dev/entity-field-node/v3"
 	edgeNodeAPIVersion   = "nexa.dev/entity-edge-node/v1"
 )
 
@@ -19,20 +19,20 @@ type canonicalNodeIdentity struct {
 }
 
 type canonicalEntityNode struct {
-	APIVersion string                `json:"apiVersion"`
-	CRUD       *json.RawMessage      `json:"crud,omitempty"`
-	ID         string                `json:"id"`
-	Identity   canonicalNodeIdentity `json:"identity"`
-	Kind       string                `json:"kind"`
-	Name       string                `json:"name"`
-	SchemaMeta json.RawMessage       `json:"schemaMeta"`
+	APIVersion  string                `json:"apiVersion"`
+	CRUD        *json.RawMessage      `json:"crud,omitempty"`
+	ID          string                `json:"id"`
+	Identity    canonicalNodeIdentity `json:"identity"`
+	Kind        string                `json:"kind"`
+	Name        string                `json:"name"`
+	SchemaFacts json.RawMessage       `json:"schemaFacts"`
 }
 
 type canonicalFieldNode struct {
 	APIVersion    string               `json:"apiVersion"`
 	EntityID      string               `json:"entityId"`
 	EnumValues    []canonicalEnumValue `json:"enumValues"`
-	FieldMeta     json.RawMessage      `json:"fieldMeta"`
+	FieldFacts    json.RawMessage      `json:"fieldFacts"`
 	HasDefault    bool                 `json:"hasDefault"`
 	ID            string               `json:"id"`
 	Immutable     bool                 `json:"immutable"`
@@ -59,18 +59,18 @@ type canonicalEdgeNode struct {
 	Unique         bool          `json:"unique"`
 }
 
-func canonicalEntitySource(id, name string, meta nexaent.SchemaMeta, crud nexaent.CRUDSpec, hasCRUD bool, identity *identityState) ([]byte, error) {
-	schemaMeta, err := canonicalSchemaMeta(meta)
+func canonicalEntitySource(id, name string, meta sourcecomment.SchemaFacts, crud sourcecomment.CRUDOperations, hasCRUD bool, identity *identityState) ([]byte, error) {
+	schemaFacts, err := canonicalSchemaFacts(meta)
 	if err != nil {
 		return nil, err
 	}
 	document := canonicalEntityNode{
-		APIVersion: entityNodeAPIVersion,
-		ID:         id,
-		Identity:   canonicalNodeIdentity{Kind: identity.kind, Name: identity.name, Type: identity.typeID},
-		Kind:       "Entity",
-		Name:       name,
-		SchemaMeta: schemaMeta,
+		APIVersion:  entityNodeAPIVersion,
+		ID:          id,
+		Identity:    canonicalNodeIdentity{Kind: identity.kind, Name: identity.name, Type: identity.typeID},
+		Kind:        "Entity",
+		Name:        name,
+		SchemaFacts: schemaFacts,
 	}
 	if hasCRUD {
 		encoded, err := canonicalCRUD(crud)
@@ -84,7 +84,7 @@ func canonicalEntitySource(id, name string, meta nexaent.SchemaMeta, crud nexaen
 }
 
 func canonicalFieldSource(entityID string, field *fieldState) ([]byte, error) {
-	meta, err := canonicalFieldMeta(field.meta)
+	facts, err := canonicalFieldFacts(field.meta)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func canonicalFieldSource(entityID string, field *fieldState) ([]byte, error) {
 		APIVersion:    fieldNodeAPIVersion,
 		EntityID:      entityID,
 		EnumValues:    canonicalEnumValues(field.enumValues),
-		FieldMeta:     meta,
+		FieldFacts:    facts,
 		HasDefault:    field.hasDefault,
 		ID:            field.id,
 		Immutable:     field.immutable,

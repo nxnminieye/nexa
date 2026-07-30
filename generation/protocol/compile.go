@@ -14,10 +14,7 @@ import (
 
 	"github.com/bufbuild/protocompile"
 	"github.com/bufbuild/protocompile/linker"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 var serviceIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
@@ -27,12 +24,10 @@ type resolverAdapter struct {
 	owner    Resolver
 	mu       sync.Mutex
 	failures map[string]error
+	sources  map[string][]byte
 }
 
 func (r *resolverAdapter) FindFileByPath(filePath string) (protocompile.SearchResult, error) {
-	if filePath == optionsProtoPath {
-		return protocompile.SearchResult{Source: bytes.NewReader(embeddedOptionsProto)}, nil
-	}
 	if strings.HasPrefix(filePath, "google/protobuf/") {
 		return protocompile.SearchResult{}, os.ErrNotExist
 	}
@@ -59,6 +54,12 @@ func (r *resolverAdapter) FindFileByPath(filePath string) (protocompile.SearchRe
 		r.record(filePath, closeErr)
 		return protocompile.SearchResult{}, closeErr
 	}
+	r.mu.Lock()
+	if r.sources == nil {
+		r.sources = make(map[string][]byte)
+	}
+	r.sources[filePath] = append([]byte(nil), data...)
+	r.mu.Unlock()
 	return protocompile.SearchResult{Source: bytes.NewReader(data)}, nil
 }
 func (r *resolverAdapter) record(filePath string, err error) {
@@ -83,6 +84,11 @@ func (r *resolverAdapter) failure() (string, error) {
 	}
 	sort.Strings(paths)
 	return paths[0], r.failures[paths[0]]
+}
+func (r *resolverAdapter) source(filePath string) []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]byte(nil), r.sources[filePath]...)
 }
 
 func Compile(ctx context.Context, options CompileOptions) (Document, error) {
@@ -116,8 +122,7 @@ func Compile(ctx context.Context, options CompileOptions) (Document, error) {
 	sort.Strings(entries)
 	adapter := &resolverAdapter{ctx: ctx, owner: options.Resolver}
 	compiler := protocompile.Compiler{Resolver: protocompile.WithStandardImports(adapter), SourceInfoMode: protocompile.SourceInfoStandard | protocompile.SourceInfoExtraOptionLocations}
-	requested := append(append([]string(nil), entries...), optionsProtoPath)
-	compiled, err := compiler.Compile(ctx, requested...)
+	compiled, err := compiler.Compile(ctx, entries...)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return Document{}, cancellationError(ctxErr)
@@ -127,7 +132,7 @@ func Compile(ctx context.Context, options CompileOptions) (Document, error) {
 		}
 		return Document{}, protocolError("protocol_compile_failed", "descriptor_link_failed", "", "", "Proto descriptor compilation failed")
 	}
-	return projectDocument(options.ServiceID, entries, compiled)
+	return projectDocument(options.ServiceID, entries, compiled, adapter, options.SourceProjection)
 }
 
 func cancellationError(err error) *Error {
@@ -138,25 +143,11 @@ func cancellationError(err error) *Error {
 	return protocolError("protocol_compile_cancelled", reason, "", "", "Proto descriptor compilation was cancelled")
 }
 
-func projectDocument(serviceID string, entries []string, compiled linker.Files) (Document, error) {
-	optionFile := compiled.FindFileByPath(optionsProtoPath)
-	if optionFile == nil {
-		return Document{}, protocolError("protocol_compile_failed", "options_descriptor_missing", optionsProtoPath, "", "embedded options descriptor is missing")
-	}
-	httpExtension, ok := optionFile.FindDescriptorByName("nexa.protocol.v1.http_proxy").(protoreflect.ExtensionDescriptor)
-	if !ok {
-		return Document{}, protocolError("protocol_compile_failed", "options_descriptor_invalid", optionsProtoPath, "", "embedded HTTP proxy extension is invalid")
-	}
-	httpExtensionType := dynamicpb.NewExtensionType(httpExtension)
-	rpcContextExtension, ok := optionFile.FindDescriptorByName("nexa.protocol.v1.rpc_context").(protoreflect.ExtensionDescriptor)
-	if !ok {
-		return Document{}, protocolError("protocol_compile_failed", "options_descriptor_invalid", optionsProtoPath, "", "embedded RPC context extension is invalid")
-	}
-	rpcContextExtensionType := dynamicpb.NewExtensionType(rpcContextExtension)
+func projectDocument(serviceID string, entries []string, compiled linker.Files, resolver *resolverAdapter, projection *SourceProjection) (Document, error) {
 	consumerFiles := map[string]linker.File{}
 	var visit func(linker.File)
 	visit = func(file linker.File) {
-		if file == nil || file.Path() == optionsProtoPath || strings.HasPrefix(file.Path(), "google/protobuf/") {
+		if file == nil || strings.HasPrefix(file.Path(), "google/protobuf/") {
 			return
 		}
 		if _, exists := consumerFiles[file.Path()]; exists {
@@ -178,41 +169,24 @@ func projectDocument(serviceID string, entries []string, compiled linker.Files) 
 	sort.Strings(paths)
 	state := &documentState{serviceID: serviceID, messages: map[string]*messageState{}, enums: map[string]*enumState{}, services: map[string]*serviceState{}, methods: map[string]*methodState{}}
 	for _, filePath := range paths {
-		file, err := projectFile(consumerFiles[filePath], httpExtensionType, rpcContextExtensionType, state)
+		file, err := projectFile(consumerFiles[filePath], state)
 		if err != nil {
 			return Document{}, err
 		}
 		state.files = append(state.files, file)
 	}
-	operationIDs := make(map[string]struct{})
-	routes := make(map[string]struct{})
-	methodNames := make([]string, 0, len(state.methods))
-	for name := range state.methods {
-		methodNames = append(methodNames, name)
-	}
-	sort.Strings(methodNames)
-	for _, name := range methodNames {
-		method := state.methods[name]
-		if method.httpProxy == nil {
-			continue
-		}
-		if _, duplicate := operationIDs[method.httpProxy.operationID]; duplicate {
-			return Document{}, protocolError("protocol_ir_invalid", "operation_id_duplicate", method.filePath, "", "HTTP proxy operation id is duplicated")
-		}
-		operationIDs[method.httpProxy.operationID] = struct{}{}
-		route := string(method.httpProxy.method) + "\x00" + method.httpProxy.path
-		if _, duplicate := routes[route]; duplicate {
-			return Document{}, protocolError("protocol_ir_invalid", "route_duplicate", method.filePath, "", "HTTP proxy route is duplicated")
-		}
-		routes[route] = struct{}{}
-	}
 	if err := finalizeSources(state); err != nil {
 		return Document{}, err
 	}
+	graph, err := buildProtoFactGraph(paths, consumerFiles, resolver, state, projection)
+	if err != nil {
+		return Document{}, err
+	}
+	state.factGraph = graph
 	return Document{state: state}, nil
 }
 
-func projectFile(file linker.File, httpExtensionType, rpcContextExtensionType protoreflect.ExtensionType, document *documentState) (*fileState, error) {
+func projectFile(file linker.File, document *documentState) (*fileState, error) {
 	if file.Syntax() != protoreflect.Proto3 {
 		return nil, protocolError("protocol_ir_invalid", "syntax_unsupported", file.Path(), "", "Protocol entry files must use proto3 syntax")
 	}
@@ -229,32 +203,6 @@ func projectFile(file linker.File, httpExtensionType, rpcContextExtensionType pr
 		for j := 0; j < service.Methods().Len(); j++ {
 			method := service.Methods().Get(j)
 			methodState := &methodState{fullName: string(method.FullName()), filePath: file.Path(), name: string(method.Name()), input: string(method.Input().FullName()), output: string(method.Output().FullName()), clientStreaming: method.IsStreamingClient(), serverStreaming: method.IsStreamingServer(), location: descriptorLocation(file, method)}
-			options, _ := method.Options().(*descriptorpb.MethodOptions)
-			if options != nil && proto.HasExtension(options, httpExtensionType) {
-				if methodState.clientStreaming || methodState.serverStreaming {
-					return nil, protocolError("protocol_ir_invalid", "streaming_proxy_invalid", file.Path(), "", "HTTP proxy cannot target a streaming RPC")
-				}
-				value, ok := proto.GetExtension(options, httpExtensionType).(protoreflect.Message)
-				if !ok || !value.IsValid() {
-					return nil, protocolError("protocol_ir_invalid", "http_proxy_invalid", file.Path(), "", "HTTP proxy option is invalid")
-				}
-				proxy, err := decodeHTTPProxy(value, method)
-				if err != nil {
-					return nil, err
-				}
-				methodState.httpProxy = proxy
-			}
-			if options != nil && proto.HasExtension(options, rpcContextExtensionType) {
-				value, ok := proto.GetExtension(options, rpcContextExtensionType).(protoreflect.Message)
-				if !ok || !value.IsValid() {
-					return nil, protocolError("protocol_ir_invalid", "rpc_context_invalid", file.Path(), "", "RPC context option is invalid")
-				}
-				rpcContext, err := decodeRPCContext(value, method)
-				if err != nil {
-					return nil, err
-				}
-				methodState.rpcContext = rpcContext
-			}
 			serviceState.methods = append(serviceState.methods, methodState)
 			document.methods[methodState.fullName] = methodState
 		}

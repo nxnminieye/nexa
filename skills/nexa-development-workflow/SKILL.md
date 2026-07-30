@@ -29,8 +29,8 @@ description: Use when a Nexa framework or consumer change needs planning, isolat
 - 计划必须明确准确命令、输入、affected files、允许的副作用、验证命令和回滚方式。运行 `nexactl inspect --json` 是为了发现实际 command path、owner、flags、schema、side effect 和 delegated tools，并检查计划与当前实现是否漂移。
 - Inspection 不批准命令。它与计划不一致、输入不完整或副作用超出计划时停止执行并报告差异；repository write 前重新确认输入与写集。
 - Runtime `nexa`、可发布的 Python SDK/wheel、HTTP parity、quality 和 deployment 在 V0.1 均为
-  not-selected；reference `nexactl` 中的 governance validation、Skill sync 与 `sdk-python-assets` 工程命令
-  不等于这些 runtime 能力已被 consumer 选择。不探测缺失 binary，不创建对应事实或占位目录。
+  not-selected；未发布的 Python SDK runtime 已随旧 `sdk/api` descriptor contract 删除。不探测缺失 binary，
+  不创建对应事实或占位目录。
 - 任何不直接服务 starter 或受控代码生成的新增框架能力，必须在设计、写计划或实现前交用户审核。
 
 ## 集成与外部写入

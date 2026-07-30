@@ -39,5 +39,5 @@ func (e *Error) Pointer() string {
 }
 
 func invalid(reason, source, pointer, message string) *Error {
-	return &Error{code: "composition_ir_invalid", reason: reason, source: source, pointer: pointer, message: message}
+	return &Error{code: "composition_projection_invalid", reason: reason, source: source, pointer: pointer, message: message}
 }

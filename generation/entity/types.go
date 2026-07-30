@@ -3,12 +3,12 @@ package entity
 
 import (
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
 const (
-	APIVersion          = "nexa.dev/entity-ir/v2"
+	APIVersion          = "nexa.dev/entity-ir/v3"
 	Kind                = "EntityIR"
 	SourceSetAPIVersion = "nexa.dev/entity-source-set/v1"
 )
@@ -45,7 +45,10 @@ const (
 
 type EnumValue struct{ Name, Value string }
 
-type Document struct{ state entityvalue.Document }
+type Document struct {
+	state     entityvalue.Document
+	factGraph sourcecomment.FactGraph
+}
 type Entity struct{ state entityvalue.Entity }
 type Field struct{ state entityvalue.Field }
 type Edge struct{ state entityvalue.Edge }
@@ -71,8 +74,8 @@ type snapshotState struct {
 type snapshotEntityState struct {
 	id, name  string
 	sourceRef provenance.SourceRef
-	meta      nexaent.SchemaMeta
-	crud      nexaent.CRUDSpec
+	meta      sourcecomment.SchemaFacts
+	crud      sourcecomment.CRUDOperations
 	hasCRUD   bool
 	identity  *snapshotIdentityState
 	fields    []*snapshotFieldState
@@ -92,7 +95,7 @@ type snapshotFieldState struct {
 	typeID                                                                          ScalarType
 	enumValues                                                                      []EnumValue
 	optional, nillable, immutable, hasDefault, sensitive, isIdentity, isTenantField bool
-	meta                                                                            nexaent.FieldMeta
+	meta                                                                            sourcecomment.FieldFacts
 }
 type snapshotIdentityState struct {
 	kind      IdentityKind
@@ -115,7 +118,7 @@ type fieldState struct {
 	typeID                                                                          ScalarType
 	enumValues                                                                      []EnumValue
 	optional, nillable, immutable, hasDefault, sensitive, isIdentity, isTenantField bool
-	meta                                                                            nexaent.FieldMeta
+	meta                                                                            sourcecomment.FieldFacts
 }
 
 func (d Document) APIVersion() string              { return d.state.APIVersion() }
@@ -127,6 +130,7 @@ func (d Document) ExecutionModuleSources() []provenance.Source {
 func (d Document) Source(ref provenance.SourceRef) (provenance.Source, bool) {
 	return d.state.Source(ref)
 }
+func (d Document) FactGraph() sourcecomment.FactGraph { return d.factGraph }
 func (d Document) Entities() []Entity {
 	values := d.state.Entities()
 	result := make([]Entity, len(values))
@@ -140,13 +144,13 @@ func (d Document) Entity(id string) (Entity, bool) {
 	return Entity{state: value}, ok
 }
 
-func (e Entity) ID() string                     { return e.state.ID() }
-func (e Entity) Name() string                   { return e.state.Name() }
-func (e Entity) Source() provenance.Source      { return e.state.Source() }
-func (e Entity) CanonicalSourceJSON() []byte    { return e.state.CanonicalSourceJSON() }
-func (e Entity) Meta() nexaent.SchemaMeta       { return e.state.Meta() }
-func (e Entity) CRUD() (nexaent.CRUDSpec, bool) { return e.state.CRUD() }
-func (e Entity) Identity() Identity             { return Identity{state: e.state.Identity()} }
+func (e Entity) ID() string                                 { return e.state.ID() }
+func (e Entity) Name() string                               { return e.state.Name() }
+func (e Entity) Source() provenance.Source                  { return e.state.Source() }
+func (e Entity) CanonicalSourceJSON() []byte                { return e.state.CanonicalSourceJSON() }
+func (e Entity) Meta() sourcecomment.SchemaFacts            { return e.state.Meta() }
+func (e Entity) CRUD() (sourcecomment.CRUDOperations, bool) { return e.state.CRUD() }
+func (e Entity) Identity() Identity                         { return Identity{state: e.state.Identity()} }
 func (e Entity) Fields() []Field {
 	values := e.state.Fields()
 	result := make([]Field, len(values))
@@ -202,14 +206,14 @@ func (f Field) EnumValues() []EnumValue {
 	}
 	return result
 }
-func (f Field) Optional() bool          { return f.state.Optional() }
-func (f Field) Nillable() bool          { return f.state.Nillable() }
-func (f Field) Immutable() bool         { return f.state.Immutable() }
-func (f Field) HasDefault() bool        { return f.state.HasDefault() }
-func (f Field) Sensitive() bool         { return f.state.Sensitive() }
-func (f Field) IsIdentity() bool        { return f.state.IsIdentity() }
-func (f Field) IsTenantField() bool     { return f.state.IsTenantField() }
-func (f Field) Meta() nexaent.FieldMeta { return f.state.Meta() }
+func (f Field) Optional() bool                 { return f.state.Optional() }
+func (f Field) Nillable() bool                 { return f.state.Nillable() }
+func (f Field) Immutable() bool                { return f.state.Immutable() }
+func (f Field) HasDefault() bool               { return f.state.HasDefault() }
+func (f Field) Sensitive() bool                { return f.state.Sensitive() }
+func (f Field) IsIdentity() bool               { return f.state.IsIdentity() }
+func (f Field) IsTenantField() bool            { return f.state.IsTenantField() }
+func (f Field) Meta() sourcecomment.FieldFacts { return f.state.Meta() }
 
 func (s Snapshot) APIVersion() string {
 	if s.state == nil {
@@ -269,15 +273,15 @@ func (e SnapshotEntity) SourceRef() provenance.SourceRef {
 	}
 	return e.state.sourceRef
 }
-func (e SnapshotEntity) Meta() nexaent.SchemaMeta {
+func (e SnapshotEntity) Meta() sourcecomment.SchemaFacts {
 	if e.state == nil {
-		return nexaent.SchemaMeta{}
+		return sourcecomment.SchemaFacts{}
 	}
-	return cloneSchemaMeta(e.state.meta)
+	return cloneSchemaFacts(e.state.meta)
 }
-func (e SnapshotEntity) CRUD() (nexaent.CRUDSpec, bool) {
+func (e SnapshotEntity) CRUD() (sourcecomment.CRUDOperations, bool) {
 	if e.state == nil || !e.state.hasCRUD {
-		return nexaent.CRUDSpec{}, false
+		return sourcecomment.CRUDOperations{}, false
 	}
 	return e.state.crud, true
 }
@@ -424,11 +428,11 @@ func (f SnapshotField) HasDefault() bool    { return f.state != nil && f.state.h
 func (f SnapshotField) Sensitive() bool     { return f.state != nil && f.state.sensitive }
 func (f SnapshotField) IsIdentity() bool    { return f.state != nil && f.state.isIdentity }
 func (f SnapshotField) IsTenantField() bool { return f.state != nil && f.state.isTenantField }
-func (f SnapshotField) Meta() nexaent.FieldMeta {
+func (f SnapshotField) Meta() sourcecomment.FieldFacts {
 	if f.state == nil {
-		return nexaent.FieldMeta{}
+		return sourcecomment.FieldFacts{}
 	}
-	return cloneFieldMeta(f.state.meta)
+	return cloneFieldFacts(f.state.meta)
 }
 
 func (i SnapshotIdentity) Kind() IdentityKind {
@@ -456,16 +460,12 @@ func (i SnapshotIdentity) SourceRef() provenance.SourceRef {
 	return i.state.sourceRef
 }
 
-func cloneSchemaMeta(meta nexaent.SchemaMeta) nexaent.SchemaMeta { return meta }
-func cloneFieldMeta(meta nexaent.FieldMeta) nexaent.FieldMeta {
+func cloneSchemaFacts(meta sourcecomment.SchemaFacts) sourcecomment.SchemaFacts { return meta }
+func cloneFieldFacts(meta sourcecomment.FieldFacts) sourcecomment.FieldFacts {
 	result := meta
-	if meta.PhysicalDisplay != nil {
-		value := *meta.PhysicalDisplay
-		result.PhysicalDisplay = &value
-	}
-	if meta.LogicalReference != nil {
-		value := *meta.LogicalReference
-		result.LogicalReference = &value
+	if meta.Reference != nil {
+		value := *meta.Reference
+		result.Reference = &value
 	}
 	if meta.CRUD != nil {
 		value := *meta.CRUD

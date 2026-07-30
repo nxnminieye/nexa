@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexa.dev/schemas/generation/frontend/frontend-locale-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "locale", "messages"],
+  "properties": {
+    "apiVersion": {"const": "nexa.dev/frontend-locale/v1"},
+    "kind": {"const": "FrontendLocale"},
+    "locale": {"type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$"},
+    "messages": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[a-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*$"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    }
+  }
+}

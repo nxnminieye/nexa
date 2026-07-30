@@ -1,39 +1,29 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 package schema
 
 import (
 	"entgo.io/ent"
-	entschema "entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
-
-	"github.com/nxnminieye/nexa/nexaent"
 )
 
+// @nexa label.zh-CN: "账号"
+// @nexa label.en-US: "Account"
+// @nexa description.zh-CN: "业务账号"
+// @nexa description.en-US: "Business account"
+// @nexa scope: "tenant"
+// @nexa crud.operations: ["list","get","create"]
 type Account struct{ ent.Schema }
-
-func (Account) Annotations() []entschema.Annotation {
-	return []entschema.Annotation{
-		nexaent.Schema(nexaent.SchemaMeta{
-			Label:       localized("account.label", "账号", "Account"),
-			Description: localized("account.description", "业务账号", "Business account"),
-			Identity:    nexaent.IdentityEntID,
-			Scope:       nexaent.ScopeTenant,
-		}),
-		nexaent.CRUD(nexaent.CRUDList, nexaent.CRUDGet, nexaent.CRUDCreate),
-	}
-}
 
 func (Account) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("name").Annotations(nexaent.Field(nexaent.FieldMeta{
-			Label:       localized("account.name.label", "名称", "Name"),
-			Description: localized("account.name.description", "账号名称", "Account name"),
-			UIHint:      nexaent.UIHintText,
-			Visibility:  nexaent.VisibilityPublic,
-			CRUD:        &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate},
-		})),
+		// @nexa label.zh-CN: "名称"
+		// @nexa label.en-US: "Name"
+		// @nexa description.zh-CN: "账号名称"
+		// @nexa description.en-US: "Account name"
+		// @nexa ui.control: "text"
+		// @nexa visibility: "public"
+		// @nexa crud.read: "include"
+		// @nexa crud.mutation: "create-update"
+		field.String("name"),
 	}
-}
-
-func localized(key, zhCN, enUS string) nexaent.LocalizedText {
-	return nexaent.LocalizedText{Key: key, ZhCN: zhCN, EnUS: enUS}
 }

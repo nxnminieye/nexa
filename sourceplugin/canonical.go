@@ -25,11 +25,17 @@ type canonicalFile struct {
 }
 
 type canonicalProfile struct {
-	ID               string                       `json:"id"`
-	Files            []string                     `json:"files"`
-	RequiresProfiles []string                     `json:"requiresProfiles"`
-	RequiresBundles  []canonicalBundleRequirement `json:"requiresBundles"`
-	Validations      []canonicalValidationRecipe  `json:"validations"`
+	ID                string                         `json:"id"`
+	Files             []string                       `json:"files"`
+	RequiresProfiles  []string                       `json:"requiresProfiles"`
+	RequiresBundles   []canonicalBundleRequirement   `json:"requiresBundles"`
+	RequiresGoModules []canonicalGoModuleRequirement `json:"requiresGoModules,omitempty"`
+	Validations       []canonicalValidationRecipe    `json:"validations"`
+}
+
+type canonicalGoModuleRequirement struct {
+	ModulePath string `json:"modulePath"`
+	Version    string `json:"version"`
 }
 
 type canonicalBundleRequirement struct {
@@ -66,9 +72,15 @@ func canonicalManifestJSON(manifest Manifest) ([]byte, error) {
 	for index, profile := range manifest.profiles {
 		canonical := canonicalProfile{
 			ID: profile.id, Files: append([]string{}, profile.filePaths...),
-			RequiresProfiles: append([]string{}, profile.requiredProfiles...),
-			RequiresBundles:  make([]canonicalBundleRequirement, len(profile.requirements)),
-			Validations:      make([]canonicalValidationRecipe, len(profile.validations)),
+			RequiresProfiles:  append([]string{}, profile.requiredProfiles...),
+			RequiresBundles:   make([]canonicalBundleRequirement, len(profile.requirements)),
+			RequiresGoModules: make([]canonicalGoModuleRequirement, len(profile.goModuleRequirements)),
+			Validations:       make([]canonicalValidationRecipe, len(profile.validations)),
+		}
+		for requirementIndex, requirement := range profile.goModuleRequirements {
+			canonical.RequiresGoModules[requirementIndex] = canonicalGoModuleRequirement{
+				ModulePath: requirement.modulePath, Version: requirement.version,
+			}
 		}
 		for requirementIndex, requirement := range profile.requirements {
 			canonical.RequiresBundles[requirementIndex] = canonicalBundleRequirement{

@@ -179,7 +179,7 @@ func TestUpgradeRejectsValidationTamperedStagedOwnershipBeforePublishing(t *test
 	newProvider, newRef := lifecycleValidationProviderVersion(t, "v0.2.0")
 	resolver, _ := release.NewExactResolver(nil, oldProvider, newProvider)
 	executor := lifecycleExecutorFunc(func(execution Execution) (ExecutionResult, error) {
-		ownership := filepath.Clean(filepath.Join(execution.Directory, "..", "..", "ownership.json"))
+		ownership := filepath.Clean(filepath.Join(execution.Directory, "..", "..", "..", "..", "ownership.json"))
 		if err := os.WriteFile(ownership, []byte("tampered\n"), 0o600); err != nil {
 			return ExecutionResult{}, err
 		}

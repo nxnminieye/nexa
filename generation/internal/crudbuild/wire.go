@@ -12,15 +12,13 @@ type wireSource struct {
 	Digest string `json:"digest"`
 }
 type wireField struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Number        int32      `json:"number"`
-	Type          string     `json:"type"`
-	Repeated      bool       `json:"repeated"`
-	Optional      bool       `json:"optional"`
-	Internal      bool       `json:"internal"`
-	TenantContext bool       `json:"tenantContext"`
-	Source        wireSource `json:"source"`
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Number   int32      `json:"number"`
+	Type     string     `json:"type"`
+	Repeated bool       `json:"repeated"`
+	Optional bool       `json:"optional"`
+	Source   wireSource `json:"source"`
 }
 type wireMessage struct {
 	ID              string      `json:"id"`
@@ -42,18 +40,10 @@ type wireEnum struct {
 	ReservedNumbers []int32         `json:"reservedNumbers"`
 }
 type wireMethod struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	Input      string         `json:"input"`
-	Output     string         `json:"output"`
-	RPCContext wireRPCContext `json:"rpcContext"`
-}
-type wireRPCContext struct {
-	ContextFields []wireContextBinding `json:"contextFields"`
-}
-type wireContextBinding struct {
-	Source   string `json:"source"`
-	RPCField string `json:"rpcField"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Input  string `json:"input"`
+	Output string `json:"output"`
 }
 type wireService struct {
 	ID      string       `json:"id"`
@@ -136,20 +126,14 @@ func documentWire(state *documentState) wireDocument {
 	for _, value := range state.messages {
 		item := wireMessage{ID: value.id, Name: value.name, Fields: []wireField{}, ReservedNames: append([]string{}, value.reservedNames...), ReservedNumbers: append([]int32{}, value.reservedNumbers...)}
 		for _, field := range value.fields {
-			item.Fields = append(item.Fields, wireField{ID: field.id, Name: field.name, Number: field.number, Type: field.wireType, Repeated: field.repeated, Optional: field.optional, Internal: field.internal, TenantContext: field.tenantContext, Source: wireSource{Ref: field.source.Ref.String(), Digest: field.source.Digest.String()}})
+			item.Fields = append(item.Fields, wireField{ID: field.id, Name: field.name, Number: field.number, Type: field.wireType, Repeated: field.repeated, Optional: field.optional, Source: wireSource{Ref: field.source.Ref.String(), Digest: field.source.Digest.String()}})
 		}
 		result.Messages = append(result.Messages, item)
 	}
 	for _, value := range state.services {
 		item := wireService{ID: value.id, Name: value.name, Methods: []wireMethod{}}
 		for _, method := range value.methods {
-			contextFields := []wireContextBinding{}
-			if method.rpcContext != nil {
-				for _, binding := range method.rpcContext.contextFields {
-					contextFields = append(contextFields, wireContextBinding{Source: string(binding.source), RPCField: binding.rpcField})
-				}
-			}
-			item.Methods = append(item.Methods, wireMethod{ID: method.id, Name: method.name, Input: method.input, Output: method.output, RPCContext: wireRPCContext{ContextFields: contextFields}})
+			item.Methods = append(item.Methods, wireMethod{ID: method.id, Name: method.name, Input: method.input, Output: method.output})
 		}
 		result.Services = append(result.Services, item)
 	}

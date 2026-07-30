@@ -1,0 +1,18 @@
+{
+  "apiVersion": "nexa.dev/http-convention/v1",
+  "kind": "HTTPConventionConformance",
+  "requestCases": [
+    {"name": "list-records", "method": "GET", "path": "/records", "fields": ["limit", "offset", "query"], "locations": ["query", "query", "query"]},
+    {"name": "update-record", "method": "PATCH", "path": "/records/{id}", "fields": ["id", "name"], "locations": ["path", "body"]}
+  ],
+  "successCases": [
+    {"method": "GET", "path": "/records", "status": 200},
+    {"method": "POST", "path": "/records", "status": 200},
+    {"method": "DELETE", "path": "/records/{id}", "status": 200}
+  ],
+  "paginationCases": [
+    {"limit": 20, "offset": 0, "accepted": true},
+    {"limit": 0, "offset": 0, "accepted": false},
+    {"limit": 20, "offset": -1, "accepted": false}
+  ]
+}

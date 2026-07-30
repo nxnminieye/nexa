@@ -2,19 +2,18 @@ package quality
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"testing"
 
 	"github.com/nxnminieye/nexa/generation/api"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/sourceplugin"
+	"github.com/nxnminieye/nexa/sourceplugin/release"
 )
 
 func TestProviderPublishesFrozenProfiles(t *testing.T) {
@@ -27,8 +26,15 @@ func TestProviderPublishesFrozenProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := provider.Manifest().Identity()
-	if identity.ProviderID() != "quality-runtime" || identity.Version() != "v0.1.0" {
+	if identity.ProviderID() != "quality-runtime" || identity.Version() != "v0.3.0-alpha.2" {
 		t.Fatalf("identity = %s@%s", identity.ProviderID(), identity.Version())
+	}
+	ref, err := release.FromProvider(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.ProviderID() != identity.ProviderID() || ref.ModulePath() != identity.ModulePath() || ref.PackagePath() != identity.PackagePath() || ref.Version() != "v0.3.0-alpha.2" {
+		t.Fatalf("provider release ref = %s@%s", ref.ProviderID(), ref.Version())
 	}
 	snapshot, err := sourceplugin.SnapshotProvider(provider)
 	if err != nil || snapshot.Manifest().Digest() != provider.Manifest().Digest() || snapshot.Tree().Digest() != provider.Tree().Digest() {
@@ -39,13 +45,10 @@ func TestProviderPublishesFrozenProfiles(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(backend.ProfileIDs(), []string{"backend"}) {
 		t.Fatalf("backend closure = %#v, %v", backend.ProfileIDs(), err)
 	}
-	frontend, err := provider.Manifest().ResolveProfile("frontend")
-	if err != nil || !reflect.DeepEqual(frontend.ProfileIDs(), []string{"frontend"}) {
-		t.Fatalf("frontend closure = %#v, %v", frontend.ProfileIDs(), err)
-	}
-	full, err := provider.Manifest().ResolveProfile("full")
-	if err != nil || !reflect.DeepEqual(full.ProfileIDs(), []string{"backend", "frontend", "full"}) {
-		t.Fatalf("full closure = %#v, %v", full.ProfileIDs(), err)
+	for _, removed := range []string{"frontend", "full"} {
+		if _, ok := provider.Manifest().LookupProfile(removed); ok {
+			t.Fatalf("consumer-owned %q profile remains public", removed)
+		}
 	}
 
 	first := provider.Tree().Files()
@@ -90,115 +93,6 @@ func TestProviderManualContractsAreReadOnly(t *testing.T) {
 	service, ok := protocolDocument.Service("quality.v1.QualityService")
 	if !ok || len(service.Methods()) != 2 {
 		t.Fatalf("QualityService methods = %#v", service.Methods())
-	}
-}
-
-func TestFrontendProfileIsIndependentStructuredReadOnlySource(t *testing.T) {
-	provider, err := New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	closure, err := provider.Manifest().ResolveProfile("frontend")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(closure.BundleRequirements()) != 0 || len(closure.Validations()) != 0 {
-		t.Fatalf("frontend dependencies = bundles:%d validations:%d", len(closure.BundleRequirements()), len(closure.Validations()))
-	}
-
-	type field struct {
-		ID       string `json:"id"`
-		LabelKey string `json:"labelKey"`
-		Items    *struct {
-			Fields []field `json:"fields"`
-		} `json:"items"`
-	}
-	objectFound, pageFound := false, false
-	locales := map[string]map[string]string{}
-	labelKeys := map[string]struct{}{}
-	for _, file := range closure.Files() {
-		entry, ok := provider.Tree().Lookup(file.Path())
-		if !ok {
-			t.Fatalf("tree file %q missing", file.Path())
-		}
-		var header struct {
-			APIVersion string `json:"apiVersion"`
-			Kind       string `json:"kind"`
-		}
-		if err := json.Unmarshal(entry.Bytes(), &header); err != nil {
-			t.Fatalf("structured frontend asset: %v", err)
-		}
-		switch header.Kind {
-		case "FrontendObject":
-			if header.APIVersion != "nexa.dev/frontend-object/v1" {
-				t.Fatalf("object apiVersion = %q", header.APIVersion)
-			}
-			var object struct {
-				ID       string  `json:"id"`
-				ReadOnly bool    `json:"readOnly"`
-				Fields   []field `json:"fields"`
-			}
-			if err := json.Unmarshal(entry.Bytes(), &object); err != nil {
-				t.Fatal(err)
-			}
-			if object.ID != "quality-read-model" || !object.ReadOnly {
-				t.Fatalf("object = %#v", object)
-			}
-			var requirementFields []string
-			for _, candidate := range object.Fields {
-				labelKeys[candidate.LabelKey] = struct{}{}
-				if candidate.ID == "requirements" && candidate.Items != nil {
-					for _, nested := range candidate.Items.Fields {
-						requirementFields = append(requirementFields, nested.ID)
-						labelKeys[nested.LabelKey] = struct{}{}
-					}
-				}
-			}
-			sort.Strings(requirementFields)
-			want := []string{"evidenceRefs", "freezeRefs", "freezeStatus", "gapCodes", "requirement", "status", "testRefs", "title"}
-			if !reflect.DeepEqual(requirementFields, want) {
-				t.Fatalf("requirement fields = %#v", requirementFields)
-			}
-			objectFound = true
-		case "FrontendLocale":
-			if header.APIVersion != "nexa.dev/frontend-locale/v1" {
-				t.Fatalf("locale apiVersion = %q", header.APIVersion)
-			}
-			var locale struct {
-				Locale   string            `json:"locale"`
-				Messages map[string]string `json:"messages"`
-			}
-			if err := json.Unmarshal(entry.Bytes(), &locale); err != nil {
-				t.Fatal(err)
-			}
-			locales[locale.Locale] = locale.Messages
-		case "FrontendPage":
-			if header.APIVersion != "nexa.dev/frontend-page/v1" {
-				t.Fatalf("page apiVersion = %q", header.APIVersion)
-			}
-			var page struct {
-				Mode              string `json:"mode"`
-				ObjectID          string `json:"objectId"`
-				SnapshotOperation string `json:"snapshotOperationId"`
-			}
-			if err := json.Unmarshal(entry.Bytes(), &page); err != nil {
-				t.Fatal(err)
-			}
-			if page.Mode != "read-only" || page.ObjectID != "quality-read-model" || page.SnapshotOperation != "quality.snapshot.get" {
-				t.Fatalf("page = %#v", page)
-			}
-			pageFound = true
-		default:
-			t.Fatalf("unsupported frontend kind %q", header.Kind)
-		}
-	}
-	if !objectFound || !pageFound || len(locales["en-US"]) == 0 || len(locales["zh-CN"]) == 0 {
-		t.Fatalf("frontend assets = object:%v page:%v locales:%v", objectFound, pageFound, locales)
-	}
-	for label := range labelKeys {
-		if label == "" || locales["en-US"][label] == "" || locales["zh-CN"][label] == "" {
-			t.Fatalf("locale label %q is unresolved", label)
-		}
 	}
 }
 

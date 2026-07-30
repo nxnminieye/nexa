@@ -14,7 +14,6 @@ import (
 
 	"github.com/bufbuild/protocompile"
 	cliprotocol "github.com/nxnminieye/nexa/cli/protocol"
-	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/generation/toolchain"
 	"github.com/nxnminieye/nexa/nexactl/host"
@@ -48,13 +47,9 @@ func (provider consumerProvider) Resolve(ctx context.Context, repository string)
 	if err != nil {
 		return generation.Project{}, err
 	}
-	api, err := httpapi.Load(ctx, httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: "backend/core/desc/core.api"})
-	if err != nil {
-		return generation.Project{}, err
-	}
 	return generation.Project{Services: []generation.ServiceProject{
 		{ServiceID: "account", RPC: &generation.RPCProject{Facts: rpc, Tool: directTool("consumer.rpc", "rpc", provider.helper), GeneratedScope: "backend/account/generated", ExtensionScopes: []string{"backend/account/extensions"}, UserLogic: []generation.UserLogicFile{{Path: rpcLogicPath, Content: []byte(rpcLogic)}}}},
-		{ServiceID: "core", API: &generation.APIProject{Facts: api, Tool: directTool("consumer.api", "api", provider.helper), GeneratedScope: "backend/core/generated", ExtensionScopes: []string{"backend/core/extensions"}, UserLogic: []generation.UserLogicFile{{Path: apiLogicPath, Content: []byte(apiLogic)}}}},
+		{ServiceID: "core", API: &generation.APIProject{EntryFile: "backend/core/desc/core.api", Tool: directTool("consumer.api", "api", provider.helper), GeneratedScope: "backend/core/generated", ExtensionScopes: []string{"backend/core/extensions"}, UserLogic: []generation.UserLogicFile{{Path: apiLogicPath, Content: []byte(apiLogic)}}}},
 	}}, nil
 }
 
@@ -65,7 +60,11 @@ func (r repositoryResolver) Open(_ context.Context, path string) (io.ReadCloser,
 }
 
 func delegated(id string) plugin.DelegatedToolSpec {
-	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: []string{"typed facts", "repository"}, Writes: []string{"repository"}}
+	inputs := []string{"typed facts", "repository"}
+	if id == "consumer.api" {
+		inputs = []string{generation.APISourceInput, "repository"}
+	}
+	return plugin.DelegatedToolSpec{ID: id, Version: "v1.0.0", Inputs: inputs, Writes: []string{"repository"}}
 }
 
 func directTool(id, family, helper string) toolchain.Tool {

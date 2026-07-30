@@ -2,25 +2,30 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/nxnminieye/nexa/generation/httpconvention"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/zeromicro/go-zero/tools/goctl/api/spec"
 	goctlast "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/ast"
 	goctlparser "github.com/zeromicro/go-zero/tools/goctl/pkg/parser/api/parser"
 )
 
-const contractVersion = "nexa.dev/http-api/v1"
+const contractVersion = httpconvention.APIVersion
 
 type authoredIndex struct {
 	typeFiles  map[string]string
 	routeFiles map[string]string
-	metadata   map[string]map[string]string
 	seenFiles  map[string]bool
 	stack      map[string]bool
+	factNodes  []sourcecomment.NodeInput
+	facts      sourcecomment.FactGraph
+	projection *SourceProjection
 }
 
 func Load(ctx context.Context, options LoadOptions) (Document, error) {
@@ -43,22 +48,23 @@ func Load(ctx context.Context, options LoadOptions) (Document, error) {
 	} else if version != contractVersion {
 		return Document{}, invalid("contract_version_unsupported", relativeOrBase(root, entry), "/info/nexaContractVersion", "HTTP API contract version is not supported")
 	}
-	index := authoredIndex{typeFiles: map[string]string{}, routeFiles: map[string]string{}, metadata: map[string]map[string]string{}, seenFiles: map[string]bool{}, stack: map[string]bool{}}
+	index := authoredIndex{typeFiles: map[string]string{}, routeFiles: map[string]string{}, seenFiles: map[string]bool{}, stack: map[string]bool{}, projection: options.SourceProjection}
 	if err := index.collect(root, entry); err != nil {
+		return Document{}, err
+	}
+	if err := index.buildFactGraph(); err != nil {
 		return Document{}, err
 	}
 	types, err := projectNativeTypes(ctx, root, parsed.Types, index.typeFiles, options.SourceResolver)
 	if err != nil {
 		return Document{}, err
 	}
-	operations, err := projectNativeOperations(parsed.Service.Groups, index, types)
+	operations, responseTypes, err := projectNativeOperations(parsed.Service.Groups, index, types)
 	if err != nil {
 		return Document{}, err
 	}
-	if err := validateTypeCycles(types); err != nil {
-		return Document{}, err
-	}
-	return newDocument(types, operations, nil)
+	types = append(types, responseTypes...)
+	return newDocument(types, operations, nil, index.facts)
 }
 
 func resolveLoadPaths(repositoryRoot, entryFile string) (string, string, error) {
@@ -88,7 +94,33 @@ func resolveLoadPaths(repositoryRoot, entryFile string) (string, string, error) 
 	if filepath.Ext(entry) != ".api" {
 		return "", "", invalid("entry_file_invalid", entryFile, "", "entry file must use .api extension")
 	}
+	if err := validateRepositoryFile(root, entry); err != nil {
+		return "", "", invalid("entry_file_invalid", entryFile, "", err.Error())
+	}
 	return root, entry, nil
+}
+
+func validateRepositoryFile(root, filename string) error {
+	rel, err := filepath.Rel(root, filename)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("file must remain inside repository root")
+	}
+	current := root
+	parts := strings.Split(rel, string(filepath.Separator))
+	for index, part := range parts {
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("file path contains symlink")
+		}
+		if index == len(parts)-1 && !info.Mode().IsRegular() {
+			return errors.New("file is not regular")
+		}
+	}
+	return nil
 }
 
 func (i *authoredIndex) collect(root, filename string) error {
@@ -107,6 +139,9 @@ func (i *authoredIndex) collect(root, filename string) error {
 		return invalid("import_outside_repository", filename, "", "HTTP API import must remain inside repository root")
 	}
 	rel = filepath.ToSlash(rel)
+	if err := validateRepositoryFile(root, abs); err != nil {
+		return invalid("source_path_invalid", rel, "", err.Error())
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return invalid("source_read_failed", rel, "", err.Error())
@@ -118,6 +153,7 @@ func (i *authoredIndex) collect(root, filename string) error {
 	}
 	i.stack[abs], i.seenFiles[abs] = true, true
 	defer delete(i.stack, abs)
+	targets := map[int]*sourcecomment.Target{}
 	for _, statement := range doc.Stmts {
 		switch value := statement.(type) {
 		case *goctlast.ImportLiteralStmt:
@@ -134,31 +170,208 @@ func (i *authoredIndex) collect(root, filename string) error {
 			if err := i.addType(value.Expr.Name.RawText(), rel); err != nil {
 				return err
 			}
+			if err := i.addAPITypeNode(rel, value.Expr, value.Type.HeadCommentGroup, targets); err != nil {
+				return err
+			}
 		case *goctlast.TypeGroupStmt:
 			for _, expression := range value.ExprList {
 				if err := i.addType(expression.Name.RawText(), rel); err != nil {
 					return err
 				}
+				if err := i.addAPITypeNode(rel, expression, expression.Name.HeadCommentGroup, targets); err != nil {
+					return err
+				}
 			}
 		case *goctlast.ServiceStmt:
-			metadata, prefix, err := parseRawServerMetadata(value.AtServerStmt, rel)
+			properties, prefix, err := parseServerProperties(value.AtServerStmt, rel)
 			if err != nil {
 				return err
 			}
+			group := properties["group"]
 			for _, route := range value.Routes {
-				path, err := normalizeRoutePath(prefix, route.Route.Path.Format(""))
+				pathValue, err := normalizeRoutePath(prefix, route.Route.Path.Format(""))
 				if err != nil {
 					return invalid("route_path_invalid", rel, "", err.Error())
 				}
-				key := strings.ToUpper(route.Route.Method.RawText()) + "\x00" + path
+				key := strings.ToUpper(route.Route.Method.RawText()) + "\x00" + pathValue
 				if _, exists := i.routeFiles[key]; exists {
 					return invalid("route_collision", rel, "", "HTTP API route is duplicated")
 				}
-				i.routeFiles[key], i.metadata[key] = rel, cloneStrings(metadata)
+				operationID, err := sourcecomment.CanonicalAPIOperationID(group, route.AtHandler.Name.RawText())
+				if err != nil {
+					return invalid("operation_id_invalid", rel, "", err.Error())
+				}
+				source, err := sourcecomment.ParseSourceRef("api://" + rel + "#" + operationID)
+				if err != nil {
+					return invalid("operation_source_invalid", rel, "", err.Error())
+				}
+				semanticID := i.projectedSemanticID(source, operationID, sourcecomment.NodeAPIOperation)
+				target := sourcecomment.Target{SemanticID: semanticID, Kind: sourcecomment.NodeAPIOperation, Stage: sourcecomment.StageAPI, Source: source}
+				head, _ := route.AtHandler.CommentGroup()
+				for _, comment := range head {
+					copyTarget := target
+					targets[comment.Pos().Line] = &copyTarget
+				}
+				i.factNodes = append(i.factNodes, sourcecomment.NodeInput{
+					SemanticID: semanticID, Kind: sourcecomment.NodeAPIOperation, Stage: sourcecomment.StageAPI,
+					Source: source, Location: sourcecomment.Location{File: rel, Line: route.AtHandler.Pos().Line, Column: route.AtHandler.Pos().Column},
+					NativeCanonical: []byte(strings.Join([]string{group, route.AtHandler.Name.RawText(), strings.ToUpper(route.Route.Method.RawText()), pathValue}, "\x00")),
+				})
+				i.routeFiles[key] = rel
 			}
 		}
 	}
+	textLines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	lines := make([]sourcecomment.Line, len(textLines))
+	for index, text := range textLines {
+		lines[index] = sourcecomment.Line{Text: text, CommentPrefix: "//", Location: sourcecomment.Location{File: rel, Line: index + 1, Column: 1}, Target: targets[index+1]}
+	}
+	parsedFacts, diagnostics := sourcecomment.ParseFile(sourcecomment.StandardRegistry(), rel, lines)
+	if len(diagnostics) > 0 {
+		return sourceCommentInvalid(diagnostics[0])
+	}
+	for _, fact := range parsedFacts.Facts() {
+		index, ok := i.factNode(fact.Target().Source.String())
+		if !ok {
+			return invalid("source_comment_target_missing", rel, "", "HTTP API source-comment target is missing")
+		}
+		i.factNodes[index].Facts = append(i.factNodes[index].Facts, fact.Directive())
+	}
+	for _, inherited := range parsedFacts.Sources() {
+		index, ok := i.factNode(inherited.Target().Source.String())
+		if !ok {
+			return invalid("source_comment_target_missing", rel, "", "HTTP API source-comment target is missing")
+		}
+		source := inherited.Source()
+		i.factNodes[index].SourceDirective = &source
+		i.factNodes[index].SourceLocation = inherited.Location()
+	}
 	return nil
+}
+
+func (i *authoredIndex) addAPITypeNode(rel string, expression *goctlast.TypeExpr, head goctlast.CommentGroup, targets map[int]*sourcecomment.Target) error {
+	typeName := expression.Name.RawText()
+	if err := i.addFactNode(rel, typeName, sourcecomment.NodeAPIType, expression.Pos().Line, expression.Pos().Column, canonicalAPITypeNative(expression), head, targets); err != nil {
+		return err
+	}
+	structure, ok := expression.DataType.(*goctlast.StructDataType)
+	if !ok {
+		return nil
+	}
+	for _, element := range structure.Elements {
+		if element.IsAnonymous() || len(element.Name) != 1 {
+			continue
+		}
+		name := element.Name[0].RawText()
+		tag := ""
+		if element.Tag != nil {
+			tag = element.Tag.RawText()
+		}
+		externalName, _, _, err := externalFieldName(name, tag)
+		if err != nil {
+			return invalid("field_tags_invalid", rel, "", err.Error())
+		}
+		headComments, _ := element.CommentGroup()
+		semanticID := typeName + "." + externalName
+		if err := i.addFactNode(rel, semanticID, sourcecomment.NodeAPIField, element.Pos().Line, element.Pos().Column, canonicalAPIElementNative(element), headComments, targets); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func canonicalAPITypeNative(expression *goctlast.TypeExpr) []byte {
+	return []byte(expression.Name.RawText() + "\x00" + canonicalAPIDataTypeNative(expression.DataType))
+}
+
+func canonicalAPIElementNative(element *goctlast.ElemExpr) []byte {
+	names := make([]string, len(element.Name))
+	for index, name := range element.Name {
+		names[index] = name.RawText()
+	}
+	tag := ""
+	if element.Tag != nil {
+		tag = element.Tag.RawText()
+	}
+	return []byte(strings.Join(names, ",") + "\x00" + canonicalAPIDataTypeNative(element.DataType) + "\x00" + tag)
+}
+
+func canonicalAPIDataTypeNative(value goctlast.DataType) string {
+	structure, ok := value.(*goctlast.StructDataType)
+	if !ok {
+		return value.Format("")
+	}
+	parts := make([]string, len(structure.Elements))
+	for index, element := range structure.Elements {
+		parts[index] = string(canonicalAPIElementNative(element))
+	}
+	return "{" + strings.Join(parts, "\x01") + "}"
+}
+
+func (i *authoredIndex) addFactNode(rel, semanticID string, kind sourcecomment.NodeKind, line, column int, native []byte, comments goctlast.CommentGroup, targets map[int]*sourcecomment.Target) error {
+	source, err := sourcecomment.ParseSourceRef("api://" + rel + "#" + semanticID)
+	if err != nil {
+		return invalid("source_comment_node_invalid", rel, "", err.Error())
+	}
+	semanticID = i.projectedSemanticID(source, semanticID, kind)
+	target := sourcecomment.Target{SemanticID: semanticID, Kind: kind, Stage: sourcecomment.StageAPI, Source: source}
+	for _, comment := range comments {
+		copyTarget := target
+		targets[comment.Pos().Line] = &copyTarget
+	}
+	i.factNodes = append(i.factNodes, sourcecomment.NodeInput{
+		SemanticID: semanticID, Kind: kind, Stage: sourcecomment.StageAPI, Source: source,
+		Location: sourcecomment.Location{File: rel, Line: line, Column: column}, NativeCanonical: append([]byte(nil), native...),
+	})
+	return nil
+}
+
+func (i *authoredIndex) projectedSemanticID(source sourcecomment.SourceRef, local string, kind sourcecomment.NodeKind) string {
+	if i.projection == nil {
+		return local
+	}
+	for _, expected := range i.projection.Nodes {
+		if expected.Downstream.String() == source.String() && expected.Kind == kind {
+			return expected.SemanticID
+		}
+	}
+	return local
+}
+
+func (i *authoredIndex) factNode(source string) (int, bool) {
+	for index := range i.factNodes {
+		if i.factNodes[index].Source.String() == source {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func (i *authoredIndex) buildFactGraph() error {
+	input := sourcecomment.BuildInput{Nodes: i.factNodes}
+	var graph sourcecomment.FactGraph
+	var diagnostics []sourcecomment.Diagnostic
+	if i.projection == nil {
+		graph, diagnostics = sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), input)
+	} else {
+		input.Projections = append(input.Projections, i.projection.Nodes...)
+		input.InheritedFacts = append(input.InheritedFacts, i.projection.InheritedFacts...)
+		graph, diagnostics = sourcecomment.ExtendGraph(sourcecomment.StandardRegistry(), i.projection.Upstream, input)
+	}
+	if len(diagnostics) > 0 {
+		return sourceCommentInvalid(diagnostics[0])
+	}
+	i.facts = graph
+	return nil
+}
+
+func sourceCommentInvalid(value sourcecomment.Diagnostic) error {
+	pointer := fmt.Sprintf(":%d:%d", value.Line, value.Column)
+	message := value.Suggestion
+	if value.FactID != "" {
+		message += " (" + value.FactID + ")"
+	}
+	return invalid("source_comment_invalid", value.File, pointer, message)
 }
 
 func (i *authoredIndex) addType(name, source string) error {
@@ -177,14 +390,6 @@ func relativeOrBase(root, value string) string {
 	return filepath.ToSlash(rel)
 }
 
-func cloneStrings(input map[string]string) map[string]string {
-	result := make(map[string]string, len(input))
-	for key, value := range input {
-		result[key] = value
-	}
-	return result
-}
-
 func projectNativeTypes(ctx context.Context, root string, inputs []spec.Type, sources map[string]string, resolver SourceResolver) ([]*typeState, error) {
 	result := make([]*typeState, 0, len(inputs))
 	for _, input := range inputs {
@@ -199,7 +404,7 @@ func projectNativeTypes(ctx context.Context, root string, inputs []spec.Type, so
 		if source == "" {
 			return nil, invalid("type_source_unresolved", "", "", "HTTP API type declaring file cannot be resolved")
 		}
-		state := &typeState{name: structure.RawName, shape: ValueType{kind: ValueObject}, fieldIndex: map[string]int{}}
+		state := &typeState{name: structure.RawName, semanticID: structure.RawName, shape: ValueType{kind: ValueObject}, fieldIndex: map[string]int{}}
 		provenanceValue, err := nativeProvenance(source, "type:"+state.name, canonicalTypeNode{APIVersion: typeNodeVersion, Kind: "type", Name: state.name, Shape: canonicalValueOf(state.shape)})
 		if err != nil {
 			return nil, invalid("type_source_invalid", source, "", err.Error())
@@ -237,19 +442,23 @@ func appendMembers(ctx context.Context, owner *typeState, source string, parent 
 			continue
 		}
 		for _, name := range names {
-			path := append(append([]string(nil), parent...), name)
+			externalName, transport, hasTransport, err := externalFieldName(name, member.Tag)
+			if err != nil {
+				return invalid("field_tags_invalid", source, "", err.Error())
+			}
+			path := append(append([]string(nil), parent...), externalName)
 			valueType, err := projectValueType(member.Type)
 			if err != nil {
 				return invalid("field_type_invalid", source, "", err.Error())
 			}
-			binding, hasBinding, origin, hasOrigin, optional, err := parseFieldTags(member.Tag)
+			origin, hasOrigin, err := parseFieldTags(member.Tag)
 			if err != nil {
 				return invalid("field_tags_invalid", source, "", err.Error())
 			}
-			field := &fieldState{ownerType: owner.name, path: path, required: !optional && valueType.kind != ValueOptional, valueType: valueType, binding: binding, hasBinding: hasBinding, origin: origin, hasOrigin: hasOrigin}
+			field := &fieldState{ownerType: owner.name, semanticID: owner.name + "." + pathKey(path), path: path, required: valueType.kind != ValueOptional, valueType: valueType, transport: transport, hasTransport: hasTransport, origin: origin, hasOrigin: hasOrigin}
 			envelope := canonicalFieldNode{APIVersion: fieldNodeVersion, Kind: "field", OwnerType: owner.name, Path: append([]string(nil), path...), Required: field.required, ValueType: canonicalValueOf(valueType)}
-			if hasBinding {
-				envelope.Binding = &canonicalBinding{Location: string(binding.location), Name: binding.name}
+			if hasTransport {
+				envelope.Transport = string(transport)
 			}
 			if hasOrigin {
 				envelope.Origin = &canonicalOrigin{Ref: origin.Ref.String(), Digest: origin.Digest.String()}

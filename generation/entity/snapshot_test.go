@@ -8,12 +8,12 @@ import (
 	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/entity"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-const emptyEntityIR = `{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`
+const emptyEntityIR = `{"apiVersion":"nexa.dev/entity-ir/v3","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`
 
 func TestEntityIREmptySnapshotCanonicalRoundTrip(t *testing.T) {
 	source := mustDomainSource(t, "testdata/entity-ir.json")
@@ -67,20 +67,20 @@ func TestTenantMarkerCanonicalRoundTripAndDefensiveReadback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	crud := snapshotCRUD(t, nexaent.CRUDCreate)
+	crud := snapshotCRUD(t, sourcecomment.CRUDCreate)
 	projection := entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
-		Name: "Account", SourceRef: entityRef, Meta: nexaent.SchemaMeta{
-			Label:       nexaent.LocalizedText{Key: "account.label", ZhCN: "账户", EnUS: "Account"},
-			Description: nexaent.LocalizedText{Key: "account.description", ZhCN: "账户记录", EnUS: "Account record"},
-			Identity:    nexaent.IdentityEntID, Scope: nexaent.ScopeTenant,
+		Name: "Account", SourceRef: entityRef, Meta: sourcecomment.SchemaFacts{
+			Label:       sourcecomment.LocalizedText{Key: "account.label", ZhCN: "账户", EnUS: "Account"},
+			Description: sourcecomment.LocalizedText{Key: "account.description", ZhCN: "账户记录", EnUS: "Account record"},
+			Scope:       sourcecomment.ScopeTenant,
 		},
 		CRUD: &crud, Identity: entityvalue.IdentityProjection{Kind: "implicit", Name: "id", Type: "int64"},
 		Fields: []entityvalue.FieldProjection{{
 			Name: "tenant_id", SourceRef: tenantRef, Type: "int64", Immutable: true,
-			IsTenantField: true, Meta: nexaent.FieldMeta{
-				Label:       nexaent.LocalizedText{Key: "account.tenant_id.label", ZhCN: "租户", EnUS: "Tenant"},
-				Description: nexaent.LocalizedText{Key: "account.tenant_id.description", ZhCN: "租户字段", EnUS: "Tenant field"},
-				UIHint:      nexaent.UIHintReadonly, Visibility: nexaent.VisibilityInternal,
+			IsTenantField: true, Meta: sourcecomment.FieldFacts{
+				Label:       sourcecomment.LocalizedText{Key: "account.tenant_id.label", ZhCN: "租户", EnUS: "Tenant"},
+				Description: sourcecomment.LocalizedText{Key: "account.tenant_id.description", ZhCN: "租户字段", EnUS: "Tenant field"},
+				Control:     sourcecomment.UIControlReadonly, Visibility: sourcecomment.VisibilityInternal,
 			},
 		}},
 	}}}
@@ -141,12 +141,12 @@ func tenantCRUDCanonical(t *testing.T) []byte {
 	t.Helper()
 	entityRef, _ := provenance.RepositoryRef("ent/schema/account.go", "schema:Account")
 	tenantRef, _ := provenance.RepositoryRef("ent/schema/account.go", "schema:Account/field:tenant_id")
-	crud := snapshotCRUD(t, nexaent.CRUDCreate)
+	crud := snapshotCRUD(t, sourcecomment.CRUDCreate)
 	value, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
 		Name: "Account", SourceRef: entityRef, CRUD: &crud,
-		Meta:     nexaent.SchemaMeta{Label: nexaent.LocalizedText{Key: "account.label", ZhCN: "Account", EnUS: "Account"}, Description: nexaent.LocalizedText{Key: "account.description", ZhCN: "Account", EnUS: "Account"}, Identity: nexaent.IdentityEntID, Scope: nexaent.ScopeTenant},
+		Meta:     sourcecomment.SchemaFacts{Label: sourcecomment.LocalizedText{Key: "account.label", ZhCN: "Account", EnUS: "Account"}, Description: sourcecomment.LocalizedText{Key: "account.description", ZhCN: "Account", EnUS: "Account"}, Scope: sourcecomment.ScopeTenant},
 		Identity: entityvalue.IdentityProjection{Kind: "implicit", Name: "id", Type: "int64"},
-		Fields:   []entityvalue.FieldProjection{{Name: "tenant_id", SourceRef: tenantRef, Type: "int64", Immutable: true, IsTenantField: true, Meta: nexaent.FieldMeta{Label: nexaent.LocalizedText{Key: "account.tenant_id.label", ZhCN: "Tenant", EnUS: "Tenant"}, Description: nexaent.LocalizedText{Key: "account.tenant_id.description", ZhCN: "Tenant", EnUS: "Tenant"}, UIHint: nexaent.UIHintReadonly, Visibility: nexaent.VisibilityInternal}}},
+		Fields:   []entityvalue.FieldProjection{{Name: "tenant_id", SourceRef: tenantRef, Type: "int64", Immutable: true, IsTenantField: true, Meta: sourcecomment.FieldFacts{Label: sourcecomment.LocalizedText{Key: "account.tenant_id.label", ZhCN: "Tenant", EnUS: "Tenant"}, Description: sourcecomment.LocalizedText{Key: "account.tenant_id.description", ZhCN: "Tenant", EnUS: "Tenant"}, Control: sourcecomment.UIControlReadonly, Visibility: sourcecomment.VisibilityInternal}}},
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -170,10 +170,10 @@ func mutateTenantSnapshotField(t *testing.T, canonical []byte, mutate func(map[s
 	}
 	entityWire := root["entities"].([]any)[0].(map[string]any)
 	fieldWire := entityWire["fields"].([]any)[0].(map[string]any)
-	payload := fieldWire["fieldMeta"].(map[string]any)["payload"].(map[string]any)
+	payload := fieldWire["fieldFacts"].(map[string]any)
 	mutate(fieldWire, payload)
 	fieldNode := map[string]any{
-		"apiVersion": "nexa.dev/entity-field-node/v2", "entityId": entityWire["id"], "enumValues": fieldWire["enumValues"], "fieldMeta": fieldWire["fieldMeta"],
+		"apiVersion": "nexa.dev/entity-field-node/v3", "entityId": entityWire["id"], "enumValues": fieldWire["enumValues"], "fieldFacts": fieldWire["fieldFacts"],
 		"hasDefault": fieldWire["hasDefault"], "id": fieldWire["id"], "immutable": fieldWire["immutable"], "isIdentity": fieldWire["isIdentity"], "isTenantField": fieldWire["isTenantField"], "kind": "Field", "name": fieldWire["name"],
 		"nillable": fieldWire["nillable"], "optional": fieldWire["optional"], "sensitive": fieldWire["sensitive"], "type": fieldWire["type"],
 	}
@@ -204,13 +204,13 @@ func mutateTenantSnapshotField(t *testing.T, canonical []byte, mutate func(map[s
 	return result
 }
 
-func TestTask2EntityIRPublicSchemaMatchesReferenceExclusivity(t *testing.T) {
+func TestEntityIRPublicSchemaAcceptsOnlyUnifiedReferenceFacts(t *testing.T) {
 	var schemaDocument any
 	if err := json.Unmarshal(entity.Schema(), &schemaDocument); err != nil {
 		t.Fatal(err)
 	}
 	compiler := jsonschema.NewCompiler()
-	const schemaID = "https://nexa.dev/schemas/generation/entity/entity-ir-v2.schema.json"
+	const schemaID = "https://nexa.dev/schemas/generation/entity/entity-ir-v3.schema.json"
 	if err := compiler.AddResource(schemaID, schemaDocument); err != nil {
 		t.Fatal(err)
 	}
@@ -218,18 +218,17 @@ func TestTask2EntityIRPublicSchemaMatchesReferenceExclusivity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical := canonicalEntityIRWithUIHint(t, nexaent.UIHintReference)
+	canonical := canonicalEntityIRWithUIHint(t, sourcecomment.UIControlReference)
 	for _, test := range []struct {
 		name    string
 		mutate  func(map[string]any)
 		wantErr bool
 	}{
-		{name: "physical only", mutate: func(payload map[string]any) { payload["physicalDisplay"] = map[string]any{"field": "name"} }},
-		{name: "logical only", mutate: func(payload map[string]any) {
-			payload["logicalReference"] = map[string]any{"target": "Account", "display": "name"}
+		{name: "unified reference", mutate: func(payload map[string]any) {
+			payload["reference"] = map[string]any{"target": "Account", "display": "name"}
 		}},
-		{name: "both", wantErr: true, mutate: func(payload map[string]any) {
-			payload["physicalDisplay"] = map[string]any{"field": "name"}
+		{name: "legacy physical", wantErr: true, mutate: func(payload map[string]any) { payload["physicalDisplay"] = map[string]any{"field": "name"} }},
+		{name: "legacy logical", wantErr: true, mutate: func(payload map[string]any) {
 			payload["logicalReference"] = map[string]any{"target": "Account", "display": "name"}
 		}},
 	} {
@@ -238,7 +237,7 @@ func TestTask2EntityIRPublicSchemaMatchesReferenceExclusivity(t *testing.T) {
 			if err := json.Unmarshal(canonical, &document); err != nil {
 				t.Fatal(err)
 			}
-			payload := document["entities"].([]any)[0].(map[string]any)["fields"].([]any)[0].(map[string]any)["fieldMeta"].(map[string]any)["payload"].(map[string]any)
+			payload := document["entities"].([]any)[0].(map[string]any)["fields"].([]any)[0].(map[string]any)["fieldFacts"].(map[string]any)
 			test.mutate(payload)
 			err := compiled.Validate(document)
 			if test.wantErr != (err != nil) {
@@ -249,10 +248,10 @@ func TestTask2EntityIRPublicSchemaMatchesReferenceExclusivity(t *testing.T) {
 }
 
 func TestGenericUIHintsPassEmbeddedEntityIRSchemaAndCanonicalRoundTrip(t *testing.T) {
-	for _, hint := range []nexaent.UIHint{nexaent.UIHintLocale, nexaent.UIHintTimezone} {
+	for _, hint := range []sourcecomment.UIControl{sourcecomment.UIControlLocale, sourcecomment.UIControlTimezone} {
 		t.Run(string(hint), func(t *testing.T) {
 			canonical := canonicalEntityIRWithUIHint(t, hint)
-			wireValue := []byte(`"uiHint":"` + string(hint) + `"`)
+			wireValue := []byte(`"control":"` + string(hint) + `"`)
 			if !bytes.Contains(canonical, wireValue) {
 				t.Fatalf("canonical EntityIR = %s, want exact %s", canonical, wireValue)
 			}
@@ -270,8 +269,8 @@ func TestGenericUIHintsPassEmbeddedEntityIRSchemaAndCanonicalRoundTrip(t *testin
 			if !ok {
 				t.Fatal("snapshot preference field missing")
 			}
-			if got := preference.Meta().UIHint; got != hint {
-				t.Fatalf("snapshot UIHint = %q, want %q", got, hint)
+			if got := preference.Meta().Control; got != hint {
+				t.Fatalf("snapshot UIControl = %q, want %q", got, hint)
 			}
 			roundTrip, err := snapshot.CanonicalJSON()
 			if err != nil || !bytes.Equal(roundTrip, canonical) {
@@ -285,18 +284,18 @@ func TestTask2SnapshotSensitiveTupleMatchesConstructionSemantics(t *testing.T) {
 	tests := []struct {
 		name       string
 		sensitive  bool
-		visibility nexaent.FieldVisibility
-		hint       nexaent.UIHint
+		visibility sourcecomment.FieldVisibility
+		hint       sourcecomment.UIControl
 		valid      bool
 	}{
-		{name: "none", visibility: nexaent.VisibilityPublic, hint: nexaent.UIHintText, valid: true},
-		{name: "ent only", sensitive: true, visibility: nexaent.VisibilityPublic, hint: nexaent.UIHintText},
-		{name: "visibility only", visibility: nexaent.VisibilitySensitive, hint: nexaent.UIHintText},
-		{name: "hint only", visibility: nexaent.VisibilityPublic, hint: nexaent.UIHintSensitive},
-		{name: "ent and visibility", sensitive: true, visibility: nexaent.VisibilitySensitive, hint: nexaent.UIHintText},
-		{name: "ent and hint", sensitive: true, visibility: nexaent.VisibilityPublic, hint: nexaent.UIHintSensitive},
-		{name: "visibility and hint", visibility: nexaent.VisibilitySensitive, hint: nexaent.UIHintSensitive},
-		{name: "all", sensitive: true, visibility: nexaent.VisibilitySensitive, hint: nexaent.UIHintSensitive, valid: true},
+		{name: "none", visibility: sourcecomment.VisibilityPublic, hint: sourcecomment.UIControlText, valid: true},
+		{name: "ent only", sensitive: true, visibility: sourcecomment.VisibilityPublic, hint: sourcecomment.UIControlText},
+		{name: "visibility only", visibility: sourcecomment.VisibilitySensitive, hint: sourcecomment.UIControlText},
+		{name: "hint only", visibility: sourcecomment.VisibilityPublic, hint: sourcecomment.UIControlSensitive},
+		{name: "ent and visibility", sensitive: true, visibility: sourcecomment.VisibilitySensitive, hint: sourcecomment.UIControlText},
+		{name: "ent and hint", sensitive: true, visibility: sourcecomment.VisibilityPublic, hint: sourcecomment.UIControlSensitive},
+		{name: "visibility and hint", visibility: sourcecomment.VisibilitySensitive, hint: sourcecomment.UIControlSensitive},
+		{name: "all", sensitive: true, visibility: sourcecomment.VisibilitySensitive, hint: sourcecomment.UIControlSensitive, valid: true},
 	}
 	for _, withCRUD := range []bool{false, true} {
 		contextName := "non-crud"
@@ -312,7 +311,7 @@ func TestTask2SnapshotSensitiveTupleMatchesConstructionSemantics(t *testing.T) {
 					t.Fatalf("valid sensitive tuple rejected: %v\n%s", err, canonical)
 				}
 				if !test.valid {
-					assertEntityError(t, err, "entity_snapshot_invalid", "source_closure_invalid", "/entities/0/fields/0/fieldMeta", source.String())
+					assertEntityError(t, err, "entity_snapshot_invalid", "source_closure_invalid", "/entities/0/fields/0/fieldFacts", source.String())
 				}
 			})
 		}
@@ -368,13 +367,13 @@ func canonicalEntityIRWithBoundInverseEdges(t *testing.T) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return entityvalue.FieldProjection{Name: name, SourceRef: ref, Type: "int64", Meta: nexaent.FieldMeta{
-			Label: nexaent.LocalizedText{Key: owner + "." + name, ZhCN: name, EnUS: name}, Description: nexaent.LocalizedText{Key: owner + "." + name + ".description", ZhCN: name + " description", EnUS: name + " description"}, UIHint: nexaent.UIHintNumber, Visibility: nexaent.VisibilityPublic,
+		return entityvalue.FieldProjection{Name: name, SourceRef: ref, Type: "int64", Meta: sourcecomment.FieldFacts{
+			Label: sourcecomment.LocalizedText{Key: owner + "." + name, ZhCN: name, EnUS: name}, Description: sourcecomment.LocalizedText{Key: owner + "." + name + ".description", ZhCN: name + " description", EnUS: name + " description"}, Control: sourcecomment.UIControlNumber, Visibility: sourcecomment.VisibilityPublic,
 		}}
 	}
 	entityProjection := func(name string, fields []entityvalue.FieldProjection) entityvalue.EntityProjection {
-		return entityvalue.EntityProjection{Name: name, SourceRef: entityRef(name), Meta: nexaent.SchemaMeta{
-			Label: nexaent.LocalizedText{Key: name + ".label", ZhCN: name, EnUS: name}, Description: nexaent.LocalizedText{Key: name + ".description", ZhCN: name + " description", EnUS: name + " description"}, Identity: nexaent.IdentityEntID, Scope: nexaent.ScopeGlobal,
+		return entityvalue.EntityProjection{Name: name, SourceRef: entityRef(name), Meta: sourcecomment.SchemaFacts{
+			Label: sourcecomment.LocalizedText{Key: name + ".label", ZhCN: name, EnUS: name}, Description: sourcecomment.LocalizedText{Key: name + ".description", ZhCN: name + " description", EnUS: name + " description"}, Scope: sourcecomment.ScopeGlobal,
 		}, Identity: entityvalue.IdentityProjection{Kind: "implicit", Name: "id", Type: "int64"}, Fields: fields}
 	}
 	account := entityProjection("Account", nil)
@@ -458,7 +457,7 @@ func mutateTask2SnapshotEdge(t *testing.T, canonical []byte, entityIndex int, mu
 	return result
 }
 
-func canonicalEntityIRWithSensitiveTuple(t *testing.T, withCRUD, sensitive bool, visibility nexaent.FieldVisibility, hint nexaent.UIHint) []byte {
+func canonicalEntityIRWithSensitiveTuple(t *testing.T, withCRUD, sensitive bool, visibility sourcecomment.FieldVisibility, hint sourcecomment.UIControl) []byte {
 	t.Helper()
 	entityRef, err := provenance.RepositoryRef("ent/schema/secret_record.go", "schema:SecretRecord")
 	if err != nil {
@@ -468,19 +467,19 @@ func canonicalEntityIRWithSensitiveTuple(t *testing.T, withCRUD, sensitive bool,
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := nexaent.FieldMeta{
-		Label: nexaent.LocalizedText{Key: "secret.label", ZhCN: "secret", EnUS: "Secret"}, Description: nexaent.LocalizedText{Key: "secret.description", ZhCN: "secret description", EnUS: "Secret description"},
-		UIHint: nexaent.UIHintText, Visibility: nexaent.VisibilityPublic,
+	meta := sourcecomment.FieldFacts{
+		Label: sourcecomment.LocalizedText{Key: "secret.label", ZhCN: "secret", EnUS: "Secret"}, Description: sourcecomment.LocalizedText{Key: "secret.description", ZhCN: "secret description", EnUS: "Secret description"},
+		Control: sourcecomment.UIControlText, Visibility: sourcecomment.VisibilityPublic,
 	}
-	var crud *nexaent.CRUDSpec
+	var crud *sourcecomment.CRUDOperations
 	if withCRUD {
-		value := snapshotCRUD(t, nexaent.CRUDCreate)
+		value := snapshotCRUD(t, sourcecomment.CRUDCreate)
 		crud = &value
-		meta.CRUD = &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreate}
+		meta.CRUD = &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreate}
 	}
 	value, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
 		Name: "SecretRecord", SourceRef: entityRef,
-		Meta: nexaent.SchemaMeta{Label: nexaent.LocalizedText{Key: "secret_record.label", ZhCN: "record", EnUS: "Record"}, Description: nexaent.LocalizedText{Key: "secret_record.description", ZhCN: "record description", EnUS: "Record description"}, Identity: nexaent.IdentityEntID, Scope: nexaent.ScopeGlobal},
+		Meta: sourcecomment.SchemaFacts{Label: sourcecomment.LocalizedText{Key: "secret_record.label", ZhCN: "record", EnUS: "Record"}, Description: sourcecomment.LocalizedText{Key: "secret_record.description", ZhCN: "record description", EnUS: "Record description"}, Scope: sourcecomment.ScopeGlobal},
 		CRUD: crud, Identity: entityvalue.IdentityProjection{Kind: "implicit", Name: "id", Type: "int64"},
 		Fields: []entityvalue.FieldProjection{{Name: "secret", SourceRef: fieldRef, Type: "string", Meta: meta}},
 	}}})
@@ -502,18 +501,18 @@ func canonicalEntityIRWithSensitiveTuple(t *testing.T, withCRUD, sensitive bool,
 	entityWire := root["entities"].([]any)[0].(map[string]any)
 	fieldWire := entityWire["fields"].([]any)[0].(map[string]any)
 	fieldWire["sensitive"] = sensitive
-	payload := fieldWire["fieldMeta"].(map[string]any)["payload"].(map[string]any)
+	payload := fieldWire["fieldFacts"].(map[string]any)
 	payload["visibility"] = string(visibility)
-	payload["uiHint"] = string(hint)
+	payload["control"] = string(hint)
 	if withCRUD {
-		read := nexaent.ReadInclude
-		if visibility == nexaent.VisibilitySensitive {
-			read = nexaent.ReadExclude
+		read := sourcecomment.ReadInclude
+		if visibility == sourcecomment.VisibilitySensitive {
+			read = sourcecomment.ReadExclude
 		}
 		payload["crud"].(map[string]any)["read"] = string(read)
 	}
 	fieldNode := map[string]any{
-		"apiVersion": "nexa.dev/entity-field-node/v2", "entityId": entityWire["id"], "enumValues": fieldWire["enumValues"], "fieldMeta": fieldWire["fieldMeta"],
+		"apiVersion": "nexa.dev/entity-field-node/v3", "entityId": entityWire["id"], "enumValues": fieldWire["enumValues"], "fieldFacts": fieldWire["fieldFacts"],
 		"hasDefault": fieldWire["hasDefault"], "id": fieldWire["id"], "immutable": fieldWire["immutable"], "isIdentity": fieldWire["isIdentity"], "isTenantField": fieldWire["isTenantField"], "kind": "Field", "name": fieldWire["name"],
 		"nillable": fieldWire["nillable"], "optional": fieldWire["optional"], "sensitive": fieldWire["sensitive"], "type": fieldWire["type"],
 	}
@@ -552,20 +551,16 @@ func canonicalEntityIRWithSensitiveTuple(t *testing.T, withCRUD, sensitive bool,
 	return result
 }
 
-func snapshotCRUD(t *testing.T, operations ...nexaent.CRUDOperation) nexaent.CRUDSpec {
+func snapshotCRUD(t *testing.T, operations ...sourcecomment.CRUDOperation) sourcecomment.CRUDOperations {
 	t.Helper()
-	canonical, err := nexaent.CRUD(operations...).CanonicalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := nexaent.DecodeCRUD(canonical)
+	result, err := sourcecomment.NewCRUDOperations(operations...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return result
 }
 
-func canonicalEntityIRWithUIHint(t *testing.T, hint nexaent.UIHint) []byte {
+func canonicalEntityIRWithUIHint(t *testing.T, hint sourcecomment.UIControl) []byte {
 	t.Helper()
 	entityRef, err := provenance.RepositoryRef("ent/schema/account.go", "schema:Account")
 	if err != nil {
@@ -578,22 +573,21 @@ func canonicalEntityIRWithUIHint(t *testing.T, hint nexaent.UIHint) []byte {
 	value, err := entityvalue.NewDocument(entityvalue.Projection{Entities: []entityvalue.EntityProjection{{
 		Name:      "Account",
 		SourceRef: entityRef,
-		Meta: nexaent.SchemaMeta{
-			Label:       nexaent.LocalizedText{Key: "account.label", ZhCN: "account", EnUS: "Account"},
-			Description: nexaent.LocalizedText{Key: "account.description", ZhCN: "account description", EnUS: "Account description"},
-			Identity:    nexaent.IdentityEntID,
-			Scope:       nexaent.ScopeTenant,
+		Meta: sourcecomment.SchemaFacts{
+			Label:       sourcecomment.LocalizedText{Key: "account.label", ZhCN: "account", EnUS: "Account"},
+			Description: sourcecomment.LocalizedText{Key: "account.description", ZhCN: "account description", EnUS: "Account description"},
+			Scope:       sourcecomment.ScopeTenant,
 		},
 		Identity: entityvalue.IdentityProjection{Kind: string(entity.IdentityImplicit), Name: "id", Type: string(entity.ScalarInt64)},
 		Fields: []entityvalue.FieldProjection{{
 			Name:      "preference",
 			SourceRef: fieldRef,
 			Type:      string(entity.ScalarString),
-			Meta: nexaent.FieldMeta{
-				Label:       nexaent.LocalizedText{Key: "account.preference.label", ZhCN: "preference", EnUS: "Preference"},
-				Description: nexaent.LocalizedText{Key: "account.preference.description", ZhCN: "preference description", EnUS: "Preference description"},
-				UIHint:      hint,
-				Visibility:  nexaent.VisibilityPublic,
+			Meta: sourcecomment.FieldFacts{
+				Label:       sourcecomment.LocalizedText{Key: "account.preference.label", ZhCN: "preference", EnUS: "Preference"},
+				Description: sourcecomment.LocalizedText{Key: "account.preference.description", ZhCN: "preference description", EnUS: "Preference description"},
+				Control:     hint,
+				Visibility:  sourcecomment.VisibilityPublic,
 			},
 		}},
 	}}})
@@ -619,14 +613,14 @@ func TestEntityIRSnapshotRejectsNonCanonicalAndMalformedDocuments(t *testing.T) 
 		reason  string
 		pointer string
 	}{
-		{name: "unknown", data: `{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"extra":true,"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "document_unknown_field", pointer: "/extra"},
-		{name: "duplicate", data: `{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "document_duplicate_key", pointer: "/entities"},
+		{name: "unknown", data: `{"apiVersion":"nexa.dev/entity-ir/v3","entities":[],"extra":true,"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "document_unknown_field", pointer: "/extra"},
+		{name: "duplicate", data: `{"apiVersion":"nexa.dev/entity-ir/v3","entities":[],"entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "document_duplicate_key", pointer: "/entities"},
 		{name: "trailing", data: emptyEntityIR + `{}`, reason: "document_trailing_input"},
-		{name: "missing", data: `{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"kind":"EntityIR","sources":[]}`, reason: "document_required_missing", pointer: "/sourceDigest"},
-		{name: "null", data: `{"apiVersion":"nexa.dev/entity-ir/v2","entities":null,"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "document_type_invalid", pointer: "/entities"},
-		{name: "version", data: `{"apiVersion":"nexa.dev/entity-ir/v1","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "version_unsupported", pointer: "/apiVersion"},
-		{name: "kind", data: `{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"kind":"Other","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "kind_invalid", pointer: "/kind"},
-		{name: "order", data: `{"kind":"EntityIR","apiVersion":"nexa.dev/entity-ir/v2","entities":[],"sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "canonical_order_invalid"},
+		{name: "missing", data: `{"apiVersion":"nexa.dev/entity-ir/v3","entities":[],"kind":"EntityIR","sources":[]}`, reason: "document_required_missing", pointer: "/sourceDigest"},
+		{name: "null", data: `{"apiVersion":"nexa.dev/entity-ir/v3","entities":null,"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "document_type_invalid", pointer: "/entities"},
+		{name: "legacy v2", data: `{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "version_unsupported", pointer: "/apiVersion"},
+		{name: "kind", data: `{"apiVersion":"nexa.dev/entity-ir/v3","entities":[],"kind":"Other","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "kind_invalid", pointer: "/kind"},
+		{name: "order", data: `{"kind":"EntityIR","apiVersion":"nexa.dev/entity-ir/v3","entities":[],"sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`, reason: "canonical_order_invalid"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -657,9 +651,9 @@ func TestEntityIRSnapshotUnicodeAndDocumentErrorPrecedence(t *testing.T) {
 		pointer string
 	}{
 		{name: "isolated surrogate value", data: []byte(`{"apiVersion":"\ud800","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`), reason: "unicode_invalid", pointer: "/apiVersion"},
-		{name: "invalid object key", data: []byte(`{"apiVersion":"nexa.dev/entity-ir/v2","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[],"\ud800":true}`), reason: "unicode_invalid", pointer: ""},
+		{name: "invalid object key", data: []byte(`{"apiVersion":"nexa.dev/entity-ir/v3","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[],"\ud800":true}`), reason: "unicode_invalid", pointer: ""},
 		{name: "unicode precedes malformed escape", data: []byte(`{"apiVersion":"\ud800\q","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`), reason: "document_unicode_invalid", pointer: ""},
-		{name: "unicode precedes duplicate", data: []byte(`{"apiVersion":"\ud800","apiVersion":"nexa.dev/entity-ir/v2","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`), reason: "document_unicode_invalid", pointer: ""},
+		{name: "unicode precedes duplicate", data: []byte(`{"apiVersion":"\ud800","apiVersion":"nexa.dev/entity-ir/v3","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]}`), reason: "document_unicode_invalid", pointer: ""},
 		{name: "unicode precedes trailing", data: []byte(`{"apiVersion":"\ud800","entities":[],"kind":"EntityIR","sourceDigest":"sha256:ce3235a0208c8c09b12d97f35cd5305bc7b3e5d66371cc774136e90367827f61","sources":[]} {}`), reason: "document_unicode_invalid", pointer: ""},
 	}
 	rawInvalid := []byte(emptyEntityIR)
