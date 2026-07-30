@@ -76,7 +76,7 @@ func TestTypedFixtureHelperProducesDeterministicPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	copyTree(t, filepath.Join(fixture, "cmd", "crudplan"), filepath.Join(runtimeRoot, "cmd", "crudplan"))
-	runtimeEnvironment := goCommandEnvWithModuleProxy(t)
+	runtimeEnvironment := goCommandEnv()
 	runtimePrewarm := exec.Command("go", "list", "-mod=mod", "-deps", "./cmd/crudplan", "github.com/nxnminieye/nexa/generation/entconsumerfixture/schema")
 	runtimePrewarm.Dir = runtimeRoot
 	runtimePrewarm.Env = runtimeEnvironment
@@ -249,20 +249,6 @@ func goCommandEnv() []string {
 		result = append(result, value)
 	}
 	return append(result, "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
-}
-
-func goCommandEnvWithModuleProxy(t *testing.T) []string {
-	t.Helper()
-	command := exec.Command("go", "env", "GOMODCACHE")
-	command.Env = goCommandEnv()
-	output, err := command.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cache := strings.TrimSpace(string(output))
-	environment := replaceEnv(goCommandEnv(), "GOMODCACHE", cache)
-	environment = replaceEnv(environment, "GOPROXY", "file://"+filepath.ToSlash(filepath.Join(cache, "cache", "download")))
-	return replaceEnv(environment, "GOSUMDB", "off")
 }
 
 func downloadEntHelperModuleGraph(t *testing.T, root string) {
