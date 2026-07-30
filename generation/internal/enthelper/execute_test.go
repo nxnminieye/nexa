@@ -44,10 +44,11 @@ func TestTypedFixtureHelperProducesDeterministicPlan(t *testing.T) {
 	}
 	consumerTidy := exec.Command("go", "mod", "tidy")
 	consumerTidy.Dir = consumer
-	consumerTidy.Env = goCommandEnvWithModuleProxy(t)
+	consumerTidy.Env = goCommandEnv()
 	if output, err := consumerTidy.CombinedOutput(); err != nil {
 		t.Fatalf("tidy consumer: %v\n%s", err, output)
 	}
+	downloadEntHelperModuleGraph(t, consumer)
 	schemaDir := filepath.ToSlash(filepath.Join(filepath.Base(consumer), "schema"))
 	requestBytes := buildFixtureRequest(t, frameworkRoot, consumer, repository, schemaDir)
 	requestSource, err := provenance.ParseDomainSource("quality/ent-request.json")
@@ -146,7 +147,7 @@ func main(){root:=os.Args[1];schema,_:=provenance.ParseDomainSource(os.Args[2]);
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	environment := goCommandEnvWithModuleProxy(t)
+	environment := goCommandEnv()
 	prewarm := exec.Command("go", "list", "-mod=mod", "-deps", ".", "github.com/nxnminieye/nexa/generation/entconsumerfixture/schema")
 	prewarm.Dir = root
 	prewarm.Env = environment
@@ -262,6 +263,16 @@ func goCommandEnvWithModuleProxy(t *testing.T) []string {
 	environment := replaceEnv(goCommandEnv(), "GOMODCACHE", cache)
 	environment = replaceEnv(environment, "GOPROXY", "file://"+filepath.ToSlash(filepath.Join(cache, "cache", "download")))
 	return replaceEnv(environment, "GOSUMDB", "off")
+}
+
+func downloadEntHelperModuleGraph(t *testing.T, root string) {
+	t.Helper()
+	command := exec.Command("go", "mod", "download", "all")
+	command.Dir = root
+	command.Env = goCommandEnv()
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("download fixture module graph: %v\n%s", err, output)
+	}
 }
 
 func replaceEnv(environment []string, name, value string) []string {

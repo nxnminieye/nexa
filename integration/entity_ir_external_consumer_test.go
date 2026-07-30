@@ -66,16 +66,14 @@ replace github.com/nxnminieye/nexa => %s
 	if err := os.MkdirAll(filepath.Join(helper, "tmp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	preparationEnvironment := overriddenEnvironment(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
+	runEntityIRGo(t, consumer, preparationEnvironment, "mod", "tidy")
+	runEntityIRGo(t, consumer, preparationEnvironment, "mod", "download", "all")
+	runEntityIRGo(t, helper, preparationEnvironment, "mod", "tidy")
+	runEntityIRGo(t, helper, preparationEnvironment, "mod", "download", "all")
 
-	environment := isolatedExternalGoEnvironment(t, temporary)
-	environment = replaceEnvironment(environment, "TMPDIR", filepath.Join(helper, "tmp"))
-	moduleCache := rootModuleCache(t)
-	environment = replaceEnvironment(environment, "GOMODCACHE", moduleCache)
-	environment = replaceEnvironment(environment, "GOPROXY", "file://"+filepath.ToSlash(filepath.Join(moduleCache, "cache", "download")))
-	runEntityIRGo(t, consumer, environment, "mod", "tidy")
-	runEntityIRGo(t, consumer, environment, "mod", "download", "all")
+	environment := replaceEnvironment(preparationEnvironment, "TMPDIR", filepath.Join(helper, "tmp"))
 	runEntityIRGo(t, helper, environment, "list", "-mod=mod", "-deps", "./cmd/entityir", "github.com/nxnminieye/nexa/generation/entconsumerfixture/schema")
-	runEntityIRGo(t, helper, environment, "mod", "download", "all")
 	before := entityIRFixtureTree(t, consumer)
 	schemaDir, err := filepath.Rel(repository, filepath.Join(consumer, "schema"))
 	if err != nil {
