@@ -42,5 +42,5 @@ func (e *Error) Pointer() string {
 }
 
 func invalid(reason, source, pointer, message string) *Error {
-	return &Error{code: "http_api_ir_invalid", reason: reason, source: source, pointer: pointer, message: message}
+	return &Error{code: "http_api_invalid", reason: reason, source: source, pointer: pointer, message: message}
 }

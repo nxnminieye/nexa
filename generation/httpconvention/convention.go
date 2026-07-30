@@ -3,37 +3,24 @@ package httpconvention
 
 import (
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 	"unicode"
 )
 
 const (
-	APIVersion       = "nexa.dev/http-convention/v1"
-	BasePath         = "/api"
-	JSONMediaType    = "application/json"
-	ProblemMediaType = "application/problem+json"
-	DefaultPage      = 1
-	DefaultPageSize  = 20
-	MaximumPageSize  = 100
+	APIVersion      = "nexa.dev/http-convention/v1"
+	JSONMediaType   = "application/json"
+	DefaultPageSize = 20
 )
 
 var (
-	lowerCamelPattern    = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
-	pathSegmentPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
-	problemCodePattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
-	decimalPattern       = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)$`)
-	unsignedPattern      = regexp.MustCompile(`^(?:0|[1-9][0-9]*)$`)
-	decimalNumberPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?$`)
-	datePattern          = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
-	jsonPointerPattern   = regexp.MustCompile(`^(?:/(?:[^~/]|~[01])*)+$`)
+	lowerCamelPattern  = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*$`)
+	lowerSnakePattern  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
+	pathSegmentPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 )
 
 //go:embed conformance-v1.schema.json
@@ -42,7 +29,8 @@ var conformanceSchema []byte
 // ConformanceSchema returns an independent copy of the public fixture schema.
 func ConformanceSchema() []byte { return append([]byte(nil), conformanceSchema...) }
 
-// CanonicalName performs the one allowed source-identifier conversion.
+// CanonicalName performs the source-identifier conversion used when a .api
+// field omits its explicit transport tag.
 func CanonicalName(source string) (string, error) {
 	words, err := identifierWords(source)
 	if err != nil {
@@ -65,11 +53,12 @@ func CanonicalName(source string) (string, error) {
 	return canonical, nil
 }
 
-// ValidateCanonicalName rejects aliases and non-canonical authored names.
-func ValidateCanonicalName(name string) error {
-	canonical, err := CanonicalName(name)
-	if err != nil || canonical != name {
-		return fmt.Errorf("field name %q is not canonical lowerCamelCase", name)
+// ValidateFieldName accepts the two field spellings already used by PDCL.
+// The exact authored tag value is the external field identity; no alias or
+// second logical name is produced.
+func ValidateFieldName(name string) error {
+	if !lowerCamelPattern.MatchString(name) && !lowerSnakePattern.MatchString(name) {
+		return fmt.Errorf("field name %q must be lowerCamelCase or lower_snake_case", name)
 	}
 	return nil
 }
@@ -92,9 +81,6 @@ func identifierWords(source string) ([]string, error) {
 	}
 	words := make([]string, 0, len(parts)*2)
 	for _, part := range parts {
-		if part == "" {
-			return nil, errors.New("identifier contains an empty word")
-		}
 		runes := []rune(part)
 		start := 0
 		for index := 1; index < len(runes); index++ {
@@ -125,15 +111,15 @@ type RequestField struct {
 	Location Location
 }
 
-// ClassifyRequest derives every business field location from method and route.
+// ClassifyRequest derives request locations from the PDCL method and route
+// convention. Field tags, where present, must agree with this result.
 func ClassifyRequest(method, route string, fields []string) ([]RequestField, error) {
 	placeholders, err := ValidateRoute(route)
 	if err != nil {
 		return nil, err
 	}
-	method = strings.ToUpper(method)
 	var remainder Location
-	switch method {
+	switch strings.ToUpper(method) {
 	case "GET", "DELETE":
 		remainder = LocationQuery
 	case "POST", "PUT", "PATCH":
@@ -144,10 +130,10 @@ func ClassifyRequest(method, route string, fields []string) ([]RequestField, err
 	seen := make(map[string]bool, len(fields))
 	result := make([]RequestField, len(fields))
 	for index, name := range fields {
-		if err := ValidateCanonicalName(name); err != nil {
+		if err := ValidateFieldName(name); err != nil {
 			return nil, err
 		}
-		if infrastructureField(name) {
+		if transportContextField(name) {
 			return nil, fmt.Errorf("infrastructure context %q cannot enter a business DTO", name)
 		}
 		if seen[name] {
@@ -168,26 +154,28 @@ func ClassifyRequest(method, route string, fields []string) ([]RequestField, err
 	return result, nil
 }
 
-func infrastructureField(name string) bool {
+func transportContextField(name string) bool {
 	switch name {
-	case "authorization", "tenant", "traceparent", "requestId", "traceId":
+	case "authorization", "traceparent":
 		return true
 	default:
 		return false
 	}
 }
 
-// ValidateRoute enforces the public /api, lower-kebab and exact placeholder grammar.
+// ValidateRoute validates an operation path relative to the consumer-configured
+// API base URL. The conventional /api prefix is transport configuration, not a
+// second copy of every operation path in .api.
 func ValidateRoute(route string) (map[string]bool, error) {
-	if route == BasePath || !strings.HasPrefix(route, BasePath+"/") || strings.HasSuffix(route, "/") || strings.Contains(route, "//") {
-		return nil, fmt.Errorf("route %q must be a non-root path below %s", route, BasePath)
+	if route == "/" || !strings.HasPrefix(route, "/") || strings.HasSuffix(route, "/") || strings.Contains(route, "//") {
+		return nil, fmt.Errorf("route %q must be a non-root absolute relative operation path", route)
 	}
-	segments := strings.Split(strings.TrimPrefix(route, BasePath+"/"), "/")
+	segments := strings.Split(strings.TrimPrefix(route, "/"), "/")
 	placeholders := map[string]bool{}
 	for _, segment := range segments {
 		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
 			name := strings.TrimSuffix(strings.TrimPrefix(segment, "{"), "}")
-			if err := ValidateCanonicalName(name); err != nil || placeholders[name] {
+			if err := ValidateFieldName(name); err != nil || placeholders[name] {
 				return nil, fmt.Errorf("route placeholder %q is invalid or duplicated", name)
 			}
 			placeholders[name] = true
@@ -200,51 +188,34 @@ func ValidateRoute(route string) (map[string]bool, error) {
 	return placeholders, nil
 }
 
-// SuccessStatus returns the only status allowed for the operation result shape.
-func SuccessStatus(method, route string, hasRepresentation bool) (int, error) {
+// SuccessStatus is intentionally uniform. PDCL's shared response writer wraps
+// every successful operation in the standard envelope and writes HTTP 200.
+func SuccessStatus(method, route string, _ bool) (int, error) {
 	if _, err := ValidateRoute(route); err != nil {
 		return 0, err
 	}
 	switch strings.ToUpper(method) {
-	case "GET":
-		if !hasRepresentation {
-			return 0, errors.New("GET success requires a representation")
-		}
+	case "GET", "POST", "PUT", "PATCH", "DELETE":
 		return 200, nil
-	case "POST":
-		if !hasRepresentation {
-			return 0, errors.New("POST success requires a result representation")
-		}
-		if strings.Contains(route, "/actions/") {
-			return 200, nil
-		}
-		return 201, nil
-	case "PUT", "PATCH":
-		if !hasRepresentation {
-			return 0, errors.New("update success requires a result representation")
-		}
-		return 200, nil
-	case "DELETE":
-		if hasRepresentation {
-			return 0, errors.New("DELETE success must not have a representation")
-		}
-		return 204, nil
 	default:
 		return 0, errors.New("unsupported method")
 	}
 }
 
-func ValidatePage(page, pageSize int) error {
-	if page < 1 {
-		return errors.New("page must be at least 1")
+// ValidatePagination validates PDCL offset pagination values. A positive
+// limit is required; offset is zero based. Consumer services own any tighter
+// upper limit.
+func ValidatePagination(limit, offset int) error {
+	if limit < 1 {
+		return errors.New("limit must be positive")
 	}
-	if pageSize < 1 || pageSize > MaximumPageSize {
-		return fmt.Errorf("pageSize must be between 1 and %d", MaximumPageSize)
+	if offset < 0 {
+		return errors.New("offset must not be negative")
 	}
 	return nil
 }
 
-// ValidateListResponse enforces the exact {items,total} collection shape.
+// ValidateListResponse enforces the paged collection payload carried in data.
 func ValidateListResponse(value map[string]any) error {
 	if len(value) != 2 {
 		return errors.New("list response must contain exactly items and total")
@@ -255,229 +226,72 @@ func ValidateListResponse(value map[string]any) error {
 	}
 	itemsValue := reflect.ValueOf(items)
 	if !itemsValue.IsValid() || itemsValue.Kind() != reflect.Slice || itemsValue.IsNil() {
-		return errors.New("list response items must be a non-null array")
+		return errors.New("list response items must be an array")
 	}
 	total, ok := value["total"]
-	if !ok || !nonNegativeSafeInteger(total) {
-		return errors.New("list response total must be a non-negative safe integer")
+	if !ok || !nonNegativeInteger(total) {
+		return errors.New("list response total must be a non-negative integer")
 	}
 	return nil
 }
 
-var problemStatus = map[string]int{
-	"invalid_input":   400,
-	"unauthenticated": 401, "invalid_credentials": 401, "session_expired": 401, "session_replayed": 401,
-	"permission_denied": 403, "not_found": 404,
-	"conflict": 409, "concurrent_write": 409,
-	"failed_precondition": 422, "rate_limited": 429,
-	"internal_error": 500, "unavailable": 503, "not_ready": 503,
-}
-
-func ProblemStatus(category string) (int, bool) {
-	status, ok := problemStatus[category]
-	return status, ok
-}
-
-func ProblemType(category string) (string, error) {
-	if _, ok := problemStatus[category]; !ok || !problemCodePattern.MatchString(category) {
-		return "", fmt.Errorf("problem category %q is not registered", category)
-	}
-	return "https://nexa.dev/problems/v1/" + strings.ReplaceAll(category, "_", "-"), nil
-}
-
-// ValidateProblem enforces the Nexa RFC 9457 extension shape and status relation.
-func ValidateProblem(value map[string]any, httpStatus int) error {
-	allowed := map[string]bool{"type": true, "title": true, "status": true, "code": true, "detail": true, "instance": true, "requestId": true, "traceId": true, "fieldErrors": true}
+// ValidateSuccessEnvelope validates PDCL's one successful HTTP envelope.
+func ValidateSuccessEnvelope(value map[string]any) error {
 	for key := range value {
-		if !allowed[key] {
-			return fmt.Errorf("problem member %q is not allowed", key)
+		if key != "code" && key != "msg" && key != "data" {
+			return fmt.Errorf("success envelope member %q is not allowed", key)
 		}
 	}
-	for _, key := range []string{"type", "title", "status", "code"} {
+	if code, ok := value["code"].(int); !ok || code != 0 {
+		return errors.New("success envelope code must be zero")
+	}
+	if message, ok := value["msg"].(string); !ok || message != "ok" {
+		return errors.New("success envelope msg must be ok")
+	}
+	return nil
+}
+
+// ValidateErrorEnvelope validates PDCL's one error HTTP envelope. message is
+// a required stable member, not a compatibility fallback for msg.
+func ValidateErrorEnvelope(value map[string]any, httpStatus int) error {
+	if httpStatus < 400 || httpStatus > 599 {
+		return errors.New("error HTTP status must be 4xx or 5xx")
+	}
+	if len(value) != 3 {
+		return errors.New("error envelope must contain exactly code, msg, and message")
+	}
+	for _, key := range []string{"code", "msg", "message"} {
 		if _, ok := value[key]; !ok {
-			return fmt.Errorf("problem member %q is required", key)
+			return fmt.Errorf("error envelope member %q is required", key)
 		}
 	}
-	code, ok := value["code"].(string)
-	if !ok || !problemCodePattern.MatchString(code) {
-		return errors.New("problem code must be stable lower_snake_case")
+	if code, ok := value["code"].(int); !ok || code != httpStatus {
+		return errors.New("error envelope code must equal HTTP status")
 	}
-	typeURI, ok := value["type"].(string)
-	const typePrefix = "https://nexa.dev/problems/v1/"
-	if !ok || !strings.HasPrefix(typeURI, typePrefix) {
-		return errors.New("problem type is not a Nexa v1 category URI")
-	}
-	category := strings.ReplaceAll(strings.TrimPrefix(typeURI, typePrefix), "-", "_")
-	wantStatus, registered := ProblemStatus(category)
-	if !registered || wantStatus != httpStatus || !safeIntegerEquals(value["status"], httpStatus) {
-		return errors.New("problem category, body status, and HTTP status disagree")
-	}
-	wantType, _ := ProblemType(category)
-	if value["type"] != wantType {
-		return errors.New("problem type is not canonical")
-	}
-	if title, ok := value["title"].(string); !ok || title == "" {
-		return errors.New("problem title must be non-empty")
-	}
-	if detail, present := value["detail"]; present && httpStatus >= 500 {
-		text, ok := detail.(string)
-		if !ok || httpStatus == 500 && text != "An internal error occurred." || httpStatus == 503 && text != "Service temporarily unavailable." {
-			return errors.New("5xx problem detail must use the fixed safe message")
-		}
-	}
-	if fieldErrors, present := value["fieldErrors"]; present {
-		if err := ValidateFieldErrors(fieldErrors); err != nil {
-			return err
-		}
-	}
-	return ValidateNoNull(value)
-}
-
-func ValidateDecimalString(value string) error {
-	if !decimalPattern.MatchString(value) || value == "-0" {
-		return errors.New("value must be a canonical decimal string")
+	msg, msgOK := value["msg"].(string)
+	message, messageOK := value["message"].(string)
+	if !msgOK || !messageOK || msg == "" || message == "" || msg != message {
+		return errors.New("error envelope msg and message must be equal non-empty strings")
 	}
 	return nil
 }
 
-func ValidateUnsignedDecimalString(value string) error {
-	if !unsignedPattern.MatchString(value) {
-		return errors.New("value must be a canonical unsigned decimal string")
-	}
-	return nil
-}
-
-func ValidateDecimalNumberString(value string) error {
-	if !decimalNumberPattern.MatchString(value) || value == "-0" {
-		return errors.New("value must be a canonical decimal number string")
-	}
-	return nil
-}
-
-func ValidateOpaqueID(value string) error {
-	if value == "" || strings.TrimSpace(value) != value || strings.IndexFunc(value, unicode.IsControl) >= 0 {
-		return errors.New("ID must be a non-empty opaque string without surrounding whitespace or controls")
-	}
-	return nil
-}
-
-func ValidateEnumValue(value string) error {
-	if !problemCodePattern.MatchString(value) {
-		return errors.New("enum value must use lower_snake_case")
-	}
-	return nil
-}
-
-func ValidateFieldErrors(value any) error {
-	items, ok := value.([]any)
-	if !ok || items == nil {
-		return errors.New("fieldErrors must be a non-null array")
-	}
-	for index, item := range items {
-		field, ok := item.(map[string]any)
-		if !ok || len(field) < 2 || len(field) > 3 {
-			return fmt.Errorf("fieldErrors[%d] must contain pointer, code, and optional detail", index)
-		}
-		for key := range field {
-			if key != "pointer" && key != "code" && key != "detail" {
-				return fmt.Errorf("fieldErrors[%d] contains unknown member %q", index, key)
-			}
-		}
-		pointer, pointerOK := field["pointer"].(string)
-		code, codeOK := field["code"].(string)
-		if !pointerOK || !jsonPointerPattern.MatchString(pointer) || !codeOK || !problemCodePattern.MatchString(code) {
-			return fmt.Errorf("fieldErrors[%d] pointer or code is invalid", index)
-		}
-		if detail, present := field["detail"]; present {
-			if text, ok := detail.(string); !ok || text == "" {
-				return fmt.Errorf("fieldErrors[%d] detail must be non-empty", index)
-			}
-		}
-	}
-	return nil
-}
-
-func ValidateTimestamp(value string) error {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil || parsed.Location() != time.UTC || !strings.HasSuffix(value, "Z") {
-		return errors.New("timestamp must be RFC3339 UTC with a Z suffix")
-	}
-	return nil
-}
-
-func ValidateDate(value string) error {
-	if !datePattern.MatchString(value) {
-		return errors.New("date must use YYYY-MM-DD")
-	}
-	parsed, err := time.Parse("2006-01-02", value)
-	if err != nil || parsed.Format("2006-01-02") != value {
-		return errors.New("date is invalid")
-	}
-	return nil
-}
-
-// ValidateNoNull rejects null recursively, including typed nil slices and maps.
-func ValidateNoNull(value any) error {
-	if value == nil {
-		return errors.New("null is not permitted")
-	}
-	reflected := reflect.ValueOf(value)
-	if (reflected.Kind() == reflect.Map || reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) && reflected.IsNil() {
-		return errors.New("null is not permitted")
-	}
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, item := range typed {
-			if err := ValidateCanonicalName(key); err != nil {
-				return err
-			}
-			if err := ValidateNoNull(item); err != nil {
-				return fmt.Errorf("%s: %w", key, err)
-			}
-		}
-	case []any:
-		for index, item := range typed {
-			if err := ValidateNoNull(item); err != nil {
-				return fmt.Errorf("item %d: %w", index, err)
-			}
-		}
-	}
-	return nil
-}
-
-func nonNegativeSafeInteger(value any) bool {
+func nonNegativeInteger(value any) bool {
 	switch number := value.(type) {
 	case int:
-		return number >= 0 && uint64(number) <= 1<<53-1
+		return number >= 0
+	case int32:
+		return number >= 0
 	case int64:
-		return number >= 0 && uint64(number) <= 1<<53-1
+		return number >= 0
+	case uint:
+		return true
+	case uint32:
+		return true
 	case uint64:
-		return number <= 1<<53-1
+		return true
 	case float64:
-		return number >= 0 && number <= 1<<53-1 && math.Trunc(number) == number
-	case json.Number:
-		parsed, err := strconv.ParseInt(string(number), 10, 64)
-		return err == nil && parsed >= 0 && parsed <= 1<<53-1
-	default:
-		return false
-	}
-}
-
-func safeIntegerEquals(value any, expected int) bool {
-	if !nonNegativeSafeInteger(value) {
-		return false
-	}
-	switch number := value.(type) {
-	case int:
-		return number == expected
-	case int64:
-		return number == int64(expected)
-	case uint64:
-		return number == uint64(expected)
-	case float64:
-		return number == float64(expected)
-	case json.Number:
-		return string(number) == strconv.Itoa(expected)
+		return number >= 0 && number == float64(int64(number))
 	default:
 		return false
 	}

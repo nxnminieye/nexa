@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/gowebpki/jcs"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -44,7 +44,7 @@ type canonicalField struct {
 	Sensitive     bool                 `json:"sensitive"`
 	IsIdentity    bool                 `json:"isIdentity"`
 	IsTenantField bool                 `json:"isTenantField"`
-	FieldMeta     json.RawMessage      `json:"fieldMeta"`
+	FieldFacts    json.RawMessage      `json:"fieldFacts"`
 }
 type canonicalEdge struct {
 	ID             string        `json:"id"`
@@ -59,14 +59,14 @@ type canonicalEdge struct {
 }
 
 type canonicalEntity struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	SourceRef  string            `json:"sourceRef"`
-	SchemaMeta json.RawMessage   `json:"schemaMeta"`
-	CRUD       *json.RawMessage  `json:"crud,omitempty"`
-	Identity   canonicalIdentity `json:"identity"`
-	Fields     []canonicalField  `json:"fields"`
-	Edges      []canonicalEdge   `json:"edges"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	SourceRef   string            `json:"sourceRef"`
+	SchemaFacts json.RawMessage   `json:"schemaFacts"`
+	CRUD        *json.RawMessage  `json:"crud,omitempty"`
+	Identity    canonicalIdentity `json:"identity"`
+	Fields      []canonicalField  `json:"fields"`
+	Edges       []canonicalEdge   `json:"edges"`
 }
 
 type canonicalDocument struct {
@@ -117,16 +117,16 @@ func canonicalize(value any) ([]byte, error) {
 	return jcs.Transform(encoded)
 }
 
-func canonicalSchemaMeta(meta nexaent.SchemaMeta) ([]byte, error) {
-	return nexaent.Schema(meta).CanonicalJSON()
+func canonicalSchemaFacts(meta sourcecomment.SchemaFacts) ([]byte, error) {
+	return sourcecomment.CanonicalSchemaFacts(meta)
 }
 
-func canonicalFieldMeta(meta nexaent.FieldMeta) ([]byte, error) {
-	return nexaent.Field(meta).CanonicalJSON()
+func canonicalFieldFacts(meta sourcecomment.FieldFacts) ([]byte, error) {
+	return sourcecomment.CanonicalFieldFacts(meta)
 }
 
-func canonicalCRUD(spec nexaent.CRUDSpec) ([]byte, error) {
-	return nexaent.CRUD(spec.Operations()...).CanonicalJSON()
+func canonicalCRUD(spec sourcecomment.CRUDOperations) ([]byte, error) {
+	return sourcecomment.CanonicalCRUDOperations(spec)
 }
 
 func canonicalDocumentForSnapshot(state *snapshotState) ([]byte, error) {
@@ -140,16 +140,16 @@ func canonicalDocumentForSnapshot(state *snapshotState) ([]byte, error) {
 	entities := append([]*snapshotEntityState(nil), state.entities...)
 	sort.Slice(entities, func(i, j int) bool { return entities[i].id < entities[j].id })
 	for index, entity := range entities {
-		schemaMeta, err := canonicalSchemaMeta(entity.meta)
+		schemaFacts, err := canonicalSchemaFacts(entity.meta)
 		if err != nil {
 			return nil, err
 		}
 		item := canonicalEntity{
 			ID: entity.id, Name: entity.name, SourceRef: entity.sourceRef.String(),
-			SchemaMeta: schemaMeta,
-			Identity:   canonicalIdentity{Kind: entity.identity.kind, Name: entity.identity.name, Type: entity.identity.typeID, SourceRef: entity.identity.sourceRef.String()},
-			Fields:     make([]canonicalField, len(entity.fields)),
-			Edges:      make([]canonicalEdge, len(entity.edges)),
+			SchemaFacts: schemaFacts,
+			Identity:    canonicalIdentity{Kind: entity.identity.kind, Name: entity.identity.name, Type: entity.identity.typeID, SourceRef: entity.identity.sourceRef.String()},
+			Fields:      make([]canonicalField, len(entity.fields)),
+			Edges:       make([]canonicalEdge, len(entity.edges)),
 		}
 		if entity.hasCRUD {
 			crud, err := canonicalCRUD(entity.crud)
@@ -162,7 +162,7 @@ func canonicalDocumentForSnapshot(state *snapshotState) ([]byte, error) {
 		fields := append([]*snapshotFieldState(nil), entity.fields...)
 		sort.Slice(fields, func(i, j int) bool { return fields[i].id < fields[j].id })
 		for fieldIndex, field := range fields {
-			meta, err := canonicalFieldMeta(field.meta)
+			facts, err := canonicalFieldFacts(field.meta)
 			if err != nil {
 				return nil, err
 			}
@@ -177,7 +177,7 @@ func canonicalDocumentForSnapshot(state *snapshotState) ([]byte, error) {
 				ID: field.id, Name: field.name, SourceRef: field.sourceRef.String(), Type: field.typeID,
 				EnumValues: canonicalEnumValues(enums), Optional: field.optional, Nillable: field.nillable,
 				Immutable: field.immutable, HasDefault: field.hasDefault, Sensitive: field.sensitive,
-				IsIdentity: field.isIdentity, IsTenantField: field.isTenantField, FieldMeta: meta,
+				IsIdentity: field.isIdentity, IsTenantField: field.isTenantField, FieldFacts: facts,
 			}
 		}
 		edges := append([]*snapshotEdgeState(nil), entity.edges...)

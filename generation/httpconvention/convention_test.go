@@ -10,28 +10,25 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-func TestCanonicalName(t *testing.T) {
+func TestPDCLConvention(t *testing.T) {
 	for source, want := range map[string]string{
-		"ID": "id", "TenantID": "tenantId", "HTTPResponseID": "httpResponseId",
-		"created_at": "createdAt", "pageSize": "pageSize", "URL2Value": "url2Value",
+		"ID": "id", "TenantID": "tenantId", "created_at": "createdAt",
 	} {
 		got, err := httpconvention.CanonicalName(source)
 		if err != nil || got != want {
 			t.Fatalf("CanonicalName(%q) = %q, %v; want %q", source, got, err, want)
 		}
 	}
-	for _, invalid := range []string{"", "_id", "tenant__id", "tenant-id", "租户"} {
-		if _, err := httpconvention.CanonicalName(invalid); err == nil {
-			t.Fatalf("CanonicalName(%q) succeeded", invalid)
+	for _, name := range []string{"tenantId", "source_key"} {
+		if err := httpconvention.ValidateFieldName(name); err != nil {
+			t.Fatalf("field name %q: %v", name, err)
 		}
 	}
-	if err := httpconvention.ValidateCanonicalName("TenantID"); err == nil {
-		t.Fatal("non-canonical authored name accepted")
+	if err := httpconvention.ValidateFieldName("TenantID"); err == nil {
+		t.Fatal("non-PDCL field spelling accepted")
 	}
-}
 
-func TestRequestClassification(t *testing.T) {
-	fields, err := httpconvention.ClassifyRequest("PATCH", "/api/records/{id}", []string{"id", "expectedVersion", "name"})
+	fields, err := httpconvention.ClassifyRequest("PATCH", "/records/{id}", []string{"id", "expectedVersion", "name"})
 	if err != nil || !reflect.DeepEqual(fields, []httpconvention.RequestField{
 		{Name: "id", Location: httpconvention.LocationPath},
 		{Name: "expectedVersion", Location: httpconvention.LocationBody},
@@ -39,95 +36,35 @@ func TestRequestClassification(t *testing.T) {
 	}) {
 		t.Fatalf("ClassifyRequest() = %#v, %v", fields, err)
 	}
-	queries, err := httpconvention.ClassifyRequest("GET", "/api/records", []string{"page", "pageSize"})
+	queries, err := httpconvention.ClassifyRequest("GET", "/records", []string{"limit", "offset"})
 	if err != nil || queries[0].Location != httpconvention.LocationQuery || queries[1].Location != httpconvention.LocationQuery {
 		t.Fatalf("GET classification = %#v, %v", queries, err)
 	}
-	for _, test := range []struct {
-		method, path string
-		fields       []string
-	}{
-		{"GET", "/records", []string{"page"}},
-		{"GET", "/api/Records", []string{}},
-		{"POST", "/api/records/{id}", []string{"otherId"}},
-		{"OPTIONS", "/api/records", []string{}},
-		{"GET", "/api/records", []string{"authorization"}},
-	} {
-		if _, err := httpconvention.ClassifyRequest(test.method, test.path, test.fields); err == nil {
-			t.Fatalf("invalid request accepted: %#v", test)
-		}
+	businessFields, err := httpconvention.ClassifyRequest("GET", "/records", []string{"tenantId", "subjectId", "requestId", "traceId"})
+	if err != nil || len(businessFields) != 4 {
+		t.Fatalf("business identity fields = %#v, %v", businessFields, err)
 	}
-}
 
-func TestSuccessPaginationAndProblem(t *testing.T) {
-	for _, test := range []struct {
-		method, route string
-		body          bool
-		status        int
-	}{
-		{"GET", "/api/records", true, 200}, {"POST", "/api/records", true, 201},
-		{"POST", "/api/records/{id}/actions/archive", true, 200},
-		{"PATCH", "/api/records/{id}", true, 200}, {"DELETE", "/api/records/{id}", false, 204},
-	} {
-		status, err := httpconvention.SuccessStatus(test.method, test.route, test.body)
-		if err != nil || status != test.status {
-			t.Fatalf("SuccessStatus(%#v) = %d, %v", test, status, err)
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		status, err := httpconvention.SuccessStatus(method, "/records", true)
+		if err != nil || status != 200 {
+			t.Fatalf("SuccessStatus(%s) = %d, %v", method, status, err)
 		}
 	}
-	if err := httpconvention.ValidatePage(1, 100); err != nil {
+	if err := httpconvention.ValidatePagination(20, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := httpconvention.ValidatePage(0, 101); err == nil {
+	if err := httpconvention.ValidatePagination(0, -1); err == nil {
 		t.Fatal("invalid pagination accepted")
 	}
-	if err := httpconvention.ValidateListResponse(map[string]any{"items": []any{}, "total": 0}); err != nil {
+	if err := httpconvention.ValidateListResponse(map[string]any{"items": []any{}, "total": int64(0)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := httpconvention.ValidateListResponse(map[string]any{"items": []any(nil), "total": 0}); err == nil {
-		t.Fatal("null list items accepted")
-	}
-	problemType, err := httpconvention.ProblemType("failed_precondition")
-	if err != nil {
+	if err := httpconvention.ValidateSuccessEnvelope(map[string]any{"code": 0, "msg": "ok", "data": map[string]any{}}); err != nil {
 		t.Fatal(err)
 	}
-	problem := map[string]any{"type": problemType, "title": "Precondition failed", "status": 422, "code": "record_version_mismatch"}
-	if err := httpconvention.ValidateProblem(problem, 422); err != nil {
+	if err := httpconvention.ValidateErrorEnvelope(map[string]any{"code": 409, "msg": "conflict", "message": "conflict"}, 409); err != nil {
 		t.Fatal(err)
-	}
-	problem["message"] = "legacy"
-	if err := httpconvention.ValidateProblem(problem, 422); err == nil {
-		t.Fatal("legacy problem alias accepted")
-	}
-}
-
-func TestScalarAndNullRules(t *testing.T) {
-	for _, value := range []string{"0", "1", "-1", "18446744073709551615"} {
-		if err := httpconvention.ValidateDecimalString(value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, value := range []string{"-0", "+1", "01", "1.0"} {
-		if err := httpconvention.ValidateDecimalString(value); err == nil {
-			t.Fatalf("invalid decimal %q accepted", value)
-		}
-	}
-	if err := httpconvention.ValidateTimestamp("2026-07-28T03:04:05.123Z"); err != nil {
-		t.Fatal(err)
-	}
-	if err := httpconvention.ValidateTimestamp("2026-07-28T11:04:05+08:00"); err == nil {
-		t.Fatal("non-Z timestamp accepted")
-	}
-	if err := httpconvention.ValidateDate("2026-07-28"); err != nil {
-		t.Fatal(err)
-	}
-	if err := httpconvention.ValidateDate("2026-02-30"); err == nil {
-		t.Fatal("invalid date accepted")
-	}
-	if err := httpconvention.ValidateNoNull(map[string]any{"items": []any{}, "name": "ok"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := httpconvention.ValidateNoNull(map[string]any{"value": nil}); err == nil {
-		t.Fatal("null accepted")
 	}
 }
 
@@ -136,7 +73,7 @@ func TestConformanceFixtureMatchesSchemaAndRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var schemaDocument, fixtureDocument any
+	var schemaDocument, fixtureDocument map[string]any
 	if err := json.Unmarshal(httpconvention.ConformanceSchema(), &schemaDocument); err != nil {
 		t.Fatal(err)
 	}
@@ -151,19 +88,9 @@ func TestConformanceFixtureMatchesSchemaAndRules(t *testing.T) {
 	if err != nil || compiled.Validate(fixtureDocument) != nil {
 		t.Fatalf("fixture schema validation failed: %v", err)
 	}
-	root := fixtureDocument.(map[string]any)
-	for _, raw := range root["namingCases"].([]any) {
-		item := raw.(map[string]any)
-		got, err := httpconvention.CanonicalName(item["source"].(string))
-		accepted := item["accepted"].(bool)
-		if accepted != (err == nil) || accepted && got != item["canonical"] {
-			t.Fatalf("naming case %#v = %q, %v", item, got, err)
-		}
-	}
-	for _, raw := range root["requestCases"].([]any) {
+	for _, raw := range fixtureDocument["requestCases"].([]any) {
 		item := raw.(map[string]any)
 		fields := stringsOf(item["fields"].([]any))
-		want := stringsOf(item["locations"].([]any))
 		classified, err := httpconvention.ClassifyRequest(item["method"].(string), item["path"].(string), fields)
 		if err != nil {
 			t.Fatal(err)
@@ -172,58 +99,24 @@ func TestConformanceFixtureMatchesSchemaAndRules(t *testing.T) {
 		for index := range classified {
 			got[index] = string(classified[index].Location)
 		}
-		if !reflect.DeepEqual(got, want) {
+		if want := stringsOf(item["locations"].([]any)); !reflect.DeepEqual(got, want) {
 			t.Fatalf("case %s locations = %v, want %v", item["name"], got, want)
 		}
 	}
-	for _, raw := range root["successCases"].([]any) {
+	for _, raw := range fixtureDocument["successCases"].([]any) {
 		item := raw.(map[string]any)
-		got, err := httpconvention.SuccessStatus(item["method"].(string), item["path"].(string), item["hasRepresentation"].(bool))
-		if err != nil || got != int(item["status"].(float64)) {
-			t.Fatalf("success case %#v = %d, %v", item, got, err)
+		status, err := httpconvention.SuccessStatus(item["method"].(string), item["path"].(string), true)
+		if err != nil || status != int(item["status"].(float64)) {
+			t.Fatalf("success case %#v = %d, %v", item, status, err)
 		}
 	}
-	for _, raw := range root["paginationCases"].([]any) {
+	for _, raw := range fixtureDocument["paginationCases"].([]any) {
 		item := raw.(map[string]any)
-		err := httpconvention.ValidatePage(int(item["page"].(float64)), int(item["pageSize"].(float64)))
+		err := httpconvention.ValidatePagination(int(item["limit"].(float64)), int(item["offset"].(float64)))
 		if item["accepted"].(bool) != (err == nil) {
 			t.Fatalf("pagination case %#v = %v", item, err)
 		}
 	}
-	for _, raw := range root["problemCases"].([]any) {
-		item := raw.(map[string]any)
-		category := item["category"].(string)
-		code := item["code"].(string)
-		status := int(item["status"].(float64))
-		problemType, err := httpconvention.ProblemType(category)
-		problem := map[string]any{"type": problemType, "title": "Fixture", "status": status, "code": code}
-		if err != nil || problemType != item["type"] || !mustProblemStatus(category, status) || httpconvention.ValidateProblem(problem, status) != nil {
-			t.Fatalf("problem case %#v = %q, %v", item, problemType, err)
-		}
-	}
-	for _, raw := range root["scalarCases"].([]any) {
-		item := raw.(map[string]any)
-		value := item["value"].(string)
-		var err error
-		switch item["kind"] {
-		case "decimal":
-			err = httpconvention.ValidateDecimalString(value)
-		case "id":
-			err = httpconvention.ValidateOpaqueID(value)
-		case "timestamp":
-			err = httpconvention.ValidateTimestamp(value)
-		case "date":
-			err = httpconvention.ValidateDate(value)
-		}
-		if item["accepted"].(bool) != (err == nil) {
-			t.Fatalf("scalar case %#v = %v", item, err)
-		}
-	}
-}
-
-func mustProblemStatus(category string, want int) bool {
-	got, ok := httpconvention.ProblemStatus(category)
-	return ok && got == want
 }
 
 func stringsOf(values []any) []string {

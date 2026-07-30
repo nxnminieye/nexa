@@ -34,7 +34,7 @@ var typeScriptScalarContracts = map[string]TypeScriptScalarContract{
 func number(value float64) *float64 { return &value }
 
 func numberContract(name string, integer, unsigned bool, minimum, maximum *float64) TypeScriptScalarContract {
-	return TypeScriptScalarContract{Name: name, TypeScript: "number & { readonly __nexaScalar: \"" + name + "\" }", Integer: integer, Unsigned: unsigned, Minimum: minimum, Maximum: maximum}
+	return TypeScriptScalarContract{Name: name, TypeScript: "number", Integer: integer, Unsigned: unsigned, Minimum: minimum, Maximum: maximum}
 }
 
 // TypeScriptScalar returns the exact, non-collapsing v1 mapping for a scalar.
@@ -61,8 +61,8 @@ func ValidateTypeScriptNumber(name string, value float64) error {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		return buildError("typescript_number_nonfinite", "/value", "numeric DTO values must be finite")
 	}
-	if contract.Integer && (math.Trunc(value) != value || math.Abs(value) > 9007199254740991) {
-		return buildError("typescript_integer_unsafe", "/value", "integer DTO values must be safe JavaScript integers")
+	if contract.Integer && math.Trunc(value) != value {
+		return buildError("typescript_integer_invalid", "/value", "numeric DTO value must be an integer")
 	}
 	if contract.Minimum != nil && value < *contract.Minimum || contract.Maximum != nil && value > *contract.Maximum {
 		return buildError("typescript_number_out_of_range", "/value", "numeric DTO value is outside its exact scalar range")

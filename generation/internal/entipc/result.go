@@ -10,9 +10,7 @@ import (
 	"github.com/bufbuild/protocompile"
 	"github.com/nxnminieye/nexa/generation/entity"
 	"github.com/nxnminieye/nexa/generation/internal/crudbuild"
-	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/internal/strictdoc"
-	"github.com/nxnminieye/nexa/nexaent"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -373,9 +371,6 @@ func (d DomainFailure) Pointer() string { return d.pointer }
 func (d DomainFailure) Source() string  { return d.source }
 
 func ResultFromDomainError(err error) (ResultInput, bool, error) {
-	if projection, ok := nexaent.ProjectEntHelperError(err); ok {
-		return domainResult("nexaent", projection.Code(), projection.Reason(), projection.Pointer(), projection.Source()), true, nil
-	}
 	if projection, ok := entity.ProjectEntHelperError(err); ok {
 		return domainResult("entity", projection.Code(), projection.Reason(), projection.Pointer(), projection.Source()), true, nil
 	}
@@ -546,7 +541,7 @@ func validateProtoArtifact(w readProtoWire, sources []provenance.Source) (string
 	if !validSourceRefs(w.SourceRefs, sources) {
 		return "proto_artifact_invalid", "/sourceRefs"
 	}
-	resolver := &protocompile.SourceResolver{Accessor: protocompile.SourceAccessorFromMap(map[string]string{w.Path: string(w.Bytes), "nexa/protocol/v1/options.proto": string(genprotocol.OptionsProto())})}
+	resolver := &protocompile.SourceResolver{Accessor: protocompile.SourceAccessorFromMap(map[string]string{w.Path: string(w.Bytes)})}
 	compiler := protocompile.Compiler{Resolver: protocompile.WithStandardImports(resolver)}
 	files, err := compiler.Compile(context.Background(), w.Path)
 	if err != nil || len(files) != 1 {
@@ -697,11 +692,6 @@ func parseDomainFailure(raw any, request Request, source string) (DomainFailure,
 	}
 	owner, code, reason, pointer, domainSource := stringsByName["owner"], stringsByName["code"], stringsByName["reason"], stringsByName["pointer"], stringsByName["source"]
 	switch owner {
-	case "nexaent":
-		_, validation := nexaent.ParseEntHelperErrorProjection(code, reason, pointer, domainSource)
-		if validation != nil {
-			return DomainFailure{}, resultError(domainReasonFromNexaField(validation.Field()), "/error/"+string(validation.Field()), source)
-		}
 	case "entity":
 		_, validation := entity.ParseEntHelperErrorProjection(code, reason, pointer, domainSource)
 		if validation != nil {
@@ -719,19 +709,6 @@ func parseDomainFailure(raw any, request Request, source string) (DomainFailure,
 		return DomainFailure{}, resultError("domain_owner_invalid", "/error/owner", source)
 	}
 	return DomainFailure{owner: owner, code: code, reason: reason, pointer: pointer, source: domainSource}, nil
-}
-func domainReasonFromNexaField(field nexaent.EntHelperErrorField) string {
-	switch field {
-	case nexaent.EntHelperErrorFieldCode:
-		return "domain_code_invalid"
-	case nexaent.EntHelperErrorFieldReason:
-		return "domain_reason_invalid"
-	case nexaent.EntHelperErrorFieldPointer:
-		return "domain_pointer_invalid"
-	case nexaent.EntHelperErrorFieldSource:
-		return "domain_source_invalid"
-	}
-	return "domain_error_invalid"
 }
 func domainReasonFromEntityField(field entity.EntHelperErrorField) string {
 	switch field {

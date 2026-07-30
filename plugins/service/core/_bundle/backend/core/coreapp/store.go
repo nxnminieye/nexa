@@ -158,6 +158,7 @@ type ExternalRoleGrantStore interface {
 type ProvisionTenantStoreInput struct {
 	TenantCode     string
 	DisplayName    string
+	DefaultRouter  string
 	OwnerAccountID IdentityAccountID
 	OwnerUsername  string
 	OwnerEmail     string

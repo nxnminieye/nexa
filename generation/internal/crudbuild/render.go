@@ -3,6 +3,8 @@ package crudbuild
 import (
 	"strconv"
 	"strings"
+
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 )
 
 func Render(document Document) ([]byte, error) {
@@ -11,6 +13,9 @@ func Render(document Document) ([]byte, error) {
 	}
 	state := document.state
 	var output strings.Builder
+	output.WriteString("// @nexa $contract: ")
+	output.WriteString(strconv.Quote(sourcecomment.Contract))
+	output.WriteString("\n")
 	output.WriteString("syntax = \"proto3\";\n\n")
 	output.WriteString("package ")
 	output.WriteString(state.protoPackage)
@@ -66,6 +71,12 @@ func Render(document Document) ([]byte, error) {
 		if !protoSymbolPattern.MatchString(message.name) {
 			return nil, renderError("proto_symbol_invalid", "/messages")
 		}
+		if !message.firstSource.Valid() {
+			return nil, renderError("source_comment_invalid", "/messages")
+		}
+		output.WriteString("// @nexa $source: ")
+		output.WriteString(strconv.Quote(message.firstSource.String()))
+		output.WriteString("\n")
 		output.WriteString("message ")
 		output.WriteString(message.name)
 		output.WriteString(" {\n")
@@ -90,6 +101,12 @@ func Render(document Document) ([]byte, error) {
 			output.WriteString(";\n")
 		}
 		for _, field := range message.fields {
+			if !field.firstSource.Valid() {
+				return nil, renderError("source_comment_invalid", "/messages")
+			}
+			output.WriteString("  // @nexa $source: ")
+			output.WriteString(strconv.Quote(field.firstSource.String()))
+			output.WriteString("\n")
 			output.WriteString("  ")
 			if field.repeated {
 				output.WriteString("repeated ")
@@ -113,24 +130,19 @@ func Render(document Document) ([]byte, error) {
 		output.WriteString(service.name)
 		output.WriteString(" {\n")
 		for _, method := range service.methods {
+			if !method.firstSource.Valid() {
+				return nil, renderError("source_comment_invalid", "/services/"+itoa(serviceIndex)+"/methods")
+			}
+			output.WriteString("  // @nexa $source: ")
+			output.WriteString(strconv.Quote(method.firstSource.String()))
+			output.WriteString("\n")
 			output.WriteString("  rpc ")
 			output.WriteString(method.name)
 			output.WriteString("(")
 			output.WriteString(method.input)
 			output.WriteString(") returns (")
 			output.WriteString(method.output)
-			if method.rpcContext != nil && len(method.rpcContext.contextFields) != 0 {
-				output.WriteString(") {\n")
-				output.WriteString("    option (nexa.protocol.v1.rpc_context) = {\n")
-				for _, binding := range method.rpcContext.contextFields {
-					output.WriteString("      context_fields: { source: TENANT_ID rpc_field: \"")
-					output.WriteString(binding.rpcField)
-					output.WriteString("\" }\n")
-				}
-				output.WriteString("    };\n  }\n")
-			} else {
-				output.WriteString(");\n")
-			}
+			output.WriteString(");\n")
 		}
 		output.WriteString("}\n")
 		if serviceIndex != len(state.services)-1 {

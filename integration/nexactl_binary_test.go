@@ -78,13 +78,12 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	if err := json.Unmarshal(encodedResult, &inspection); err != nil {
 		t.Fatalf("decode inspection result: %v", err)
 	}
-	if len(inspection.Plugins) != 4 || len(inspection.Capabilities) != 6 || len(inspection.Commands) != 16 {
+	if len(inspection.Plugins) != 3 || len(inspection.Capabilities) != 5 || len(inspection.Commands) != 14 {
 		t.Fatalf("unexpected reference composition: %#v", inspection)
 	}
 	wantPlugins := []struct{ id, version string }{
 		{id: "generation", version: "v0.1.0"},
 		{id: "governance", version: "v0.1.0"},
-		{id: "sdk-python-assets", version: "v0.1.0"},
 		{id: "source", version: "v0.0.0-dev"},
 	}
 	for index, want := range wantPlugins {
@@ -100,8 +99,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	}
 	if len(inspection.Plugins[0].Provides) != len(wantGenerationProvides) ||
 		len(inspection.Plugins[1].Provides) != 1 || inspection.Plugins[1].Provides[0].ID != "governance.validation" ||
-		len(inspection.Plugins[2].Provides) != 1 || inspection.Plugins[2].Provides[0].ID != "generation.sdk-python-assets" ||
-		len(inspection.Plugins[3].Provides) != 1 || inspection.Plugins[3].Provides[0].ID != "source.bundle" {
+		len(inspection.Plugins[2].Provides) != 1 || inspection.Plugins[2].Provides[0].ID != "source.bundle" {
 		t.Fatalf("unexpected plugin capabilities: %#v", inspection.Plugins)
 	}
 	for index, want := range wantGenerationProvides {
@@ -114,7 +112,6 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		{id: "generation.api", provider: "generation"},
 		{id: "generation.frontend", provider: "generation"},
 		{id: "generation.rpc", provider: "generation"},
-		{id: "generation.sdk-python-assets", provider: "sdk-python-assets"},
 		{id: "governance.validation", provider: "governance"},
 		{id: "source.bundle", provider: "source"},
 	}
@@ -132,8 +129,6 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		{path: "generation api generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
 		{path: "generation frontend generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
 		{path: "generation rpc generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
-		{path: "generation sdk-python-assets check", owner: "sdk-python-assets", sideEffect: "repository-read", flags: []string{"repo-root"}, required: []bool{true}},
-		{path: "generation sdk-python-assets write", owner: "sdk-python-assets", sideEffect: "repository-write", flags: []string{"repo-root"}, required: []bool{true}},
 		{path: "governance skill validate", owner: "governance", sideEffect: "repository-read", flags: []string{"root"}, required: []bool{true}},
 		{path: "inspect", owner: "nexactl.host", sideEffect: "none"},
 		{path: "skills sync", owner: "governance", sideEffect: "repository-write", flags: []string{"repo-root"}, required: []bool{true}},
@@ -153,16 +148,16 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 		var flagNames []string
 		var required []bool
-			for flagIndex, flag := range command.Flags {
-				flagNames = append(flagNames, flag.Name)
-				required = append(required, flag.Required)
-				wantType := "string"
-				if flag.Name == "overwrite-logic" {
-					wantType = "bool"
-				}
-				if flag.Type != wantType {
-					t.Fatalf("command[%d] flag[%d] type = %q", index, flagIndex, flag.Type)
-				}
+		for flagIndex, flag := range command.Flags {
+			flagNames = append(flagNames, flag.Name)
+			required = append(required, flag.Required)
+			wantType := "string"
+			if flag.Name == "overwrite-logic" {
+				wantType = "bool"
+			}
+			if flag.Type != wantType {
+				t.Fatalf("command[%d] flag[%d] type = %q", index, flagIndex, flag.Type)
+			}
 		}
 		if !reflect.DeepEqual(flagNames, want.flags) || !reflect.DeepEqual(required, want.required) {
 			t.Fatalf("command[%d] flags = %v required=%v, want %v required=%v", index, flagNames, required, want.flags, want.required)
@@ -208,7 +203,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 		sourceReleases = schema.Releases
 	}
-	wantProfiles := []string{"backend", "frontend", "full", "identity-oidc"}
+	wantProfiles := []string{"backend", "identity-oidc"}
 	if len(sourceReleases) != 1 || sourceReleases[0].ProviderID != ref.ProviderID() ||
 		sourceReleases[0].ModulePath != ref.ModulePath() || sourceReleases[0].PackagePath != ref.PackagePath() ||
 		sourceReleases[0].Version != ref.Version() || sourceReleases[0].ManifestDigest != ref.ManifestDigest().String() ||

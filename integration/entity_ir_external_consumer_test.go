@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/nxnminieye/nexa/generation/entity"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -116,7 +116,7 @@ replace github.com/nxnminieye/nexa => %s
 		t.Fatal("Account missing")
 	}
 	crud, ok := account.CRUD()
-	if !ok || !sameCRUD(crud.Operations(), []nexaent.CRUDOperation{nexaent.CRUDList, nexaent.CRUDGet, nexaent.CRUDCreate}) {
+	if !ok || !sameCRUD(crud.Operations(), []sourcecomment.CRUDOperation{sourcecomment.CRUDList, sourcecomment.CRUDGet, sourcecomment.CRUDCreate}) {
 		t.Fatalf("Account CRUD = %#v, %v", crud.Operations(), ok)
 	}
 	audit, ok := snapshot.Entity("schema:AuditEntry")
@@ -127,10 +127,10 @@ replace github.com/nxnminieye/nexa => %s
 		t.Fatal("AuditEntry absence became CRUD opt-in")
 	}
 	if _, ok := account.Field("schema:Account/field:source"); !ok {
-		t.Fatal("shared mixin field missing from Account")
+		t.Fatal("materialized source field missing from Account")
 	}
 	if _, ok := audit.Field("schema:AuditEntry/field:source"); !ok {
-		t.Fatal("shared mixin field missing from AuditEntry")
+		t.Fatal("materialized source field missing from AuditEntry")
 	}
 	if len(snapshot.ProjectedSources()) != 7 {
 		t.Fatalf("source closure = %#v", snapshot.ProjectedSources())
@@ -210,7 +210,7 @@ func runEntityIRGo(t *testing.T, directory string, environment []string, argumen
 	}
 }
 
-func sameCRUD(left, right []nexaent.CRUDOperation) bool {
+func sameCRUD(left, right []sourcecomment.CRUDOperation) bool {
 	if len(left) != len(right) {
 		return false
 	}

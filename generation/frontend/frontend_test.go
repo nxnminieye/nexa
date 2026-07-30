@@ -4,748 +4,393 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/gowebpki/jcs"
+	"github.com/nxnminieye/nexa/generation/api"
+	"github.com/nxnminieye/nexa/generation/composition"
 	"github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
+	"github.com/nxnminieye/nexa/generation/httpconvention"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
-	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-func TestPageSpecStrictAndModes(t *testing.T) {
-	base := collectionSpec()
-	if _, err := frontend.ParsePageSpec("frontend/accounts.json", base); err != nil {
-		t.Fatal(err)
+func TestParsePageSpecAcceptsOnlySourceCommentYAML(t *testing.T) {
+	spec := mustSpec(t, pageSource(""))
+	if spec.ID() != "accounts" || spec.SourceRef().String() == "" || spec.Digest().String() == "" {
+		t.Fatalf("page source identity = %q %q %q", spec.ID(), spec.SourceRef().String(), spec.Digest().String())
 	}
-	for _, tc := range []struct {
-		name    string
-		mutate  func(map[string]any)
-		pointer string
-	}{
-		{"unknown", func(v map[string]any) { v["unknown"] = true }, "/unknown"},
-		{"mode", func(v map[string]any) { v["mode"] = "other" }, "/mode"},
-		{"access", func(v map[string]any) { delete(v, "accessOperation") }, "/accessOperation"},
-		{"custom", func(v map[string]any) { ops(v)[0]["role"] = "custom" }, "/operations/0/role"},
-		{"dynamic-route", func(v map[string]any) { v["route"].(map[string]any)["path"] = "/accounts/:id" }, "/route/path"},
-		{"context-required", func(v map[string]any) { delete(ops(v)[0], "contextBindings") }, "/operations/0/contextBindings"},
-		{"action-effect", func(v map[string]any) { delete(actions(v)[0], "effect") }, "/actions/0/effect"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			v := object(base)
-			tc.mutate(v)
-			_, err := frontend.ParsePageSpec("frontend/case.json", marshal(v))
-			assertError(t, err, "frontend_page_spec_invalid", tc.pointer)
-		})
+	if _, err := frontend.ParsePageSpec("frontend/accounts.page.json", []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1"}`)); err == nil {
+		t.Fatal("legacy JSON page spec accepted")
 	}
-	singleton := object(singletonSpec())
-	singleton["actions"] = []any{map[string]any{"id": "bad", "labelKey": "action.bad", "operation": "get", "effect": "update", "fields": []any{}, "placement": "row"}}
-	_, err := frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, marshal(singleton))}, locale(t, "page.account", "field.name", "action.bad"))
-	assertError(t, err, "frontend_ir_invalid", "/pages/0/operations")
+	if _, err := frontend.ParsePageSpec("frontend/accounts.page.yaml", []byte("apiVersion: nexa.dev/frontend-source/v1\nkind: Page\nid: accounts\n")); err == nil {
+		t.Fatal("page without ui.entity accepted")
+	}
 }
 
-func TestBuildCollectionProjectionAndActionClosure(t *testing.T) {
-	doc, err := frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, collectionSpec())}, collectionLocale(t))
+func TestBuildDerivesCRUDFieldsAndLocalesFromFacts(t *testing.T) {
+	document, err := frontend.Build(withFacts(t, loadAPI(t, canonicalAPISource()), upstreamFacts(t)), []frontend.PageSpec{mustSpec(t, pageSource(""))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := canonical(t, doc)
-	assertJCS(t, b)
+	encoded := canonical(t, document)
+	assertJCS(t, encoded)
 	var wire struct {
+		Operations []struct {
+			ClientName string `json:"clientName"`
+			ID         string `json:"id"`
+		} `json:"operations"`
+		Locales []struct {
+			Locale   string            `json:"locale"`
+			Messages map[string]string `json:"messages"`
+		} `json:"locales"`
 		Pages []struct {
-			Mode, AccessOperation, AccessPermission string
-			Operations                              []struct {
-				ID, RequestType, ResponseType, Permission string
-				ContextBindings                           []any
-			}
-			Fields []struct {
-				ID       string
-				Bindings []struct {
-					Required  bool
-					ValueType struct{ Kind, Name string }
-				}
-			}
-		}
+			TitleKey           string                      `json:"titleKey"`
+			Route              struct{ Path, Name string } `json:"route"`
+			ExtensionComponent string                      `json:"extensionComponent"`
+			Operations         map[string]string           `json:"operations"`
+			Fields             []struct {
+				Name, LabelKey, Control string
+				Surfaces                []string
+			} `json:"fields"`
+		} `json:"pages"`
 	}
-	if err := json.Unmarshal(b, &wire); err != nil {
+	if err := json.Unmarshal(encoded, &wire); err != nil {
 		t.Fatal(err)
 	}
-	p := wire.Pages[0]
-	if p.Mode != "collection" || p.AccessOperation != "list" || p.AccessPermission != "account.read" {
-		t.Fatalf("page=%#v", p)
+	if len(wire.Pages) != 1 || wire.Pages[0].TitleKey != "account.label" || wire.Pages[0].Route.Path != "/system/accounts" || wire.Pages[0].Route.Name != "AccountsRoute" {
+		t.Fatalf("derived page = %#v", wire.Pages)
 	}
-	byOp := map[string]struct {
-		req, res string
-		contexts int
+	operationIDs := make([]string, len(wire.Operations))
+	clientNames := make([]string, len(wire.Operations))
+	for index, operation := range wire.Operations {
+		operationIDs[index] = operation.ID
+		clientNames[index] = operation.ClientName
+	}
+	if got, want := strings.Join(operationIDs, ","), "accounts.createAccount,accounts.deleteAccount,accounts.getAccount,accounts.listAccounts,accounts.updateAccount"; got != want {
+		t.Fatalf("operation closure = %s, want %s", got, want)
+	}
+	if got, want := strings.Join(clientNames, ","), "createAccount,deleteAccount,getAccount,listAccounts,updateAccount"; got != want {
+		t.Fatalf("operation client names = %s, want %s", got, want)
+	}
+	fields := map[string]struct {
+		control  string
+		surfaces []string
 	}{}
-	for _, op := range p.Operations {
-		byOp[op.ID] = struct {
-			req, res string
-			contexts int
-		}{op.RequestType, op.ResponseType, len(op.ContextBindings)}
-	}
-	if byOp["status"].req != "UpdateStatusRequest" || byOp["list"].res != "ListResponse" || byOp["list"].contexts != 1 {
-		t.Fatalf("operations=%#v", byOp)
-	}
-	if !strings.Contains(string(b), `"valueType":{"kind":"scalar","name":"int64"}`) {
-		t.Fatalf("exact type projection missing: %s", b)
-	}
-	if !strings.Contains(string(b), `"valueType":{"element":{"kind":"ref","name":"Quality"},"kind":"array"}`) {
-		t.Fatalf("ref identity projection missing: %s", b)
-	}
-	for _, want := range []string{
-		`"columns":[{"id":"code","labelKey":"column.code","path":["Code"],"required":true,"valueType":{"kind":"scalar","name":"string"}}`,
-		`{"id":"score","labelKey":"column.score","path":["Score"],"required":false,"valueType":{"kind":"scalar","name":"int32"}}`,
-		`{"id":"tags","labelKey":"column.tags","path":["Tags"],"required":true,"valueType":{"element":{"kind":"scalar","name":"string"},"kind":"array"}}]`,
-	} {
-		if !strings.Contains(string(b), want) {
-			t.Fatalf("column projection missing %s: %s", want, b)
-		}
-	}
-}
-
-func TestColumnsAndOptionsClosedSemantics(t *testing.T) {
-	api := loadAPI(t, apiSource())
-	for _, tc := range []struct {
-		name   string
-		mutate func(map[string]any)
-		reason string
-	}{
-		{"options-orphan", func(v map[string]any) { actions(v)[1]["fields"] = []any{"status"} }, "options_action_required"},
-		{"options-surface", func(v map[string]any) { fields(v)[4]["surfaces"] = []any{"list"} }, "options_surface_forbidden"},
-		{"columns-path", func(v map[string]any) { fields(v)[5]["columns"].([]any)[0].(map[string]any)["path"] = []any{"Missing"} }, "column_path_invalid"},
-		{"columns-control", func(v map[string]any) { fields(v)[5]["control"] = "text" }, "columns_control_forbidden"},
-		{"columns-non-array", func(v map[string]any) {
-			fields(v)[5]["bindings"].([]any)[0].(map[string]any)["path"] = []any{"Items", "Count"}
-		}, "columns_type_invalid"},
-		{"columns-required", func(v map[string]any) { delete(fields(v)[5], "columns") }, "columns_required"},
-		{"column-cross-array", func(v map[string]any) {
-			fields(v)[5]["columns"].([]any)[0].(map[string]any)["path"] = []any{"Tags", "Value"}
-		}, "column_path_invalid"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			value := object(collectionSpec())
-			tc.mutate(value)
-			spec, err := frontend.ParsePageSpec("frontend/case.json", marshal(value))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = frontend.Build(api, []frontend.PageSpec{spec}, collectionLocale(t))
-			assertReason(t, err, tc.reason)
-		})
-	}
-}
-
-func TestBuildRejectsClosedWorldMutations(t *testing.T) {
-	api := loadAPI(t, apiSource())
-	cases := []struct {
-		name   string
-		mutate func(map[string]any)
-		reason string
-	}{
-		{"access-role", func(v map[string]any) { v["accessOperation"] = "create" }, "access_operation_role_invalid"},
-		{"collection-get", func(v map[string]any) {
-			ops(v)[0]["role"] = "get"
-			delete(ops(v)[0], "result")
-			delete(ops(v)[0], "pagination")
-		}, "collection_operation_shape_invalid"},
-		{"row-key-missing", func(v map[string]any) { delete(ops(v)[0]["result"].(map[string]any), "rowKeyPath") }, "row_key_required"},
-		{"row-key-outside-items", func(v map[string]any) { ops(v)[0]["result"].(map[string]any)["rowKeyPath"] = []any{"Missing"} }, "row_key_type_invalid"},
-		{"action-unreferenced", func(v map[string]any) { v["actions"] = actions(v)[:1] }, "action_operation_unreferenced"},
-		{"action-placement", func(v map[string]any) { actions(v)[0]["placement"] = "row" }, "action_placement_invalid"},
-		{"action-field-missing", func(v map[string]any) { actions(v)[0]["fields"] = []any{} }, "create_row_source_forbidden"},
-		{"search-no-control", func(v map[string]any) { delete(fields(v)[0], "control") }, "search_surface_binding_invalid"},
-		{"response-outside-items", func(v map[string]any) { fields(v)[1]["bindings"].([]any)[0].(map[string]any)["path"] = []any{"Total"} }, "response_binding_scope_invalid"},
-		{"options-unreferenced", func(v map[string]any) { fields(v)[4]["surfaces"] = []any{"list"}; delete(fields(v)[4], "options") }, "list_surface_binding_invalid"},
-		{"options-extra-required", func(v map[string]any) { ops(v)[3]["operationId"] = "account.options.extra" }, "required_request_binding_missing"},
-		{"pagination-conflict", func(v map[string]any) {
-			ops(v)[0]["contextBindings"] = append(ops(v)[0]["contextBindings"].([]any), map[string]any{"context": "page-limit", "path": []any{"Limit"}})
-		}, "request_binding_conflict"},
-		{"field-unused", func(v map[string]any) { fields(v)[1]["surfaces"] = []any{}; fields(v)[1]["bindings"] = []any{} }, "field_unused"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v := object(collectionSpec())
-			tc.mutate(v)
-			spec, err := frontend.ParsePageSpec("frontend/case.json", marshal(v))
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = frontend.Build(api, []frontend.PageSpec{spec}, collectionLocale(t))
-			assertReason(t, err, tc.reason)
-		})
-	}
-}
-
-func TestBindingExactTypesPresenceAndContext(t *testing.T) {
-	api := loadAPI(t, apiSource())
-	for _, tc := range []struct {
-		name   string
-		mutate func(map[string]any)
-		reason string
-	}{
-		{"numeric-mismatch", func(v map[string]any) { fields(v)[1]["bindings"].([]any)[1].(map[string]any)["path"] = []any{"Count"} }, "binding_type_inconsistent"},
-		{"optional-row-required", func(v map[string]any) {
-			fields(v)[1]["bindings"].([]any)[0].(map[string]any)["path"] = []any{"Items", "OptionalID"}
-		}, "optional_row_source_required_target"},
-		{"duplicate-field-op-direction", func(v map[string]any) {
-			f := fields(v)[0]
-			f["bindings"] = append(f["bindings"].([]any), map[string]any{"operation": "list", "direction": "request", "path": []any{"Other"}})
-		}, "field_binding_duplicate"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			v := object(collectionSpec())
-			tc.mutate(v)
-			spec, err := frontend.ParsePageSpec("frontend/case.json", marshal(v))
-			if err != nil {
-				assertReason(t, err, tc.reason)
-				return
-			}
-			_, err = frontend.Build(api, []frontend.PageSpec{spec}, collectionLocale(t))
-			assertReason(t, err, tc.reason)
-		})
-	}
-	other := object(collectionSpec())
-	for _, op := range ops(other) {
-		for _, c := range op["contextBindings"].([]any) {
-			c.(map[string]any)["context"] = "shared"
-		}
-	}
-	second := object(singletonSpec())
-	ops(second)[0]["operationId"] = "account.get.int-context"
-	ops(second)[0]["contextBindings"].([]any)[0].(map[string]any)["context"] = "shared"
-	_, err := frontend.Build(api, []frontend.PageSpec{mustSpec(t, marshal(other)), mustSpec(t, marshal(second))}, locale(t, append(collectionLocaleKeys(), "page.account")...))
-	assertReason(t, err, "context_type_inconsistent")
-}
-
-func TestBindingPresenceIncludesOptionalParents(t *testing.T) {
-	value := object(collectionSpec())
-	value["fields"] = append(fields(value), map[string]any{
-		"id": "profile-label", "labelKey": "field.profileLabel", "surfaces": []any{"list"},
-		"bindings": []any{map[string]any{"operation": "list", "direction": "response", "path": []any{"Items", "Profile", "Label"}}},
-	})
-	doc, err := frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, marshal(value))}, locale(t, append(collectionLocaleKeys(), "field.profileLabel")...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded := canonical(t, doc)
-	if !strings.Contains(string(encoded), `"path":["Items","Profile","Label"],"required":false,"valueType":{"kind":"scalar","name":"string"}`) {
-		t.Fatalf("optional parent presence was not projected: %s", encoded)
-	}
-
-	invalid := object(collectionSpec())
-	ops(invalid)[0]["contextBindings"].([]any)[0].(map[string]any)["path"] = []any{"Query"}
-	_, err = frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, marshal(invalid))}, collectionLocale(t))
-	assertReason(t, err, "context_binding_type_invalid")
-
-	hidden := object(collectionSpec())
-	nameBindings := fields(hidden)[2]["bindings"].([]any)
-	nameBindings[0].(map[string]any)["path"] = []any{"Items", "Profile", "Label"}
-	fields(hidden)[2]["bindings"] = append(nameBindings, map[string]any{"operation": "status", "direction": "request", "path": []any{"Status"}})
-	fields(hidden)[3]["bindings"] = fields(hidden)[3]["bindings"].([]any)[:1]
-	actions(hidden)[1]["fields"] = []any{"choice"}
-	_, err = frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, marshal(hidden))}, collectionLocale(t))
-	assertReason(t, err, "optional_row_source_required_target")
-}
-
-func TestBuildRequiresClosedResponseWireBindings(t *testing.T) {
-	page := []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"wire","titleKey":"page.wire","mode":"singleton","accessOperation":"get","route":{"path":"/wire","name":"Wire"},"operations":[{"id":"get","role":"get","operationId":"wire.get","contextBindings":[]}],"fields":[{"id":"api-version","labelKey":"field.apiVersion","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["APIVersion"]}]},{"id":"id","labelKey":"field.id","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["ID"]}]}],"actions":[],"extensionPoints":[]}`)
-	apiTemplate := `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type GetRequest {}
-type GetResponse { APIVersion string %s ID int64 %s }
-@server (nexaOperationId: "wire.get" nexaAuthMode: "none")
-service api { @handler get get /wire (GetRequest) returns (GetResponse) }
-`
-	for _, tc := range []struct {
-		name, apiVersionTag, idTag, reason, pointer string
-	}{
-		{"missing", "", "`json:\"id\"`", "response_wire_binding_missing", "/api/types/1/fields/0/binding"},
-		{"non-body", "`form:\"apiVersion\"`", "`json:\"id\"`", "response_wire_binding_location_invalid", "/api/types/1/fields/0/binding/in"},
-		{"duplicate", "`json:\"value\"`", "`json:\"value\"`", "response_wire_name_duplicate", "/api/types/1/fields/1/binding/name"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			apiDocument := loadAPI(t, fmt.Sprintf(apiTemplate, tc.apiVersionTag, tc.idTag))
-			if tc.name == "missing" {
-				if _, err := frontend.Build(apiDocument, nil); err != nil {
-					t.Fatalf("unreferenced response rejected: %v", err)
-				}
-			}
-			_, err := frontend.Build(apiDocument, []frontend.PageSpec{mustSpec(t, page)}, locale(t, "page.wire", "field.apiVersion", "field.id"))
-			assertError(t, err, "frontend_ir_invalid", tc.pointer)
-			assertReason(t, err, tc.reason)
-		})
-	}
-
-	nestedAPI := loadAPI(t, `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type Child { ID int64 }
-type GetRequest {}
-type GetResponse { Child Child `+"`json:\"child\"`"+` }
-@server (nexaOperationId: "nested.get" nexaAuthMode: "none")
-service api { @handler get get /nested (GetRequest) returns (GetResponse) }
-`)
-	nestedPage := mustSpec(t, []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"nested","titleKey":"page.nested","mode":"singleton","accessOperation":"get","route":{"path":"/nested","name":"Nested"},"operations":[{"id":"get","role":"get","operationId":"nested.get","contextBindings":[]}],"fields":[{"id":"id","labelKey":"field.id","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["Child","ID"]}]}],"actions":[],"extensionPoints":[]}`))
-	_, err := frontend.Build(nestedAPI, []frontend.PageSpec{nestedPage}, locale(t, "page.nested", "field.id"))
-	assertError(t, err, "frontend_ir_invalid", "/api/types/0/fields/0/binding")
-	assertReason(t, err, "response_wire_binding_missing")
-
-	nestedArrays := loadAPI(t, `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type Child { ID int64 `+"`json:\"id\"`"+` }
-type GetRequest {}
-type GetResponse { Items [][]Child `+"`json:\"items\"`"+` }
-@server (nexaOperationId: "arrays.get" nexaAuthMode: "none")
-service api { @handler get get /arrays (GetRequest) returns (GetResponse) }
-`)
-	nestedArraysPage := mustSpec(t, []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"arrays","titleKey":"page.arrays","mode":"singleton","accessOperation":"get","route":{"path":"/arrays","name":"Arrays"},"operations":[{"id":"get","role":"get","operationId":"arrays.get","contextBindings":[]}],"fields":[{"id":"items","labelKey":"field.items","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["Items"]}]}],"actions":[],"extensionPoints":[]}`))
-	if _, err := frontend.Build(nestedArrays, []frontend.PageSpec{nestedArraysPage}, locale(t, "page.arrays", "field.items")); err != nil {
-		t.Fatalf("nested response arrays rejected: %v", err)
-	}
-
-	document, err := frontend.Build(loadAPI(t, fmt.Sprintf(apiTemplate, "`json:\"apiVersion\"`", "`json:\"id\"`")), []frontend.PageSpec{mustSpec(t, page)}, locale(t, "page.wire", "field.apiVersion", "field.id"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire struct {
-		API struct {
-			Types []struct {
-				Name   string
-				Fields []struct {
-					Path    []string
-					Binding struct {
-						Location string `json:"in"`
-						Name     string `json:"name"`
-					} `json:"binding"`
-				}
-			}
-		}
-		Pages []struct {
-			Fields []struct {
-				Bindings []struct{ Path []string }
-			}
-		}
-	}
-	if err := json.Unmarshal(canonical(t, document), &wire); err != nil {
-		t.Fatal(err)
-	}
-	bindings := map[string]string{}
-	for _, typeValue := range wire.API.Types {
-		if typeValue.Name != "GetResponse" {
-			continue
-		}
-		for _, field := range typeValue.Fields {
-			bindings[field.Path[0]] = field.Binding.Location + ":" + field.Binding.Name
-		}
-	}
-	if bindings["ID"] != "body:id" || bindings["APIVersion"] != "body:apiVersion" {
-		t.Fatalf("response wire bindings = %#v", bindings)
-	}
-	typedPaths := map[string]bool{}
 	for _, field := range wire.Pages[0].Fields {
-		typedPaths[strings.Join(field.Bindings[0].Path, ".")] = true
+		fields[field.Name] = struct {
+			control  string
+			surfaces []string
+		}{field.Control, field.Surfaces}
 	}
-	if !typedPaths["ID"] || !typedPaths["APIVersion"] {
-		t.Fatalf("page typed paths = %#v", typedPaths)
+	if got := strings.Join(fields["name"].surfaces, ","); got != "list,create,edit" || fields["name"].control != "text" {
+		t.Fatalf("name projection = %#v", fields["name"])
+	}
+	if got := strings.Join(fields["keyword"].surfaces, ","); got != "search" {
+		t.Fatalf("keyword projection = %#v", fields["keyword"])
+	}
+	if len(wire.Locales) != 2 || wire.Locales[0].Messages["account.label"] != "Account" || wire.Locales[1].Messages["account.name.label"] != "名称" {
+		t.Fatalf("derived locales = %#v", wire.Locales)
+	}
+	pages := document.Pages()
+	if len(pages) != 1 || pages[0].Route != (frontend.Route{Name: "AccountsRoute", Path: "/system/accounts"}) || pages[0].Menu == nil || pages[0].Menu.TitleKey != "account.label" || pages[0].Operations.List != "accounts.listAccounts" {
+		t.Fatalf("typed page readback = %#v", pages)
+	}
+	operations := document.Operations()
+	if len(operations) != 5 || operations[0].ClientName != "createAccount" || operations[0].ID != "accounts.createAccount" || operations[0].Permission != "accounts.write" {
+		t.Fatalf("typed operation readback = %#v", operations)
+	}
+	for _, removed := range []string{"listOperationId", "fields\":[]", "choices", "frontend-page-spec"} {
+		if strings.Contains(string(encoded), removed) {
+			t.Fatalf("removed authoring contract %q leaked into IR", removed)
+		}
 	}
 }
 
-func TestRowKeyUsesWholePathPresence(t *testing.T) {
-	apiTemplate := `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type ListRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` Limit int64 ` + "`form:\"limit\"`" + ` Offset int64 ` + "`form:\"offset\"`" + ` }
-type Row { ID int64 ` + "`json:\"id\"`" + ` }
-type Result { Items []Row ` + "`json:\"items\"`" + ` Total int64 ` + "`json:\"total\"`" + ` }
-type ListResponse { Result %sResult ` + "`json:\"result%s\"`" + ` }
-@server (nexaOperationId: "row.list" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "row.read")
-service api { @handler list get /rows (ListRequest) returns (ListResponse) }
-`
-	spec := []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"rows","titleKey":"page.rows","mode":"collection","accessOperation":"list","route":{"path":"/rows","name":"Rows"},"operations":[{"id":"list","role":"list","operationId":"row.list","contextBindings":[{"context":"tenant-id","path":["TenantID"]}],"result":{"itemsPath":["Result","Items"],"totalPath":["Result","Total"],"rowKeyPath":["ID"]},"pagination":{"mode":"offset","limitPath":["Limit"],"offsetPath":["Offset"],"totalPath":["Result","Total"],"pageSize":20}}],"fields":[{"id":"id","labelKey":"field.id","surfaces":["list"],"bindings":[{"operation":"list","direction":"response","path":["Result","Items","ID"]}]}],"actions":[],"extensionPoints":[]}`)
-	_, err := frontend.Build(loadAPI(t, fmt.Sprintf(apiTemplate, "*", ",optional")), []frontend.PageSpec{mustSpec(t, spec)}, locale(t, "page.rows", "field.id"))
-	assertReason(t, err, "row_key_type_invalid")
-	doc, err := frontend.Build(loadAPI(t, fmt.Sprintf(apiTemplate, "", "")), []frontend.PageSpec{mustSpec(t, spec)}, locale(t, "page.rows", "field.id"))
+func TestBuildPreservesTrustedExtensionFact(t *testing.T) {
+	document, err := frontend.Build(withFacts(t, loadAPI(t, canonicalAPISource()), upstreamFacts(t)), []frontend.PageSpec{mustSpec(t, pageSource("# @nexa ui.extensionComponent: \"frontend/src/extensions/accounts/accounts-page.vue\"\n"))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = canonical(t, doc)
-	request, err := frontend.CanonicalRenderRequest(frontend.RenderRequest{FrontendIR: doc, RepositoryRoot: "/workspace/example", GeneratedScope: "frontend/generated", ExtensionScopes: []string{"frontend/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("lock"))})
+	if encoded := string(canonical(t, document)); !strings.Contains(encoded, `"extensionComponent":"frontend/src/extensions/accounts/accounts-page.vue"`) {
+		t.Fatalf("extension component missing: %s", encoded)
+	}
+}
+
+func TestBuildRejectsAmbiguousEntityList(t *testing.T) {
+	source := canonicalAPISource() + `
+type ListAccountCopiesRequest { Limit *int64 Offset *int64 }
+type ListAccountCopiesResponse { Items []Account Total int32 }
+@server (group: accountCopies)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "accounts.read"
+  @handler ListAccountCopies
+  get /account-copies (ListAccountCopiesRequest) returns (ListAccountCopiesResponse)
+}
+`
+	closure, err := loadAPIResult(t, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = frontend.Build(withFacts(t, closure, upstreamFacts(t)), []frontend.PageSpec{mustSpec(t, pageSource(""))})
+	assertReason(t, err, "resource_operation_ambiguous")
+}
+
+func TestBuildNamesOperationsAndTypesBeforeSelectingFrontendClosure(t *testing.T) {
+	source := canonicalAPISource() + `
+type AssetListRequest { Limit *int64 Offset *int64 Keyword *string }
+type Asset_Item { ID string }
+type AssetListResponse { Items []Asset_Item Total int32 }
+type RoleListRequest { Limit *int64 Offset *int64 Keyword *string }
+type Role_Item { ID string }
+type RoleListResponse { Items []Role_Item Total int32 }
+@server (group: asset)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "assets.read"
+  @handler list
+  get /assets (AssetListRequest) returns (AssetListResponse)
+}
+@server (group: role)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "roles.read"
+  @handler list
+  get /roles (RoleListRequest) returns (RoleListResponse)
+}
+`
+	closure := withFacts(t, loadAPI(t, source), upstreamFacts(t))
+	document, err := frontend.BuildApplication(closure, nil, []string{"asset.list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := document.Operations()
+	if len(operations) != 1 || operations[0].ID != "asset.list" || operations[0].ClientName != "AssetList" {
+		t.Fatalf("selected operation client identity = %#v", operations)
+	}
+
+	collisionSource := strings.ReplaceAll(source, "Role_Item", "AssetItem")
+	collision := withFacts(t, loadAPI(t, collisionSource), upstreamFacts(t))
+	_, err = frontend.BuildApplication(collision, nil, []string{"asset.list"})
+	assertReason(t, err, "generated_type_name_collision")
+}
+
+func TestBuildAndRendererBoundaryHandleEmptyAndCanonicalInputs(t *testing.T) {
+	emptyFacts, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{})
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	empty, err := frontend.Build(api.Closure{ConventionValue: httpconvention.APIVersion, FactGraphValue: emptyFacts}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded := string(canonical(t, empty)); !strings.Contains(encoded, `"pages":[]`) || !strings.Contains(encoded, `"locales":[]`) {
+		t.Fatalf("empty IR = %s", encoded)
+	}
+	document, err := frontend.Build(withFacts(t, loadAPI(t, canonicalAPISource()), upstreamFacts(t)), []frontend.PageSpec{mustSpec(t, pageSource(""))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := frontend.CanonicalRenderRequest(frontend.RenderRequest{
+		FrontendIR: document, RepositoryRoot: filepath.Clean(t.TempDir()), GeneratedScope: "frontend/src/generated",
+		ExtensionScopes: []string{"frontend/src/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("frontend-source-lock")),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := frontend.ValidateRendererInput(request); err != nil {
-		t.Fatalf("required row key roundtrip rejected: %v", err)
+		t.Fatalf("canonical renderer request rejected: %v", err)
+	}
+	var decoded any
+	for _, schema := range [][]byte{frontend.IRSchema(), frontend.RenderRequestSchema()} {
+		if err := json.Unmarshal(schema, &decoded); err != nil {
+			t.Fatalf("invalid embedded schema: %v", err)
+		}
 	}
 }
 
-func TestInlineObjectArrayColumnsRoundTrip(t *testing.T) {
-	api := loadAPI(t, `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type ListRequest { TenantID string `+"`header:\"x-tenant\"`"+` Limit int64 `+"`form:\"limit\"`"+` Offset int64 `+"`form:\"offset\"`"+` }
-type Row {
-  ID int64 `+"`json:\"id\"`"+`
-  Entries []Entry `+"`json:\"entries\"`"+`
-}
-type Entry {
-  ID int64 `+"`json:\"id\"`"+`
-  Meta { Label string `+"`json:\"label\"`"+` } `+"`json:\"meta\"`"+`
-}
-type ListResponse {
-  Items []Row `+"`json:\"items\"`"+`
-  Total int64 `+"`json:\"total\"`"+`
-}
-@server (nexaOperationId: "inline.list" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "inline.read")
-service api { @handler list get /inline (ListRequest) returns (ListResponse) }
+func pageSource(extra string) []byte {
+	return []byte(`# @nexa $contract: "nexa.dev/source-comment/v1"
+apiVersion: nexa.dev/frontend-source/v1
+kind: Page
+# @nexa ui.entity: "Account"
+# @nexa ui.pageSize: 25
+# @nexa route.path: "/system/accounts"
+# @nexa route.name: "AccountsRoute"
+# @nexa route.icon: "lucide:users"
+# @nexa menu.order: 10
+` + extra + `id: accounts
 `)
-	spec := mustSpec(t, []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"inline","titleKey":"page.inline","mode":"collection","accessOperation":"list","route":{"path":"/inline","name":"Inline"},"operations":[{"id":"list","role":"list","operationId":"inline.list","contextBindings":[{"context":"tenant-id","path":["TenantID"]}],"result":{"itemsPath":["Items"],"totalPath":["Total"],"rowKeyPath":["ID"]},"pagination":{"mode":"offset","limitPath":["Limit"],"offsetPath":["Offset"],"totalPath":["Total"],"pageSize":20}}],"fields":[{"id":"items","labelKey":"field.items","surfaces":["list"],"bindings":[{"operation":"list","direction":"response","path":["Items","Entries"]}],"columns":[{"id":"id","labelKey":"column.id","path":["ID"]},{"id":"label","labelKey":"column.label","path":["Meta","Label"]}]}],"actions":[],"extensionPoints":[]}`))
-	doc, err := frontend.Build(api, []frontend.PageSpec{spec}, locale(t, "page.inline", "field.items", "column.id", "column.label"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded := canonical(t, doc)
-	if !strings.Contains(string(encoded), `"valueType":{"element":{"kind":"ref","name":"Entry"},"kind":"array"}`) {
-		t.Fatalf("inline object identity missing: %s", encoded)
-	}
-	request, err := frontend.CanonicalRenderRequest(frontend.RenderRequest{FrontendIR: doc, RepositoryRoot: "/workspace/example", GeneratedScope: "frontend/generated", ExtensionScopes: []string{"frontend/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("lock"))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := frontend.ValidateRendererInput(request); err != nil {
-		t.Fatalf("inline object columns roundtrip rejected: %v", err)
-	}
 }
 
-func TestSingletonAndLocalePrefixCollision(t *testing.T) {
-	doc, err := frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, singletonSpec())}, locale(t, "page.account", "field.name"))
-	if err != nil {
-		t.Fatal(err)
+func upstreamFacts(t *testing.T) sourcecomment.FactGraph {
+	t.Helper()
+	type definition struct {
+		id    string
+		kind  sourcecomment.NodeKind
+		stage sourcecomment.Stage
+		facts []string
 	}
-	if doc.PageCount() != 1 {
-		t.Fatal(doc.PageCount())
+	definitions := []definition{
+		{"Account", sourcecomment.NodeSchema, sourcecomment.StageEnt, []string{`label.zh-CN: "账号"`, `label.en-US: "Account"`, `description.zh-CN: "账号"`, `description.en-US: "Account"`, `scope: "tenant"`, `crud.operations: ["list","get","create","update","delete"]`}},
+		{"Account.id", sourcecomment.NodeField, sourcecomment.StageEnt, fieldDirectives("account.id", "readonly", "include", "none")},
+		{"Account.name", sourcecomment.NodeField, sourcecomment.StageEnt, fieldDirectives("account.name", "text", "include", "create-update")},
+		{"Account.status", sourcecomment.NodeField, sourcecomment.StageEnt, fieldDirectives("account.status", "select", "include", "create-update")},
+		{"Account.version", sourcecomment.NodeField, sourcecomment.StageEnt, fieldDirectives("account.version", "number", "include", "none")},
 	}
-	v := object(singletonSpec())
-	ops(v)[0]["contextBindings"] = []any{}
-	_, err = frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, marshal(v))}, locale(t, "page.account", "field.name"))
-	assertReason(t, err, "required_request_binding_missing")
-	v = object(singletonSpec())
-	v["titleKey"] = "field"
-	_, err = frontend.Build(loadAPI(t, apiSource()), []frontend.PageSpec{mustSpec(t, marshal(v))}, locale(t, "field", "field.name"))
-	assertReason(t, err, "locale_message_prefix_collision")
-}
-
-func TestSchemasAndRenderRequest(t *testing.T) {
-	doc, err := frontend.Build(loadAPI(t, apiSource()), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := frontend.RenderRequest{FrontendIR: doc, RepositoryRoot: filepath.Clean(t.TempDir()), GeneratedScope: "frontend/generated", ExtensionScopes: []string{"frontend/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("lock"))}
-	b, err := frontend.CanonicalRenderRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertJCS(t, b)
-	if err := frontend.ValidateRendererInput(b); err != nil {
-		t.Fatalf("canonical render request rejected: %v", err)
-	}
-	compileSchemas(t)
-	var v map[string]any
-	if err := json.Unmarshal(b, &v); err != nil {
-		t.Fatal(err)
-	}
-	v["unknown"] = true
-	if validateSchema(t, frontend.RenderRequestSchema(), "https://nexa.dev/schemas/generation/frontend/frontend-render-request-v1.schema.json", v) == nil {
-		t.Fatal("unknown render request field accepted")
-	}
-	for _, mutate := range []func(*frontend.RenderRequest){func(r *frontend.RenderRequest) { r.GeneratedScope = "../bad" }, func(r *frontend.RenderRequest) { r.ExtensionScopes = []string{"frontend/generated/nested"} }} {
-		copy := req
-		mutate(&copy)
-		if _, err := frontend.CanonicalRenderRequest(copy); err == nil {
-			t.Fatal("invalid scope accepted")
-		}
-	}
-}
-
-func TestRendererContractCorpus(t *testing.T) {
-	root := "testdata/renderer-contract/v1"
-	type entry struct {
-		File      string `json:"file"`
-		SHA256    string `json:"sha256"`
-		Outcome   string `json:"outcome"`
-		Code      string `json:"code,omitempty"`
-		ErrorCode string `json:"errorCode,omitempty"`
-		Pointer   string `json:"pointer,omitempty"`
-	}
-	var manifest struct {
-		APIVersion string  `json:"apiVersion"`
-		Entries    []entry `json:"entries"`
-	}
-	manifestBytes, err := os.ReadFile(filepath.Join(root, "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if manifest.APIVersion != "nexa.dev/frontend-renderer-corpus/v1" {
-		t.Fatal(manifest.APIVersion)
-	}
-	if got := provenance.SHA256(manifestBytes).String(); got != "sha256:8ef98c5204033cda97328a57952455756b22d86d326d2517116a3856b4efe6d9" {
-		t.Fatalf("manifest digest=%s", got)
-	}
-	for _, e := range manifest.Entries {
-		data, err := os.ReadFile(filepath.Join(root, e.File))
+	inputs := make([]sourcecomment.NodeInput, 0, len(definitions))
+	for index, definition := range definitions {
+		ref, err := sourcecomment.ParseSourceRef(string(definition.stage) + "://facts/source.go#" + strings.ReplaceAll(definition.id, ".", "_"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if provenance.SHA256(data).String() != e.SHA256 {
-			t.Fatalf("%s digest mismatch", e.File)
+		target := sourcecomment.Target{SemanticID: definition.id, Kind: definition.kind, Stage: definition.stage, Source: ref}
+		lines := []sourcecomment.Line{{Text: `// @nexa $contract: "nexa.dev/source-comment/v1"`, CommentPrefix: "//", Location: sourcecomment.Location{File: "facts/source.go", Line: 1}}}
+		for line, fact := range definition.facts {
+			lines = append(lines, sourcecomment.Line{Text: "// @nexa " + fact, CommentPrefix: "//", Location: sourcecomment.Location{File: "facts/source.go", Line: line + 2}, Target: &target})
 		}
-		if e.Outcome == "accept" || e.File != "noncanonical.json" {
-			if c, x := jcs.Transform(data); x != nil || string(c) != string(data) {
-				t.Fatalf("%s is not canonical", e.File)
-			}
+		parsed, diagnostics := sourcecomment.ParseFile(sourcecomment.StandardRegistry(), "facts/source.go", lines)
+		if len(diagnostics) != 0 {
+			t.Fatalf("parse facts %s: %#v", definition.id, diagnostics)
 		}
-		if strings.HasSuffix(e.File, "-ir.json") {
-			requestFile := strings.TrimSuffix(e.File, "-ir.json") + "-render-request.json"
-			requestBytes, readErr := os.ReadFile(filepath.Join(root, requestFile))
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			var request struct {
-				FrontendIR json.RawMessage `json:"frontendIR"`
-			}
-			if err := json.Unmarshal(requestBytes, &request); err != nil || string(request.FrontendIR) != string(data) {
-				t.Fatalf("%s does not equal %s frontendIR", e.File, requestFile)
-			}
-			if err := frontend.ValidateRendererInput(requestBytes); err != nil {
-				t.Fatalf("%s linked request rejected: %v", e.File, err)
-			}
-			continue
+		input := sourcecomment.NodeInput{SemanticID: definition.id, Kind: definition.kind, Stage: definition.stage, Source: ref, Location: sourcecomment.Location{File: "facts/source.go", Line: index + 1}, NativeCanonical: []byte(definition.id)}
+		for _, fact := range parsed.Facts() {
+			input.Facts = append(input.Facts, fact.Directive())
 		}
-		validationErr := frontend.ValidateRendererInput(data)
-		if e.Outcome == "accept" {
-			if validationErr != nil {
-				t.Fatalf("%s rejected: %v", e.File, validationErr)
-			}
-			continue
-		}
-		var contractErr *frontend.Error
-		if !errors.As(validationErr, &contractErr) || contractErr.Reason() != e.Code {
-			t.Fatalf("%s reason=%v want=%s", e.File, validationErr, e.Code)
-		}
-		if e.ErrorCode != "" && contractErr.Code() != e.ErrorCode {
-			t.Fatalf("%s code=%s want=%s", e.File, contractErr.Code(), e.ErrorCode)
-		}
-		if e.Pointer != "" && contractErr.Pointer() != e.Pointer {
-			t.Fatalf("%s pointer=%s want=%s", e.File, contractErr.Pointer(), e.Pointer)
-		}
+		inputs = append(inputs, input)
 	}
-	for _, tc := range []struct {
-		name  string
-		specs []frontend.PageSpec
-		keys  []string
-	}{
-		{"empty", nil, nil},
-		{"nonempty", []frontend.PageSpec{mustSpec(t, collectionSpec())}, collectionLocaleKeys()},
-	} {
-		locales := []frontend.Locale(nil)
-		if len(tc.keys) > 0 {
-			locales = []frontend.Locale{locale(t, tc.keys...)}
-		}
-		doc, err := frontend.Build(loadAPI(t, apiSource()), tc.specs, locales...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ir := canonical(t, doc)
-		req, err := frontend.CanonicalRenderRequest(frontend.RenderRequest{FrontendIR: doc, RepositoryRoot: "/workspace/example", GeneratedScope: "frontend/generated", ExtensionScopes: []string{"frontend/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("lock"))})
-		if err != nil {
-			t.Fatal(err)
-		}
-		wantIR, _ := os.ReadFile(filepath.Join(root, tc.name+"-ir.json"))
-		wantReq, _ := os.ReadFile(filepath.Join(root, tc.name+"-render-request.json"))
-		if string(ir) != string(wantIR) || string(req) != string(wantReq) {
-			t.Fatalf("%s canonical golden drift", tc.name)
-		}
+	graph, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{Nodes: inputs})
+	if len(diagnostics) != 0 {
+		t.Fatalf("build facts: %#v", diagnostics)
 	}
+	return graph
 }
 
-func TestRendererMissingMenuAncestorIsDeterministic(t *testing.T) {
-	data, err := os.ReadFile("testdata/renderer-contract/v1/menu-parent-missing.json")
-	if err != nil {
-		t.Fatal(err)
+func withFacts(t *testing.T, closure api.Closure, additional sourcecomment.FactGraph) api.Closure {
+	t.Helper()
+	merged, diagnostics := sourcecomment.MergeGraphs(sourcecomment.StandardRegistry(), closure.FactGraph(), additional)
+	if len(diagnostics) != 0 {
+		t.Fatalf("merge upstream facts: %#v", diagnostics)
 	}
-	for iteration := 0; iteration < 256; iteration++ {
-		validationErr := frontend.ValidateRendererInput(data)
-		var contractErr *frontend.Error
-		if !errors.As(validationErr, &contractErr) || contractErr.Code() != "frontend_render_request_invalid" || contractErr.Reason() != "menu_parent_invalid" || contractErr.Pointer() != "/frontendIR/pages" {
-			t.Fatalf("iteration %d: error=%v", iteration, validationErr)
-		}
-	}
+	closure.FactGraphValue = merged
+	return closure
 }
 
-func apiSource() string {
-	return `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type ListRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` Query *string ` + "`form:\"q,optional\"`" + ` Other *string ` + "`form:\"other,optional\"`" + ` Limit int64 ` + "`form:\"limit\"`" + ` Offset int64 ` + "`form:\"offset\"`" + ` }
-type Quality { Code string ` + "`json:\"code\"`" + ` Score *int32 ` + "`json:\"score,optional\"`" + ` Tags []string ` + "`json:\"tags\"`" + ` }
-type Profile { Label string ` + "`json:\"label\"`" + ` }
-type Account { ID int64 ` + "`json:\"id\"`" + ` OptionalID *int64 ` + "`json:\"optionalId,optional\"`" + ` Name string ` + "`json:\"name\"`" + ` Status string ` + "`json:\"status\"`" + ` Count int64 ` + "`json:\"count\"`" + ` Profile *Profile ` + "`json:\"profile,optional\"`" + ` Qualities []Quality ` + "`json:\"qualities\"`" + ` }
-type ListResponse { Items []Account ` + "`json:\"items\"`" + ` Total int64 ` + "`json:\"total\"`" + ` }
-type CreateRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` Name string ` + "`json:\"name\"`" + ` }
-type UpdateStatusRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` ID int64 ` + "`path:\"id\"`" + ` Status string ` + "`json:\"status\"`" + ` Choices []string ` + "`json:\"choices\"`" + ` Count *int32 ` + "`json:\"count,optional\"`" + ` }
-type DeleteRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` ID int64 ` + "`path:\"id\"`" + ` }
-type OptionsRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` Limit int64 ` + "`form:\"limit\"`" + ` Offset int64 ` + "`form:\"offset\"`" + ` }
-type OptionsExtraRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` Limit int64 ` + "`form:\"limit\"`" + ` Offset int64 ` + "`form:\"offset\"`" + ` Filter string ` + "`form:\"filter\"`" + ` }
-type Option { Code string ` + "`json:\"code\"`" + ` Label string ` + "`json:\"label\"`" + ` }
-type OptionsResponse { Items []Option ` + "`json:\"items\"`" + ` Total int64 ` + "`json:\"total\"`" + ` }
-type GetRequest { TenantID string ` + "`header:\"x-tenant\"`" + ` }
-type GetIntRequest { TenantID int64 ` + "`header:\"x-tenant\"`" + ` }
-@server (nexaOperationId: "account.list" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "account.read")
-service api { @handler list get /accounts (ListRequest) returns (ListResponse) }
-@server (nexaOperationId: "account.create" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "account.write")
-service api { @handler create post /accounts (CreateRequest) }
-@server (nexaOperationId: "account.status" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "account.write")
-service api { @handler status put /accounts/:id/status (UpdateStatusRequest) }
-@server (nexaOperationId: "account.delete" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "account.write")
-service api { @handler delete delete /accounts/:id (DeleteRequest) }
-@server (nexaOperationId: "account.options" nexaAuthMode: "none" nexaPermission: "")
-service api { @handler options get /account-options (OptionsRequest) returns (OptionsResponse) }
-@server (nexaOperationId: "account.options.extra" nexaAuthMode: "none" nexaPermission: "")
-service api { @handler optionsextra get /account-options-extra (OptionsExtraRequest) returns (OptionsResponse) }
-@server (nexaOperationId: "account.get" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "account.read")
-service api { @handler get get /account (GetRequest) returns (Account) }
-@server (nexaOperationId: "account.get.int-context" nexaAuthMode: "required" nexaCredentialId: "primary" nexaCredentialType: "bearer" nexaCredentialLocation: "header" nexaCredentialName: "Authorization" nexaPermission: "account.read")
-service api { @handler getint get /account-int (GetIntRequest) returns (Account) }
+func fieldDirectives(prefix, control, read, mutation string) []string {
+	return []string{`label.zh-CN: "` + map[string]string{"account.id": "编号", "account.name": "名称", "account.status": "状态", "account.version": "版本"}[prefix] + `"`, `label.en-US: "` + strings.Title(strings.TrimPrefix(prefix, "account.")) + `"`, `description.zh-CN: "字段"`, `description.en-US: "Field"`, `ui.control: "` + control + `"`, `visibility: "public"`, `crud.read: "` + read + `"`, `crud.mutation: "` + mutation + `"`}
+}
+
+func canonicalAPISource() string {
+	return `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type ListAccountsRequest {
+  Limit *int64
+  Offset *int64
+  // @nexa label.zh-CN: "关键词"
+  // @nexa label.en-US: "Keyword"
+  // @nexa description.zh-CN: "关键词"
+  // @nexa description.en-US: "Keyword"
+  // @nexa ui.control: "text"
+  // @nexa visibility: "public"
+  Keyword *string
+}
+type Account { ID string Name string Status string Version int64 }
+type ListAccountsResponse { Items []Account Total int32 }
+type CreateAccountRequest { Name string Status string }
+type GetAccountRequest { ID string }
+type UpdateAccountRequest { ID string Name string Status string }
+type DeleteAccountRequest { ID string }
+@server (group: accounts)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "accounts.read"
+  @handler ListAccounts
+  get /accounts (ListAccountsRequest) returns (ListAccountsResponse)
+}
+@server (group: accounts)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "accounts.write"
+  @handler CreateAccount
+  post /accounts (CreateAccountRequest) returns (Account)
+}
+@server (group: accounts)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "accounts.read"
+  @handler GetAccount
+  get /accounts/:id (GetAccountRequest) returns (Account)
+}
+@server (group: accounts)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "accounts.write"
+  @handler UpdateAccount
+  put /accounts/:id (UpdateAccountRequest) returns (Account)
+}
+@server (group: accounts)
+service api {
+  // @nexa auth: "required"
+  // @nexa permission: "accounts.write"
+  @handler DeleteAccount
+  delete /accounts/:id (DeleteAccountRequest)
+}
 `
 }
 
-func collectionSpec() []byte {
-	return []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"accounts","titleKey":"page.accounts","mode":"collection","accessOperation":"list","route":{"path":"/accounts","name":"Accounts"},"operations":[{"id":"list","role":"list","operationId":"account.list","contextBindings":[{"context":"tenant-id","path":["TenantID"]}],"result":{"itemsPath":["Items"],"totalPath":["Total"],"rowKeyPath":["ID"]},"pagination":{"mode":"offset","limitPath":["Limit"],"offsetPath":["Offset"],"totalPath":["Total"],"pageSize":20}},{"id":"create","role":"action","operationId":"account.create","contextBindings":[{"context":"tenant-id","path":["TenantID"]}]},{"id":"status","role":"action","operationId":"account.status","contextBindings":[{"context":"tenant-id","path":["TenantID"]}]},{"id":"choices","role":"options","operationId":"account.options","contextBindings":[{"context":"tenant-id","path":["TenantID"]}],"result":{"itemsPath":["Items"],"totalPath":["Total"]},"pagination":{"mode":"offset","limitPath":["Limit"],"offsetPath":["Offset"],"totalPath":["Total"],"pageSize":100}},{"id":"delete","role":"action","operationId":"account.delete","contextBindings":[{"context":"tenant-id","path":["TenantID"]}]}],"fields":[{"id":"query","labelKey":"field.query","surfaces":["search"],"control":"text","bindings":[{"operation":"list","direction":"request","path":["Query"]}]},{"id":"id","labelKey":"field.id","surfaces":[],"bindings":[{"operation":"list","direction":"response","path":["Items","ID"]},{"operation":"status","direction":"request","path":["ID"]},{"operation":"delete","direction":"request","path":["ID"]}]},{"id":"name","labelKey":"field.name","surfaces":["list"],"control":"text","bindings":[{"operation":"list","direction":"response","path":["Items","Name"]},{"operation":"create","direction":"request","path":["Name"]}]},{"id":"status","labelKey":"field.status","surfaces":["list"],"control":"select","choices":[{"value":"active","labelKey":"field.status"}],"bindings":[{"operation":"list","direction":"response","path":["Items","Status"]},{"operation":"status","direction":"request","path":["Status"]}]},{"id":"choice","labelKey":"field.choice","surfaces":[],"control":"multi-select","options":{"operation":"choices","valuePath":["Code"],"labelPath":["Label"]},"bindings":[{"operation":"status","direction":"request","path":["Choices"]}]},{"id":"qualities","labelKey":"field.qualities","surfaces":["list"],"bindings":[{"operation":"list","direction":"response","path":["Items","Qualities"]}],"columns":[{"id":"code","labelKey":"column.code","path":["Code"]},{"id":"score","labelKey":"column.score","path":["Score"]},{"id":"tags","labelKey":"column.tags","path":["Tags"]}]}],"actions":[{"id":"create","labelKey":"action.create","operation":"create","effect":"create","fields":["name"],"placement":"toolbar"},{"id":"status","labelKey":"action.status","operation":"status","effect":"update","fields":["status","choice"],"placement":"row"},{"id":"delete","labelKey":"action.delete","operation":"delete","effect":"delete","fields":[],"placement":"row","confirmKey":"action.deleteConfirm"}],"extensionPoints":[]}`)
-}
-func singletonSpec() []byte {
-	return []byte(`{"apiVersion":"nexa.dev/frontend-page-spec/v1","kind":"FrontendPageSpec","id":"account","titleKey":"page.account","mode":"singleton","accessOperation":"get","route":{"path":"/account","name":"Account"},"operations":[{"id":"get","role":"get","operationId":"account.get","contextBindings":[{"context":"tenant-id","path":["TenantID"]}]}],"fields":[{"id":"name","labelKey":"field.name","surfaces":["detail"],"bindings":[{"operation":"get","direction":"response","path":["Name"]}]}],"actions":[],"extensionPoints":[]}`)
-}
-
-func loadAPI(t *testing.T, source string) httpapi.Document {
+func loadAPI(t *testing.T, source string) api.Closure {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "api.api"), []byte(source), 0600); err != nil {
-		t.Fatal(err)
-	}
-	d, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: dir, EntryFile: "api.api"})
+	value, err := loadAPIResult(t, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return d
+	return value
 }
-func mustSpec(t *testing.T, b []byte) frontend.PageSpec {
+func loadAPIResult(t *testing.T, source string) (api.Closure, error) {
 	t.Helper()
-	s, err := frontend.ParsePageSpec("frontend/page.json", b)
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "api.api"), []byte(source), 0o600); err != nil {
+		return api.Closure{}, err
+	}
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: directory, EntryFile: "api.api"})
+	if err != nil {
+		return api.Closure{}, err
+	}
+	return composition.FrontendClosure(document)
+}
+func mustSpec(t *testing.T, data []byte) frontend.PageSpec {
+	t.Helper()
+	value, err := frontend.ParsePageSpec("frontend/accounts.page.yaml", data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	return value
 }
-func locale(t *testing.T, keys ...string) frontend.Locale {
+func canonical(t *testing.T, document frontend.Document) []byte {
 	t.Helper()
-	m := map[string]string{}
-	for _, k := range keys {
-		m[k] = k
-	}
-	b, _ := json.Marshal(map[string]any{"apiVersion": frontend.LocaleAPIVersion, "kind": "FrontendLocale", "locale": "en-US", "messages": m})
-	l, err := frontend.ParseLocale("frontend/en-US.json", b)
+	value, err := frontend.CanonicalJSON(document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return l
+	return value
 }
-
-func collectionLocale(t *testing.T) frontend.Locale { return locale(t, collectionLocaleKeys()...) }
-
-func collectionLocaleKeys() []string {
-	return []string{"page.accounts", "field.query", "field.id", "field.name", "field.status", "field.choice", "field.qualities", "column.code", "column.score", "column.tags", "action.create", "action.status", "action.delete", "action.deleteConfirm"}
-}
-func object(b []byte) map[string]any {
-	var v map[string]any
-	if err := json.Unmarshal(b, &v); err != nil {
-		panic(err)
-	}
-	return v
-}
-func marshal(v any) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
-func ops(v map[string]any) []map[string]any     { return maps(v["operations"].([]any)) }
-func fields(v map[string]any) []map[string]any  { return maps(v["fields"].([]any)) }
-func actions(v map[string]any) []map[string]any { return maps(v["actions"].([]any)) }
-func maps(v []any) []map[string]any {
-	r := make([]map[string]any, len(v))
-	for i := range v {
-		r[i] = v[i].(map[string]any)
-	}
-	return r
-}
-func canonical(t *testing.T, d frontend.Document) []byte {
+func assertJCS(t *testing.T, data []byte) {
 	t.Helper()
-	b, err := frontend.CanonicalJSON(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-func assertJCS(t *testing.T, b []byte) {
-	t.Helper()
-	c, err := jcs.Transform(b)
-	if err != nil || string(c) != string(b) {
-		t.Fatalf("not JCS: %v", err)
-	}
-}
-func assertError(t *testing.T, err error, code, pointer string) {
-	t.Helper()
-	var e *frontend.Error
-	if !errors.As(err, &e) || e.Code() != code || e.Pointer() != pointer {
-		t.Fatalf("error=%v code/pointer want %s %s", err, code, pointer)
+	value, err := jcs.Transform(data)
+	if err != nil || string(value) != string(data) {
+		t.Fatalf("not canonical JSON: %v", err)
 	}
 }
 func assertReason(t *testing.T, err error, reason string) {
 	t.Helper()
-	var e *frontend.Error
-	if !errors.As(err, &e) || e.Reason() != reason {
-		t.Fatalf("error=%v reason want %s", err, reason)
+	var typed *frontend.Error
+	if !errors.As(err, &typed) || typed.Reason() != reason {
+		t.Fatalf("error=%v; want reason=%s", err, reason)
 	}
-}
-func compileSchemas(t *testing.T) {
-	t.Helper()
-	for _, v := range [][]byte{frontend.IRSchema(), frontend.RenderRequestSchema()} {
-		var x any
-		if err := json.Unmarshal(v, &x); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-func validateSchema(t *testing.T, schema []byte, url string, v any) error {
-	t.Helper()
-	c := jsonschema.NewCompiler()
-	resources := map[string][]byte{url: schema, "https://nexa.dev/schemas/generation/frontend/frontend-ir-v1.schema.json": frontend.IRSchema(), "https://nexa.dev/schemas/generation/httpapi/api-ir-v1.schema.json": httpapi.Schema()}
-	for u, b := range resources {
-		var x any
-		if err := json.Unmarshal(b, &x); err != nil {
-			t.Fatal(err)
-		}
-		if err := c.AddResource(u, x); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s, err := c.Compile(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s.Validate(v)
 }

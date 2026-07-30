@@ -1,98 +1,78 @@
 # HTTP Convention v1
 
-`nexa.dev/http-convention/v1` 是 Nexa 拥有的 JSON HTTP API 唯一约定。HTTP authoring 和业务事实只来自
-consumer 的 `.api`；Proto 只拥有 RPC 事实，并可经 composition 生成 `.api`。本契约不定义 HTTPAPIIR，也不允许
-把编译器中间状态序列化、跨进程传递或嵌入 FrontendIR。
+`nexa.dev/http-convention/v1` 是 Nexa JSON HTTP API 的公共契约。它以 PDCL 已运行的 Go-zero/Vben 调用链为基线：原生 HTTP
+只由 `.api` 原生结构拥有 route、DTO 与字段位置；需要代理为 HTTP 的 RPC 只在 Proto method 上用
+`source-comment/v1` 声明 method、path、auth 和 permission，operation id 由 RPC identity 推导，composition 按固定规则生成 canonical `.api`。HTTPAPIIR 不是公共 contract，不能序列化、跨进程传递或
+嵌入 FrontendIR。
 
-V1 是一次性治理边界，不提供 legacy reader、大小写 alias、fallback、response decoder 或逐字段兼容 map。不符合
-本契约的现有 API 必须在 consumer 中一次性修改并重新生成。
+V1 不提供 legacy reader、alias、fallback、normalizer、per-operation response decoder 或逐字段运行时映射。后端 domain/read-model
+到公开 DTO 的显式投影仍是正常的业务边界。
 
-## 命名与路由
+## 路径和字段
 
-- JSON object、query、path、`.api` member、PageSpec、FrontendIR 和 TypeScript 字段全部使用 exact lowerCamelCase。
-- Go/Proto 标识只经 `httpconvention.CanonicalName` 做一次确定性转换；Pascal、initialism 和 snake_case 不能形成第二个 wire 名。
-- 外部 API 基路径固定为 `/api`，开发 proxy 必须原样保留此前缀。
-- literal path segment 使用 lower-kebab-case；资源命名约定使用复数，但 validator 不通过简单的 `s` 后缀猜测资源语义；模板变量与 request field 同名且为 lowerCamelCase。
-- 禁止显式 wire rename 或 alias。
+- `.api` 的 operation path 是相对于 consumer 配置的 API base URL 的绝对相对路径，例如 `/auth/login`、`/tenants`。
+  部署或开发 proxy 通过唯一 `apiURL` 配置提供 `/api` 前缀；该前缀不重复写进每个 `.api` route。
+- literal route segment 使用 lower-kebab-case；path placeholder 与 request 字段的外部名称完全相同。
+- `.api` field 使用 PDCL 已有的 lowerCamelCase 或 lower_snake_case 外部名称。`json`、`form`、`path` tag 可以声明该唯一外部
+  名称和位置；tag 值只能重复 source 字段名，或使用由同一 source identifier 词法唯一推导的 lowerCamelCase/lower_snake_case
+  形式，不能改名、创建 alias 或额外 logical name。
+- 未写 transport tag 的字段按 source identifier 的确定性 lowerCamelCase 形式暴露。生成器、FrontendIR 与 TypeScript 只携带这个
+  已确定的外部名称，不再携带 source/wire 双字段。
+- `Authorization`、tenant、request ID 和 trace context 属全局 middleware/interceptor；它们不进入业务 DTO。跨租户选择是明确的
+  业务字段，不是 context binding。
 
-## 请求
+## 请求位置
 
-字段位置只由 method 与 route 推导：
+字段位置由 method、route 和与之相符的 `.api` tag 固定：
 
 | 条件 | 位置 |
 | --- | --- |
-| route template 中的同名字段 | path |
-| `GET`、`DELETE` 的其它字段 | query；禁止 body |
-| `POST`、`PUT`、`PATCH` 的其它字段 | 单一 JSON object body；禁止业务 query/header 例外 |
+| route template 同名字段 | `path` |
+| `GET`、`DELETE` 的其余字段 | query，使用 `form` |
+| `POST`、`PUT`、`PATCH` 的其余字段 | JSON body，使用 `json` |
 
-operation metadata 只保留 method、path、`auth required|none`、permission、request type 和 response type。
-`Authorization: Bearer`、tenant、`X-Request-ID` 与 `traceparent` 由全局 middleware/interceptor 注入和提取，不进入
-业务 DTO。tenant 默认来自认证主体；跨租户选择必须是显式业务输入。
+`header` 业务字段不属于 v1。显式 tag 与上述固定位置冲突时，Nexa 编译失败。`PATCH` 按 PDCL 既有实践被允许；其字段语义由具体
+request DTO 和后端业务实现决定，Nexa 不另建 patch/mapping DSL。
 
-## 成功响应与分页
+## 响应和错误
 
-有 JSON body 的请求和成功响应使用 `application/json`，成功直接返回业务 DTO，不使用 `{code,data}` envelope。
+所有成功操作使用 HTTP 200、`application/json` 和统一 envelope：
 
-- 查询：`200` 与结果；
-- 创建：collection route 使用 `201`、创建后的资源与该资源的 `Location`；
-- 更新和 action：`200` 与结果；`POST` action 必须使用 `/actions/<name>` route；
-- 删除：`204`，不返回 body 或 `Content-Type`。
+```json
+{"code": 0, "msg": "ok", "data": {}}
+```
 
-分页 query 固定为 `page`（从 1 开始，默认 1）和 `pageSize`（默认 20，范围 1..100）。分页响应精确为
-`{items,total}`；`items` 必填且始终为 array，空集合使用 `[]`；`total` 必填、非负并位于 JavaScript safe integer
-范围。PageSpec 只允许覆盖页面大小和声明真实业务语义绑定，不再声明 `itemsPath`、`totalPath`、`pagePath` 或
-`pageSizePath`。标准资源主键为 `id`，关联 ID 保留 `tenantId`、`accountId` 等业务语义。
+`data` 是 operation response DTO；无结果操作可以省略 `data`。客户端在唯一的 shared transport 上固定使用
+`responseReturn: 'data'` 并由统一 response interceptor 校验 envelope；不允许按 operation 配置 projection，或由调用方自选
+`body/data` 模式。
 
-## 错误
+所有错误也使用 `application/json`，HTTP status 仍表达 HTTP 失败类别，body 固定为：
 
-所有错误使用 RFC 9457 `application/problem+json`。固定成员为 `type`、`title`、`status`、`code`；其中 `type` 表示全局
-错误 category，`code` 保留 consumer 的稳定业务码；可选成员仅为
-`detail`、`instance`、`requestId`、`traceId`、`fieldErrors`。禁止 `error`、`message` 等兼容别名。
-`type` 为 `https://nexa.dev/problems/v1/<category 的 kebab-case>`，`status` 必须与 HTTP status 相同。业务 `code` 只需
-满足 lower_snake_case，不需要注册到全局表。
+```json
+{"code": 409, "msg": "conflict", "message": "conflict"}
+```
 
-| code | status |
-| --- | --- |
-| `invalid_input` | 400 |
-| `unauthenticated`、`invalid_credentials`、`session_expired`、`session_replayed` | 401 |
-| `permission_denied` | 403 |
-| `not_found` | 404 |
-| `conflict`、`concurrent_write` | 409 |
-| `failed_precondition` | 422 |
-| `rate_limited` | 429 |
-| `internal_error` | 500 |
-| `unavailable`、`not_ready` | 503 |
+`code` 必须等于 HTTP status，`msg` 和 `message` 都是必填且相等的消息字段；它们是 PDCL 的正式 response shape，不是兼容
+fallback。Go RPC status 映射沿用 PDCL：`InvalidArgument`、`FailedPrecondition`、`OutOfRange` 为 400，`Unauthenticated` 为
+401，`PermissionDenied` 为 403，`NotFound` 为 404，`AlreadyExists`、`Aborted` 为 409，`ResourceExhausted` 为 429，
+`Canceled` 为 408，`Unimplemented` 为 501，`Unavailable` 为 503，其余内部失败为 500。operation 不声明 error projection。
 
-业务 `code` 保留在 problem document 中；operation 不再声明 error projection。5xx `detail` 只能使用安全通用文案，
-不得泄露内部错误、SQL、路径、credential 或 stack。
+## 分页和标量
 
-`fieldErrors` 固定为 `[{pointer,code,detail?}]` 数组：`pointer` 是 RFC 6901 指向 canonical request DTO 的非空 JSON
-Pointer，`code` 是 lower_snake_case，`detail` 非空时为面向用户的安全文本。
+标准分页 request 使用 `limit` 和零基 `offset`；默认页面大小为 20。标准管理列表的 `data` 为 `{items,total}`，其中 `total`
+是非负整数。frontend source 只可声明 UI 页面大小，不保存 `itemsPath`、`totalPath`、分页 path 或 transport binding；renderer 直接把
+VXE 的 page/pageSize 换算为 `offset=(page-1)*pageSize` 和 `limit=pageSize`。
 
-## 标量与空值
+PDCL 已有 DTO 的 `int64`、`uint64`、资源 ID 和时间字段按其 `.api` 声明以 JSON number 或 string 传输；v1 不擅自重写成
+decimal string、branded TypeScript number 或另一套 timestamp format。JavaScript 精度风险属于引入超过安全整数的新业务字段时的
+显式评审事项，不能通过单方面改 wire contract 解决。optional、`null`、严格 JSON decoder、数组 query、map/dynamic JSON 的
+细节继续由 `.api` 类型和 consumer 的 Go-zero parser 事实约束，Nexa 不在 v1 另造不兼容的全局语义。
 
-- 资源 ID 使用非空 opaque string；`int64` 使用可选负号的规范十进制 string，`uint64` 使用无符号规范十进制 string；
-  可能超过 JavaScript safe integer 的计数和金额使用不带指数、无前导零、无尾随零的十进制 string。
-- 普通 `int32`、`uint32`、`page` 和 `total` 在 JavaScript safe integer 范围内使用 JSON number。
-- timestamp 使用 RFC3339 UTC 且以 `Z` 结尾；date 使用 `YYYY-MM-DD`。
-- optional 只表示 key 缺省；V1 禁止 `null`。集合存在时必须是 array，空集合使用 `[]`。
-- generated frontend v1 拒绝 `bytes`、dynamic JSON 及其它未定义 wire 类型。
+## 生成边界
 
-Path/query 只接受 scalar。数组、对象、过滤表达式和排序在 v1 不定义编码；重复 key、未知参数、空值、非法 lexical value
-和非 RFC 3986 percent-encoding 直接返回 `invalid_input` 400。query bool 只接受 `true|false`，数字使用 canonical
-decimal，timestamp/date 使用本 Convention 的字符串形式。
+Nexa 的 validator、`.api` loader、composition、FrontendIR builder 和 conformance fixture 必须使用本包的同一规则。FrontendIR
+只包含页面引用的 operation/type closure、resolved typed UI projection 和 locale；不包含完整 HTTP snapshot、HTTP digest、wire mapping 或
+response decoder 规则。Vben renderer 直接消费该 closure，生成单一 typed transport 调用，不重实现 Go/Node 两套 HTTP 协议。
 
-body 必须是单一 JSON object。框架 strict decoder 对错误 Content-Type、未知字段、重复 key、类型错误、trailing token、
-非空 body 缺失和 `null` 统一返回 `invalid_input` 400；`204` 响应不解码。`PUT` 是 full replacement，`PATCH` 是 omitted
-fields unchanged 的 partial update；因 v1 禁止 `null`，清空可选值使用显式 action，不使用 merge-patch。
-
-401 必须返回 `WWW-Authenticate: Bearer`；429 必须返回 `Retry-After` 秒数。v1 不使用 ETag/If-Match，条件更新使用业务
-`expectedVersion` 等 canonical DTO 字段并以 `concurrent_write` 409 表达冲突。
-
-## 生成与验证边界
-
-Nexa 的 validator、canonical naming、generator 和 conformance fixture 必须共同消费 `generation/httpconvention`。
-CI 对非 canonical authoring 直接失败。FrontendIR 只携 `httpConvention`、页面引用的 canonical operation/type closure、
-页面、permission 与 locale；不携完整 HTTP snapshot、HTTP digest 或 wire mapping。Vben renderer 直用该 closure，不推断或
-转换字段。后端 domain/read-model 到 canonical API DTO 的显式投影仍是合法边界，真实业务语义绑定（例如
-`version -> expectedVersion`）也继续由 consumer PageSpec 持有。
+`nexa.dev/api-manifest/v1`、序列化 HTTPAPIIR、public `BindingSpec`、Proto 的 request/response/context/error projection
+均不属于 v1。source lock、schema version 和 Git diff 升级仍是身份和审阅契约，不是 transport compatibility layer。

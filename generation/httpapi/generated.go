@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nxnminieye/nexa/generation/api"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -16,58 +17,43 @@ type ValueTypeSpec struct {
 	Value   *ValueTypeSpec
 }
 
-type BindingSpec struct {
-	Location api.RequestBindingLocation
-	Name     string
-}
-
 type GeneratedFieldSpec struct {
-	Path       []string
-	Required   bool
-	ValueType  ValueTypeSpec
-	Binding    *BindingSpec
-	Origin     *provenance.Source
-	Provenance NodeProvenance
+	SemanticID  string
+	Path        []string
+	Required    bool
+	ValueType   ValueTypeSpec
+	Origin      *provenance.Source
+	Provenance  NodeProvenance
+	FirstSource sourcecomment.SourceRef
 }
 
 type GeneratedTypeSpec struct {
-	Name       string
-	Shape      ValueTypeSpec
-	Fields     []GeneratedFieldSpec
-	Provenance NodeProvenance
+	SemanticID  string
+	Name        string
+	Shape       ValueTypeSpec
+	Fields      []GeneratedFieldSpec
+	Provenance  NodeProvenance
+	FirstSource sourcecomment.SourceRef
 }
 
-type CredentialSpec struct {
-	ID       string
-	Type     api.CredentialType
-	Location api.CredentialLocation
-	Name     string
-}
-
-type AuthSpec struct {
-	Mode        api.AuthMode
-	Credentials []CredentialSpec
-}
-
-type CapabilitySpec struct{ ID, APIVersion string }
+type AuthSpec struct{ Mode api.AuthMode }
 
 type GeneratedOperationSpec struct {
-	ID               string
-	Method           api.HTTPMethod
-	Path             string
-	RequestType      string
-	ResponseBody     api.ResponseBodyMode
-	ResponseType     string
-	Auth             AuthSpec
-	Permission       string
-	Capability       *CapabilitySpec
-	ErrorProjections []api.ErrorProjectionSpec
-	Provenance       NodeProvenance
+	ID           string
+	Method       api.HTTPMethod
+	Path         string
+	RequestType  string
+	ResponseType string
+	Auth         AuthSpec
+	Permission   string
+	Provenance   NodeProvenance
+	FirstSource  sourcecomment.SourceRef
 }
 
 type GeneratedDocumentSpec struct {
 	Types      []GeneratedTypeSpec
 	Operations []GeneratedOperationSpec
+	Facts      sourcecomment.FactGraph
 }
 
 func NewGeneratedProvenance(input []provenance.Source) (NodeProvenance, error) {
@@ -95,7 +81,7 @@ func NewGeneratedDocument(spec GeneratedDocumentSpec) (Document, error) {
 	types := make([]*typeState, 0, len(spec.Types))
 	typeNames := map[string]bool{}
 	for _, input := range spec.Types {
-		if input.Name == "" || typeNames[input.Name] {
+		if input.Name == "" || input.SemanticID == "" || !input.FirstSource.Valid() || typeNames[input.Name] {
 			return Document{}, invalid("generated_type_invalid", "", "", "generated type name is empty or duplicated")
 		}
 		if input.Provenance.kind != NodeFactGenerated {
@@ -108,9 +94,9 @@ func NewGeneratedDocument(spec GeneratedDocumentSpec) (Document, error) {
 		if shape.kind != ValueObject {
 			return Document{}, invalid("generated_type_shape_invalid", "", "", "generated top-level type must be an object")
 		}
-		state := &typeState{name: input.Name, shape: shape, provenance: cloneProvenance(input.Provenance), fieldIndex: map[string]int{}}
+		state := &typeState{name: input.Name, semanticID: input.SemanticID, firstSource: input.FirstSource, shape: shape, provenance: cloneProvenance(input.Provenance), fieldIndex: map[string]int{}}
 		for _, fieldInput := range input.Fields {
-			if fieldInput.Provenance.kind != NodeFactGenerated || len(fieldInput.Path) == 0 {
+			if fieldInput.Provenance.kind != NodeFactGenerated || fieldInput.SemanticID == "" || !fieldInput.FirstSource.Valid() || len(fieldInput.Path) == 0 {
 				return Document{}, invalid("generated_field_invalid", "", "", "generated field path and provenance are required")
 			}
 			pathValue := append([]string(nil), fieldInput.Path...)
@@ -127,13 +113,7 @@ func NewGeneratedDocument(spec GeneratedDocumentSpec) (Document, error) {
 			if err != nil {
 				return Document{}, err
 			}
-			field := &fieldState{ownerType: input.Name, path: pathValue, required: fieldInput.Required, valueType: value, provenance: cloneProvenance(fieldInput.Provenance)}
-			if fieldInput.Binding != nil {
-				field.binding, field.hasBinding = Binding{location: fieldInput.Binding.Location, name: fieldInput.Binding.Name}, true
-				if field.binding.location == api.RequestBindingHeader {
-					field.binding.name = strings.ToLower(field.binding.name)
-				}
-			}
+			field := &fieldState{ownerType: input.Name, semanticID: fieldInput.SemanticID, firstSource: fieldInput.FirstSource, path: pathValue, required: fieldInput.Required, valueType: value, provenance: cloneProvenance(fieldInput.Provenance)}
 			if fieldInput.Origin != nil {
 				field.origin, field.hasOrigin = *fieldInput.Origin, true
 			}
@@ -151,35 +131,20 @@ func NewGeneratedDocument(spec GeneratedDocumentSpec) (Document, error) {
 	operations := make([]*operationState, 0, len(spec.Operations))
 	operationIDs, routes := map[string]bool{}, map[string]bool{}
 	for _, input := range spec.Operations {
-		if input.Provenance.kind != NodeFactGenerated || input.ID == "" || operationIDs[input.ID] {
+		if input.Provenance.kind != NodeFactGenerated || input.ID == "" || operationIDs[input.ID] || !input.FirstSource.Valid() {
 			return Document{}, invalid("generated_operation_invalid", "", "", "generated operation identity and provenance are invalid")
 		}
-		if !typeNames[input.RequestType] || input.ResponseBody == api.ResponseBodyJSON && !typeNames[input.ResponseType] || input.ResponseBody == api.ResponseBodyNone && input.ResponseType != "" {
+		if input.RequestType != "" && !typeNames[input.RequestType] || input.ResponseType != "" && !typeNames[input.ResponseType] {
 			return Document{}, invalid("generated_operation_type_invalid", "", "", "generated operation type relation is invalid")
 		}
 		key := string(input.Method) + "\x00" + input.Path
 		if routes[key] {
 			return Document{}, invalid("route_collision", "", "", "generated route is duplicated")
 		}
-		state := &operationState{id: input.ID, method: input.Method, path: input.Path, requestType: input.RequestType, responseBody: input.ResponseBody, responseType: input.ResponseType, permission: input.Permission, provenance: cloneProvenance(input.Provenance), auth: Auth{mode: input.Auth.Mode, credentials: make([]Credential, len(input.Auth.Credentials))}, errorProjections: append([]api.ErrorProjectionSpec(nil), input.ErrorProjections...)}
-		for index, credential := range input.Auth.Credentials {
-			state.auth.credentials[index] = Credential{id: credential.ID, typeID: credential.Type, location: credential.Location, name: credential.Name}
-			if credential.Location == api.CredentialLocationHeader {
-				state.auth.credentials[index].name = strings.ToLower(credential.Name)
-			}
-		}
-		sort.Slice(state.auth.credentials, func(i, j int) bool { return state.auth.credentials[i].id < state.auth.credentials[j].id })
-		sort.Slice(state.errorProjections, func(i, j int) bool {
-			left, right := state.errorProjections[i].Match, state.errorProjections[j].Match
-			return left.Domain < right.Domain || left.Domain == right.Domain && left.Code < right.Code
-		})
-		if input.Capability != nil {
-			state.capability, state.hasCapability = Capability{id: input.Capability.ID, apiVersion: input.Capability.APIVersion}, true
-		}
-		operations = append(operations, state)
+		operations = append(operations, &operationState{id: input.ID, method: input.Method, path: input.Path, requestType: input.RequestType, responseType: input.ResponseType, permission: input.Permission, provenance: cloneProvenance(input.Provenance), auth: Auth{mode: input.Auth.Mode}, firstSource: input.FirstSource})
 		operationIDs[input.ID], routes[key] = true, true
 	}
-	return newDocument(types, operations, nil)
+	return newDocument(types, operations, nil, spec.Facts)
 }
 
 func valueFromSpec(input ValueTypeSpec) (ValueType, error) {

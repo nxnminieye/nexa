@@ -3,97 +3,12 @@
   "$id": "https://nexa.dev/schemas/generation/httpconvention/conformance-v1.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "namingCases", "requestCases", "successCases", "paginationCases", "problemCases", "scalarCases"],
+  "required": ["apiVersion", "kind", "requestCases", "successCases", "paginationCases"],
   "properties": {
     "apiVersion": {"const": "nexa.dev/http-convention/v1"},
     "kind": {"const": "HTTPConventionConformance"},
-    "namingCases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["source", "accepted"],
-        "properties": {
-          "source": {"type": "string"},
-          "accepted": {"type": "boolean"},
-          "canonical": {"type": "string"}
-        }
-      }
-    },
-    "requestCases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "method", "path", "fields", "locations"],
-        "properties": {
-          "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
-          "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
-          "path": {"type": "string", "pattern": "^/api/"},
-          "fields": {"type": "array", "items": {"type": "string", "pattern": "^[a-z][a-zA-Z0-9]*$"}},
-          "locations": {"type": "array", "items": {"enum": ["path", "query", "body"]}}
-        }
-      }
-    },
-    "successCases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["method", "path", "hasRepresentation", "status"],
-        "properties": {
-          "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
-          "path": {"type": "string", "pattern": "^/api/"},
-          "hasRepresentation": {"type": "boolean"},
-          "status": {"enum": [200, 201, 204]}
-        }
-      }
-    },
-    "paginationCases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["page", "pageSize", "accepted"],
-        "properties": {
-          "page": {"type": "integer"},
-          "pageSize": {"type": "integer"},
-          "accepted": {"type": "boolean"}
-        }
-      }
-    },
-    "problemCases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["category", "code", "status", "type"],
-        "properties": {
-          "category": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"},
-          "code": {"type": "string"},
-          "status": {"type": "integer"},
-          "type": {"type": "string", "format": "uri"}
-        }
-      }
-    },
-    "scalarCases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["kind", "value", "accepted"],
-        "properties": {
-          "kind": {"enum": ["decimal", "id", "timestamp", "date"]},
-          "value": {"type": "string"},
-          "accepted": {"type": "boolean"}
-        }
-      }
-    }
+    "requestCases": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["name", "method", "path", "fields", "locations"], "properties": {"name": {"type": "string"}, "method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string", "pattern": "^/"}, "fields": {"type": "array", "items": {"type": "string"}}, "locations": {"type": "array", "items": {"enum": ["path", "query", "body"]}}}}},
+    "successCases": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["method", "path", "status"], "properties": {"method": {"enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string", "pattern": "^/"}, "status": {"const": 200}}}},
+    "paginationCases": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["limit", "offset", "accepted"], "properties": {"limit": {"type": "integer"}, "offset": {"type": "integer"}, "accepted": {"type": "boolean"}}}}
   }
 }

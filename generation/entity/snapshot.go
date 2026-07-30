@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/internal/strictdoc"
-	"github.com/nxnminieye/nexa/nexaent"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -162,10 +162,10 @@ func parseSnapshotEntities(document strictdoc.Document, sourceName string, value
 		if !ok {
 			return nil, snapshotError("document_type_invalid", base, sourceName)
 		}
-		if pointer := firstUnknown(document, object, base, "id", "name", "sourceRef", "schemaMeta", "crud", "identity", "fields", "edges"); pointer != "" {
+		if pointer := firstUnknown(document, object, base, "id", "name", "sourceRef", "schemaFacts", "crud", "identity", "fields", "edges"); pointer != "" {
 			return nil, snapshotError("document_unknown_field", pointer, sourceName)
 		}
-		for _, member := range []string{"id", "name", "sourceRef", "schemaMeta", "identity", "fields", "edges"} {
+		for _, member := range []string{"id", "name", "sourceRef", "schemaFacts", "identity", "fields", "edges"} {
 			if _, exists := object[member]; !exists {
 				return nil, snapshotError("document_required_missing", base+"/"+member, sourceName)
 			}
@@ -197,9 +197,9 @@ func parseSnapshotEntities(document strictdoc.Document, sourceName string, value
 		if err != nil {
 			return nil, snapshotError("source_ref_invalid", base+"/sourceRef", sourceName)
 		}
-		meta, err := decodeSnapshotSchemaMeta(object["schemaMeta"])
+		meta, err := decodeSnapshotSchemaFacts(object["schemaFacts"])
 		if err != nil {
-			return nil, projectSnapshotAnnotationError(sourceName, base+"/schemaMeta", err)
+			return nil, projectSnapshotFactsError(sourceName, base+"/schemaFacts", err)
 		}
 		item := &snapshotEntityState{id: id, name: name, sourceRef: ref, meta: meta}
 		if crudValue, exists := object["crud"]; exists {
@@ -208,7 +208,7 @@ func parseSnapshotEntities(document strictdoc.Document, sourceName string, value
 			}
 			item.crud, err = decodeSnapshotCRUD(crudValue)
 			if err != nil {
-				return nil, projectSnapshotAnnotationError(sourceName, base+"/crud", err)
+				return nil, projectSnapshotFactsError(sourceName, base+"/crud", err)
 			}
 			item.hasCRUD = true
 		}
@@ -360,7 +360,7 @@ func parseSnapshotFields(document strictdoc.Document, sourceName, entityBase, en
 		if !ok {
 			return nil, snapshotError("document_type_invalid", base, sourceName)
 		}
-		allowed := []string{"id", "name", "sourceRef", "type", "enumValues", "optional", "nillable", "immutable", "hasDefault", "sensitive", "isIdentity", "isTenantField", "fieldMeta"}
+		allowed := []string{"id", "name", "sourceRef", "type", "enumValues", "optional", "nillable", "immutable", "hasDefault", "sensitive", "isIdentity", "isTenantField", "fieldFacts"}
 		if pointer := firstUnknown(document, object, base, allowed...); pointer != "" {
 			return nil, snapshotError("document_unknown_field", pointer, sourceName)
 		}
@@ -415,9 +415,9 @@ func parseSnapshotFields(document strictdoc.Document, sourceName, entityBase, en
 		if (typeID == ScalarEnum) != (len(enums) > 0) {
 			return nil, snapshotError("source_closure_invalid", base+"/enumValues", sourceName)
 		}
-		meta, err := decodeSnapshotFieldMeta(object["fieldMeta"])
+		meta, err := decodeSnapshotFieldFacts(object["fieldFacts"])
 		if err != nil {
-			return nil, projectSnapshotAnnotationError(sourceName, base+"/fieldMeta", err)
+			return nil, projectSnapshotFactsError(sourceName, base+"/fieldFacts", err)
 		}
 		flags := make([]bool, 7)
 		for flagIndex, member := range []string{"optional", "nillable", "immutable", "hasDefault", "sensitive", "isIdentity", "isTenantField"} {
@@ -498,9 +498,6 @@ func validateSnapshotClosure(state *snapshotState, sourceName string) error {
 			return snapshotError("source_closure_invalid", base+"/sourceRef", sourceName)
 		}
 		used[entity.sourceRef.String()] = struct{}{}
-		if entity.meta.Identity != nexaent.IdentityEntID {
-			return snapshotError("source_closure_invalid", base+"/schemaMeta", sourceName)
-		}
 		identity := &identityState{kind: entity.identity.kind, name: entity.identity.name, typeID: entity.identity.typeID}
 		canonicalEntity, err := canonicalEntitySource(entity.id, entity.name, entity.meta, entity.crud, entity.hasCRUD, identity)
 		if err != nil {
@@ -527,7 +524,7 @@ func validateSnapshotClosure(state *snapshotState, sourceName string) error {
 				id: field.id, name: field.name, typeID: field.typeID,
 				enumValues: append([]EnumValue(nil), field.enumValues...), optional: field.optional,
 				nillable: field.nillable, immutable: field.immutable, hasDefault: field.hasDefault,
-				sensitive: field.sensitive, isIdentity: field.isIdentity, isTenantField: field.isTenantField, meta: cloneFieldMeta(field.meta),
+				sensitive: field.sensitive, isIdentity: field.isIdentity, isTenantField: field.isTenantField, meta: cloneFieldFacts(field.meta),
 			}
 			canonicalField, err := canonicalFieldSource(entity.id, ownerField)
 			if err != nil {
@@ -537,7 +534,7 @@ func validateSnapshotClosure(state *snapshotState, sourceName string) error {
 				return snapshotError("source_closure_invalid", fieldBase+"/sourceRef", sourceName)
 			}
 			if snapshotFieldPolicyConflict(entity, field) {
-				return snapshotError("source_closure_invalid", fieldBase+"/fieldMeta", sourceName)
+				return snapshotError("source_closure_invalid", fieldBase+"/fieldFacts", sourceName)
 			}
 		}
 		for edgeIndex, edge := range entity.edges {
@@ -572,18 +569,16 @@ func validateSnapshotClosure(state *snapshotState, sourceName string) error {
 			}
 		}
 		for _, field := range entity.fields {
-			bound := snapshotEdgesForField(entity, field.id)
-			if field.meta.LogicalReference != nil && len(bound) != 0 {
+			if field.meta.Reference == nil {
+				continue
+			}
+			target := entities["schema:"+field.meta.Reference.Target]
+			if target == nil || !snapshotHasField(target, field.meta.Reference.Display) {
 				return snapshotError("source_closure_invalid", base+"/fields", sourceName)
 			}
-			if field.meta.PhysicalDisplay != nil {
-				if len(bound) != 1 {
-					return snapshotError("source_closure_invalid", base+"/fields", sourceName)
-				}
-				target := entities[bound[0].targetEntityID]
-				if target == nil || !snapshotHasField(target, field.meta.PhysicalDisplay.Field) {
-					return snapshotError("source_closure_invalid", base+"/fields", sourceName)
-				}
+			bound := snapshotEdgesForField(entity, field.id)
+			if len(bound) > 1 || len(bound) == 1 && bound[0].targetEntityID != target.id {
+				return snapshotError("source_closure_invalid", base+"/fields", sourceName)
 			}
 		}
 		switch entity.identity.kind {
@@ -608,7 +603,7 @@ func validateSnapshotClosure(state *snapshotState, sourceName string) error {
 }
 
 func snapshotFieldPolicyConflict(entity *snapshotEntityState, field *snapshotFieldState) bool {
-	if snapshotSensitiveTupleConflict(field.sensitive, field.meta.Visibility, field.meta.UIHint) {
+	if snapshotSensitiveTupleConflict(field.sensitive, field.meta.Visibility, field.meta.Control) {
 		return true
 	}
 	policy := field.meta.CRUD
@@ -621,32 +616,32 @@ func snapshotFieldPolicyConflict(entity *snapshotEntityState, field *snapshotFie
 	if policy == nil {
 		return false
 	}
-	if field.meta.Visibility == nexaent.VisibilityInternal && (policy.Read != nexaent.ReadExclude || policy.Mutation != nexaent.MutationNone) {
+	if field.meta.Visibility == sourcecomment.VisibilityInternal && (policy.Read != sourcecomment.ReadExclude || policy.Mutation != sourcecomment.MutationNone) {
 		return true
 	}
-	if field.meta.Visibility == nexaent.VisibilitySensitive && policy.Read != nexaent.ReadExclude {
+	if field.meta.Visibility == sourcecomment.VisibilitySensitive && policy.Read != sourcecomment.ReadExclude {
 		return true
 	}
-	if field.meta.UIHint == nexaent.UIHintReadonly && policy.Mutation != nexaent.MutationNone {
+	if field.meta.Control == sourcecomment.UIControlReadonly && policy.Mutation != sourcecomment.MutationNone {
 		return true
 	}
-	if field.isIdentity && (policy.Read != nexaent.ReadInclude || policy.Mutation != nexaent.MutationNone) {
+	if field.isIdentity && (policy.Read != sourcecomment.ReadInclude || policy.Mutation != sourcecomment.MutationNone) {
 		return true
 	}
-	if field.immutable && (policy.Mutation == nexaent.MutationUpdate || policy.Mutation == nexaent.MutationCreateUpdate) {
+	if field.immutable && (policy.Mutation == sourcecomment.MutationUpdate || policy.Mutation == sourcecomment.MutationCreateUpdate) {
 		return true
 	}
 	return false
 }
 
-func snapshotSensitiveTupleConflict(sensitive bool, visibility nexaent.FieldVisibility, hint nexaent.UIHint) bool {
-	return sensitive != (visibility == nexaent.VisibilitySensitive) || sensitive != (hint == nexaent.UIHintSensitive)
+func snapshotSensitiveTupleConflict(sensitive bool, visibility sourcecomment.FieldVisibility, hint sourcecomment.UIControl) bool {
+	return sensitive != (visibility == sourcecomment.VisibilitySensitive) || sensitive != (hint == sourcecomment.UIControlSensitive)
 }
 
 func snapshotLocalizedConflict(entities []*snapshotEntityState) bool {
 	type text struct{ zh, en string }
 	seen := map[string]text{}
-	add := func(value nexaent.LocalizedText) bool {
+	add := func(value sourcecomment.LocalizedText) bool {
 		current := text{value.ZhCN, value.EnUS}
 		old, exists := seen[value.Key]
 		if exists && old != current {
@@ -717,42 +712,30 @@ func snapshotFieldByName(entity *snapshotEntityState, name string) *snapshotFiel
 	return nil
 }
 
-func decodeSnapshotSchemaMeta(value any) (nexaent.SchemaMeta, error) {
+func decodeSnapshotSchemaFacts(value any) (sourcecomment.SchemaFacts, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nexaent.SchemaMeta{}, err
+		return sourcecomment.SchemaFacts{}, err
 	}
-	return nexaent.DecodeSchema(encoded)
+	return sourcecomment.ParseSchemaFacts(encoded)
 }
-func decodeSnapshotFieldMeta(value any) (nexaent.FieldMeta, error) {
+func decodeSnapshotFieldFacts(value any) (sourcecomment.FieldFacts, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nexaent.FieldMeta{}, err
+		return sourcecomment.FieldFacts{}, err
 	}
-	return nexaent.DecodeField(encoded)
+	return sourcecomment.ParseFieldFacts(encoded)
 }
-func decodeSnapshotCRUD(value any) (nexaent.CRUDSpec, error) {
+func decodeSnapshotCRUD(value any) (sourcecomment.CRUDOperations, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nexaent.CRUDSpec{}, err
+		return sourcecomment.CRUDOperations{}, err
 	}
-	return nexaent.DecodeCRUD(encoded)
+	return sourcecomment.ParseCRUDOperations(encoded)
 }
 
-func projectSnapshotAnnotationError(sourceName, base string, err error) error {
-	owner, ok := err.(*nexaent.Error)
-	if !ok || owner == nil {
-		return snapshotError("document_type_invalid", base, sourceName)
-	}
-	pointer := base + owner.Pointer()
-	switch owner.Reason() {
-	case "document_unknown_field", "document_required_missing", "document_type_invalid", "document_duplicate_key", "unicode_invalid":
-		return snapshotError(owner.Reason(), pointer, sourceName)
-	case "source_ref_invalid", "source_digest_invalid":
-		return snapshotError(owner.Reason(), pointer, sourceName)
-	default:
-		return snapshotError("document_type_invalid", pointer, sourceName)
-	}
+func projectSnapshotFactsError(sourceName, base string, err error) error {
+	return snapshotError("document_type_invalid", base, sourceName)
 }
 
 func validScalar(value ScalarType) bool {

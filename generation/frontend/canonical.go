@@ -3,100 +3,93 @@ package frontend
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/gowebpki/jcs"
-	"github.com/nxnminieye/nexa/provenance"
 )
 
-type wireSource struct {
-	Ref    string `json:"ref"`
-	Digest string `json:"digest"`
-}
-
-type wireOperation struct {
-	ID              string               `json:"id"`
-	Role            string               `json:"role"`
-	OperationID     string               `json:"operationId"`
-	Permission      string               `json:"permission"`
-	RequestType     string               `json:"requestType"`
-	ResponseType    string               `json:"responseType"`
-	ContextBindings []wireContextBinding `json:"contextBindings"`
-	Result          *resultDocument      `json:"result,omitempty"`
-	Pagination      *paginationDocument  `json:"pagination,omitempty"`
-}
-
-type wireValueType struct {
-	Kind    string         `json:"kind"`
-	Name    string         `json:"name,omitempty"`
-	Element *wireValueType `json:"element,omitempty"`
-}
-type wireContextBinding struct {
-	Context   string        `json:"context"`
-	Path      []string      `json:"path"`
-	ValueType wireValueType `json:"valueType"`
-}
-type wireBinding struct {
-	Operation string        `json:"operation"`
-	Direction string        `json:"direction"`
-	Path      []string      `json:"path"`
-	ValueType wireValueType `json:"valueType"`
-	Required  bool          `json:"required"`
-}
-type wireColumn struct {
-	ID        string        `json:"id"`
-	LabelKey  string        `json:"labelKey"`
-	Path      []string      `json:"path"`
-	ValueType wireValueType `json:"valueType"`
-	Required  bool          `json:"required"`
-}
 type wireField struct {
-	ID       string           `json:"id"`
-	LabelKey string           `json:"labelKey"`
-	Surfaces []string         `json:"surfaces"`
-	Control  string           `json:"control,omitempty"`
-	Bindings []wireBinding    `json:"bindings"`
-	Options  *optionsDocument `json:"options,omitempty"`
-	Choices  []choiceDocument `json:"choices,omitempty"`
-	Columns  []wireColumn     `json:"columns,omitempty"`
+	Name     string   `json:"name"`
+	LabelKey string   `json:"labelKey"`
+	Surfaces []string `json:"surfaces"`
+	Control  string   `json:"control,omitempty"`
 }
 
-type wireLocale struct {
-	Locale    string            `json:"locale"`
-	Messages  map[string]string `json:"messages"`
-	SourceRef string            `json:"sourceRef"`
+type wireRoute struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
+
+type wireMenu struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parentId,omitempty"`
+	TitleKey string `json:"titleKey"`
+	Path     string `json:"path"`
+	Icon     string `json:"icon,omitempty"`
+	Order    int    `json:"order"`
+}
+
+type wirePageOperations struct {
+	List   string `json:"list"`
+	Create string `json:"create,omitempty"`
+	Get    string `json:"get,omitempty"`
+	Update string `json:"update,omitempty"`
+	Delete string `json:"delete,omitempty"`
 }
 
 type wirePage struct {
-	ID               string           `json:"id"`
-	TitleKey         string           `json:"titleKey"`
-	Mode             string           `json:"mode"`
-	AccessOperation  string           `json:"accessOperation"`
-	AccessPermission string           `json:"accessPermission"`
-	Route            routeDocument    `json:"route"`
-	Menu             *menuDocument    `json:"menu,omitempty"`
-	Operations       []wireOperation  `json:"operations"`
-	Fields           []wireField      `json:"fields"`
-	Actions          []actionDocument `json:"actions"`
-	ExtensionPoints  []string         `json:"extensionPoints"`
-	SpecSourceRef    string           `json:"specSourceRef"`
+	ID                 string             `json:"id"`
+	TitleKey           string             `json:"titleKey"`
+	Route              wireRoute          `json:"route"`
+	ExtensionComponent string             `json:"extensionComponent,omitempty"`
+	Menu               *wireMenu          `json:"menu,omitempty"`
+	PageSize           int                `json:"pageSize"`
+	Operations         wirePageOperations `json:"operations"`
+	Fields             []wireField        `json:"fields"`
+}
+
+type wireLocale struct {
+	Locale   string            `json:"locale"`
+	Messages map[string]string `json:"messages"`
 }
 
 type wireDocument struct {
-	APIVersion   string          `json:"apiVersion"`
-	Kind         string          `json:"kind"`
-	APIDigest    string          `json:"apiDigest"`
-	SourceDigest string          `json:"sourceDigest"`
-	Sources      []wireSource    `json:"sources"`
-	API          json.RawMessage `json:"api"`
-	Locales      []wireLocale    `json:"locales"`
-	Pages        []wirePage      `json:"pages"`
+	APIVersion     string                 `json:"apiVersion"`
+	Kind           string                 `json:"kind"`
+	HTTPConvention string                 `json:"httpConvention"`
+	Types          []wireClosureType      `json:"types"`
+	Operations     []wireClosureOperation `json:"operations"`
+	Locales        []wireLocale           `json:"locales"`
+	Pages          []wirePage             `json:"pages"`
 }
 
-type sourceSetEnvelope struct {
-	APIVersion string       `json:"apiVersion"`
-	APIDigest  string       `json:"apiDigest"`
-	Sources    []wireSource `json:"sources"`
+type wireClosureValue struct {
+	Kind    string            `json:"kind"`
+	Name    string            `json:"name,omitempty"`
+	Element *wireClosureValue `json:"element,omitempty"`
+}
+
+type wireClosureField struct {
+	Path      []string         `json:"path"`
+	Required  bool             `json:"required"`
+	ValueType wireClosureValue `json:"valueType"`
+}
+
+type wireClosureType struct {
+	Name           string             `json:"name"`
+	TypeScriptName string             `json:"typescriptName"`
+	Shape          *wireClosureValue  `json:"shape,omitempty"`
+	Fields         []wireClosureField `json:"fields"`
+}
+
+type wireClosureOperation struct {
+	ClientName   string `json:"clientName"`
+	ID           string `json:"id"`
+	Method       string `json:"method"`
+	Path         string `json:"path"`
+	Auth         string `json:"auth"`
+	Permission   string `json:"permission"`
+	RequestType  string `json:"requestType"`
+	ResponseType string `json:"responseType"`
 }
 
 func CanonicalJSON(document Document) ([]byte, error) {
@@ -109,15 +102,6 @@ func CanonicalJSON(document Document) ([]byte, error) {
 	return canonicalize(document.state.wire, func() *Error {
 		return buildError("canonical_invalid", "/document", "frontend IR cannot be canonicalized")
 	})
-}
-
-func wireSources(sources []provenance.Source) []wireSource {
-	result := make([]wireSource, len(sources))
-	for index, source := range sources {
-		result[index] = wireSource{Ref: source.Ref.String(), Digest: source.Digest.String()}
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Ref < result[j].Ref })
-	return result
 }
 
 func canonicalize(value any, failure func() *Error) ([]byte, error) {
@@ -134,9 +118,21 @@ func canonicalize(value any, failure func() *Error) ([]byte, error) {
 
 func cloneWireDocument(input wireDocument) wireDocument {
 	result := input
-	result.API = append(json.RawMessage(nil), input.API...)
-	result.Sources = make([]wireSource, len(input.Sources))
-	copy(result.Sources, input.Sources)
+	result.Types = make([]wireClosureType, len(input.Types))
+	copy(result.Types, input.Types)
+	for index := range result.Types {
+		if input.Types[index].Shape != nil {
+			shape := cloneWireClosureValue(*input.Types[index].Shape)
+			result.Types[index].Shape = &shape
+		}
+		result.Types[index].Fields = make([]wireClosureField, len(input.Types[index].Fields))
+		copy(result.Types[index].Fields, input.Types[index].Fields)
+		for field := range result.Types[index].Fields {
+			result.Types[index].Fields[field].Path = append([]string(nil), input.Types[index].Fields[field].Path...)
+			result.Types[index].Fields[field].ValueType = cloneWireClosureValue(input.Types[index].Fields[field].ValueType)
+		}
+	}
+	result.Operations = append([]wireClosureOperation{}, input.Operations...)
 	result.Pages = make([]wirePage, len(input.Pages))
 	copy(result.Pages, input.Pages)
 	for index := range result.Pages {
@@ -145,56 +141,15 @@ func cloneWireDocument(input wireDocument) wireDocument {
 			menu := *input.Pages[index].Menu
 			page.Menu = &menu
 		}
-		page.Operations = make([]wireOperation, len(input.Pages[index].Operations))
-		copy(page.Operations, input.Pages[index].Operations)
-		for operation := range page.Operations {
-			page.Operations[operation].Result = cloneResult(input.Pages[index].Operations[operation].Result)
-			if input.Pages[index].Operations[operation].Pagination != nil {
-				value := clonePagination(input.Pages[index].Operations[operation].Pagination)
-				page.Operations[operation].Pagination = &value
-			}
-			page.Operations[operation].ContextBindings = make([]wireContextBinding, len(input.Pages[index].Operations[operation].ContextBindings))
-			copy(page.Operations[operation].ContextBindings, input.Pages[index].Operations[operation].ContextBindings)
-			for binding := range page.Operations[operation].ContextBindings {
-				page.Operations[operation].ContextBindings[binding].Path = clonePath(input.Pages[index].Operations[operation].ContextBindings[binding].Path)
-				page.Operations[operation].ContextBindings[binding].ValueType = cloneWireValue(input.Pages[index].Operations[operation].ContextBindings[binding].ValueType)
-			}
-		}
-		page.Fields = append([]wireField(nil), input.Pages[index].Fields...)
+		page.Fields = make([]wireField, len(input.Pages[index].Fields))
+		copy(page.Fields, input.Pages[index].Fields)
 		for field := range page.Fields {
-			page.Fields[field].Surfaces = make([]string, len(input.Pages[index].Fields[field].Surfaces))
-			copy(page.Fields[field].Surfaces, input.Pages[index].Fields[field].Surfaces)
-			page.Fields[field].Bindings = make([]wireBinding, len(input.Pages[index].Fields[field].Bindings))
-			copy(page.Fields[field].Bindings, input.Pages[index].Fields[field].Bindings)
-			for binding := range page.Fields[field].Bindings {
-				page.Fields[field].Bindings[binding].Path = clonePath(input.Pages[index].Fields[field].Bindings[binding].Path)
-				page.Fields[field].Bindings[binding].ValueType = cloneWireValue(input.Pages[index].Fields[field].Bindings[binding].ValueType)
-			}
-			page.Fields[field].Choices = append([]choiceDocument(nil), input.Pages[index].Fields[field].Choices...)
-			page.Fields[field].Columns = append([]wireColumn(nil), input.Pages[index].Fields[field].Columns...)
-			for column := range page.Fields[field].Columns {
-				page.Fields[field].Columns[column].Path = clonePath(input.Pages[index].Fields[field].Columns[column].Path)
-				page.Fields[field].Columns[column].ValueType = cloneWireValue(input.Pages[index].Fields[field].Columns[column].ValueType)
-			}
-			if input.Pages[index].Fields[field].Options != nil {
-				options := *input.Pages[index].Fields[field].Options
-				options.ValuePath = clonePath(options.ValuePath)
-				options.LabelPath = clonePath(options.LabelPath)
-				page.Fields[field].Options = &options
-			}
+			page.Fields[field].Surfaces = append([]string{}, input.Pages[index].Fields[field].Surfaces...)
 		}
-		page.Actions = make([]actionDocument, len(input.Pages[index].Actions))
-		copy(page.Actions, input.Pages[index].Actions)
-		for action := range page.Actions {
-			page.Actions[action].Fields = make([]string, len(input.Pages[index].Actions[action].Fields))
-			copy(page.Actions[action].Fields, input.Pages[index].Actions[action].Fields)
-		}
-		page.ExtensionPoints = make([]string, len(input.Pages[index].ExtensionPoints))
-		copy(page.ExtensionPoints, input.Pages[index].ExtensionPoints)
 	}
 	result.Locales = make([]wireLocale, len(input.Locales))
 	for index, locale := range input.Locales {
-		result.Locales[index] = wireLocale{Locale: locale.Locale, SourceRef: locale.SourceRef, Messages: map[string]string{}}
+		result.Locales[index] = wireLocale{Locale: locale.Locale, Messages: map[string]string{}}
 		for key, value := range locale.Messages {
 			result.Locales[index].Messages[key] = value
 		}
@@ -202,10 +157,10 @@ func cloneWireDocument(input wireDocument) wireDocument {
 	return result
 }
 
-func cloneWireValue(input wireValueType) wireValueType {
+func cloneWireClosureValue(input wireClosureValue) wireClosureValue {
 	result := input
 	if input.Element != nil {
-		element := cloneWireValue(*input.Element)
+		element := cloneWireClosureValue(*input.Element)
 		result.Element = &element
 	}
 	return result

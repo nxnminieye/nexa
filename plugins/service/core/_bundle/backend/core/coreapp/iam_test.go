@@ -18,6 +18,7 @@ func TestIAMProvisionTenantNormalizesAndReconcilesAfterAtomicStoreSuccess(t *tes
 	input := ProvisionTenantInput{
 		TenantCode: " tenant-a ", DisplayName: " Tenant A ", OwnerAccountID: "account-a",
 		OwnerUsername: " owner ", OwnerEmail: " owner@example.test ", OwnerName: " Owner ",
+		DefaultRouter: " /home ",
 	}
 	first, err := service.ProvisionTenant(context.Background(), input)
 	if err != nil {
@@ -30,7 +31,7 @@ func TestIAMProvisionTenantNormalizesAndReconcilesAfterAtomicStoreSuccess(t *tes
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("idempotent result changed: %#v != %#v", first, second)
 	}
-	if got := store.provisionInputs[0]; got.TenantCode != "tenant-a" || got.DisplayName != "Tenant A" || got.OwnerUsername != "owner" {
+	if got := store.provisionInputs[0]; got.TenantCode != "tenant-a" || got.DisplayName != "Tenant A" || got.OwnerUsername != "owner" || got.DefaultRouter != "/home" {
 		t.Fatalf("unnormalized store input: %#v", got)
 	}
 	if !reflect.DeepEqual(events, []string{"store.provision", "reconcile.tenant", "store.provision", "reconcile.tenant"}) {

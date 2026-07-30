@@ -24,15 +24,7 @@ type requiredIRMessage struct {
 }
 
 type requiredIRService struct {
-	Methods *[]requiredIRMethod `json:"methods"`
-}
-
-type requiredIRMethod struct {
-	RPCContext requiredIRRPCContext `json:"rpcContext"`
-}
-
-type requiredIRRPCContext struct {
-	ContextFields *[]wireContextBinding `json:"contextFields"`
+	Methods *[]wireMethod `json:"methods"`
 }
 
 type requiredLockCollections struct {
@@ -73,11 +65,6 @@ func validateIRCollectionPresence(data []byte) bool {
 	for _, item := range *value.Services {
 		if item.Methods == nil {
 			return false
-		}
-		for _, method := range *item.Methods {
-			if method.RPCContext.ContextFields == nil {
-				return false
-			}
 		}
 	}
 	return true

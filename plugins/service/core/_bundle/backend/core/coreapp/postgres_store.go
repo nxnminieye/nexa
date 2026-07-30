@@ -118,12 +118,12 @@ principal AS (
   WHERE s.access_token_hash=$1 AND s.revoked=FALSE AND s.access_expires_at>$2
 ),
 principal_roles AS (
-  SELECT r.id,r.code
+  SELECT r.id,r.code,r.default_router
   FROM principal p
   JOIN tenant_member_roles g ON g.tenant_id=p.tenant_id::bigint AND g.tenant_member_id=p.member_id::bigint
   JOIN roles r ON r.id=g.role_id AND r.tenant_id=g.tenant_id AND r.status='enabled'
   UNION
-  SELECT r.id,r.code
+  SELECT r.id,r.code,r.default_router
   FROM principal p
   JOIN managed_tenant_member_roles g ON g.tenant_id=p.tenant_id::bigint AND g.tenant_member_id=p.member_id::bigint
   JOIN roles r ON r.id=g.role_id AND r.tenant_id=g.tenant_id AND r.status='enabled'
@@ -149,7 +149,7 @@ SELECT p.session_id,p.tenant_id,p.tenant_code,p.member_id,p.account_id,p.identit
                  JOIN principal tenant ON tenant.tenant_id::bigint=g.tenant_id
                  JOIN permission_actions a ON a.id=g.permission_action_id AND a.status='enabled'
                  JOIN permission_resources resource ON resource.id=a.permission_resource_id AND resource.status='enabled'),ARRAY[]::text[]),
-       COALESCE((SELECT array_agg(DISTINCT code ORDER BY code) FROM menu_tree),ARRAY[]::text[])
+		COALESCE((SELECT array_agg(DISTINCT code ORDER BY code) FROM menu_tree),ARRAY[]::text[])
 FROM principal p`, hash, now).Scan(
 		&value.SessionID, &value.TenantID, &value.TenantCode, &value.MemberID, &accountID,
 		&value.Account.SourceCode, &value.Account.ExternalSubject, &value.Account.Username, &email, &display, &value.Account.Status,
@@ -322,9 +322,9 @@ ON CONFLICT(tenant_id,identity_account_id) DO UPDATE SET identity_account_id=EXC
 		return ProvisionTenantResult{}, postgresError(err)
 	}
 	var roleID int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO roles(tenant_id,code,name,status,managed,source_owner,source_key,source_digest,version)
-VALUES($1,'tenant-owner','Tenant owner','enabled',TRUE,'core.tenant-provision','tenant-owner','v1',1)
-ON CONFLICT(tenant_id,source_owner,source_key) WHERE managed=TRUE DO UPDATE SET source_digest=EXCLUDED.source_digest RETURNING id`, tenantID).Scan(&roleID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO roles(tenant_id,code,name,default_router,status,managed,source_owner,source_key,source_digest,version)
+VALUES($1,'tenant-owner','Tenant owner',$2,'enabled',TRUE,'core.tenant-provision','tenant-owner','v1',1)
+ON CONFLICT(tenant_id,source_owner,source_key) WHERE managed=TRUE DO UPDATE SET source_digest=EXCLUDED.source_digest,default_router=EXCLUDED.default_router RETURNING id`, tenantID, input.DefaultRouter).Scan(&roleID)
 	if err != nil {
 		return ProvisionTenantResult{}, postgresError(err)
 	}
@@ -617,7 +617,7 @@ func (s *PostgresStore) ListMenus(ctx context.Context, input ListMenusInput) (Me
 	if err := s.db.QueryRowContext(ctx, `SELECT count(*)`+filter, input.Keyword, input.Status).Scan(&page.Total); err != nil {
 		return MenuPage{}, postgresError(err)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT m.id::text,m.source_owner,m.code,m.parent_code,m.name,m.path,m.component,m.icon,m.sort_order,m.status`+filter+` ORDER BY m.sort_order,m.code LIMIT $3 OFFSET $4`, input.Keyword, input.Status, input.Limit, input.Offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT m.id::text,m.source_owner,m.code,m.parent_code,m.name,m.route_name,m.path,m.component,m.icon,m.sort_order,m.permission_code,m.keep_alive,m.visible,m.status`+filter+` ORDER BY m.sort_order,m.code LIMIT $3 OFFSET $4`, input.Keyword, input.Status, input.Limit, input.Offset)
 	if err != nil {
 		return MenuPage{}, postgresError(err)
 	}
@@ -636,7 +636,7 @@ func (s *PostgresStore) ListMenus(ctx context.Context, input ListMenusInput) (Me
 }
 
 func (s *PostgresStore) GetMenu(ctx context.Context, code string) (Menu, error) {
-	return scanMenu(s.db.QueryRowContext(ctx, `SELECT id::text,source_owner,code,parent_code,name,path,component,icon,sort_order,status FROM menus WHERE code=$1`, code))
+	return scanMenu(s.db.QueryRowContext(ctx, `SELECT id::text,source_owner,code,parent_code,name,route_name,path,component,icon,sort_order,permission_code,keep_alive,visible,status FROM menus WHERE code=$1`, code))
 }
 
 func (s *PostgresStore) ListPermissions(ctx context.Context, input ListPermissionsInput) (PermissionPage, error) {
@@ -762,8 +762,8 @@ ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source
 	menuCodes := make([]string, 0, len(input.Menus))
 	for _, entry := range input.Menus {
 		menuCodes = append(menuCodes, entry.Code)
-		_, err = tx.ExecContext(ctx, `INSERT INTO menus(source_owner,source_key,source_digest,code,parent_code,name,path,status) VALUES($1,$2,$3,$2,$4,$5,$6,'enabled')
-ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source_digest,parent_code=EXCLUDED.parent_code,name=EXCLUDED.name,path=EXCLUDED.path,status='enabled'`, input.SourceID, entry.Code, input.Digest, entry.ParentCode, entry.DisplayName, entry.Path)
+		_, err = tx.ExecContext(ctx, `INSERT INTO menus(source_owner,source_key,source_digest,code,parent_code,name,route_name,path,component,icon,sort_order,permission_code,keep_alive,visible,status) VALUES($1,$2,$3,$2,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'enabled')
+ON CONFLICT(source_owner,source_key) DO UPDATE SET source_digest=EXCLUDED.source_digest,parent_code=EXCLUDED.parent_code,name=EXCLUDED.name,route_name=EXCLUDED.route_name,path=EXCLUDED.path,component=EXCLUDED.component,icon=EXCLUDED.icon,sort_order=EXCLUDED.sort_order,permission_code=EXCLUDED.permission_code,keep_alive=EXCLUDED.keep_alive,visible=EXCLUDED.visible,status='enabled'`, input.SourceID, entry.Code, input.Digest, entry.ParentCode, entry.DisplayName, entry.RouteName, entry.Path, entry.Component, entry.Icon, entry.SortOrder, entry.PermissionCode, entry.KeepAlive, entry.Visible)
 		if err != nil {
 			return CatalogSyncResult{}, postgresError(err)
 		}
@@ -824,7 +824,7 @@ func scanIdentityAccount(row rowScanner) (IdentityAccount, error) {
 	return value, nil
 }
 
-const roleSelect = `SELECT r.id,r.tenant_id::text,r.code,r.name,r.status,r.managed,r.version,
+const roleSelect = `SELECT r.id,r.tenant_id::text,r.code,r.name,r.default_router,r.status,r.managed,r.version,
 COALESCE((SELECT array_agg(a.code ORDER BY a.code) FROM role_permission_actions g JOIN permission_actions a ON a.id=g.permission_action_id WHERE g.tenant_id=r.tenant_id AND g.role_id=r.id),ARRAY[]::text[]),
 COALESCE((SELECT array_agg(m.code ORDER BY m.code) FROM role_menus g JOIN menus m ON m.id=g.menu_id WHERE g.tenant_id=r.tenant_id AND g.role_id=r.id),ARRAY[]::text[])
 FROM roles r`
@@ -832,7 +832,7 @@ FROM roles r`
 func scanRole(row rowScanner) (TenantRole, error) {
 	var value TenantRole
 	var id int64
-	if err := row.Scan(&id, &value.TenantID, &value.Code, &value.DisplayName, &value.Status, &value.Managed, &value.Version, (*stringArray)(&value.PermissionCodes), (*stringArray)(&value.MenuCodes)); err != nil {
+	if err := row.Scan(&id, &value.TenantID, &value.Code, &value.DisplayName, &value.DefaultRouter, &value.Status, &value.Managed, &value.Version, (*stringArray)(&value.PermissionCodes), (*stringArray)(&value.MenuCodes)); err != nil {
 		return TenantRole{}, postgresError(err)
 	}
 	value.ID = roleIDString(id)
@@ -841,7 +841,7 @@ func scanRole(row rowScanner) (TenantRole, error) {
 
 func scanMenu(row rowScanner) (Menu, error) {
 	var value Menu
-	if err := row.Scan(&value.ID, &value.SourceID, &value.Code, &value.ParentCode, &value.DisplayName, &value.Path, &value.Component, &value.Icon, &value.SortOrder, &value.Status); err != nil {
+	if err := row.Scan(&value.ID, &value.SourceID, &value.Code, &value.ParentCode, &value.DisplayName, &value.RouteName, &value.Path, &value.Component, &value.Icon, &value.SortOrder, &value.PermissionCode, &value.KeepAlive, &value.Visible, &value.Status); err != nil {
 		return Menu{}, postgresError(err)
 	}
 	return value, nil

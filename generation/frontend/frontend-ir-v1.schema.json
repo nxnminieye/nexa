@@ -6,601 +6,208 @@
   "required": [
     "apiVersion",
     "kind",
-    "apiDigest",
-    "sourceDigest",
-    "sources",
-    "api",
+    "httpConvention",
+    "types",
+    "operations",
     "locales",
     "pages"
   ],
   "properties": {
-    "apiVersion": {
-      "const": "nexa.dev/frontend-ir/v1"
-    },
-    "kind": {
-      "const": "FrontendIR"
-    },
-    "apiDigest": {
-      "$ref": "#/$defs/digest"
-    },
-    "sourceDigest": {
-      "$ref": "#/$defs/digest"
-    },
-    "sources": {
+    "apiVersion": { "const": "nexa.dev/frontend-ir/v1" },
+    "kind": { "const": "FrontendIR" },
+    "httpConvention": { "const": "nexa.dev/http-convention/v1" },
+    "types": {
       "type": "array",
-      "items": {
-        "$ref": "#/$defs/source"
-      }
+      "items": { "$ref": "#/$defs/closureType" }
     },
-    "api": {
-      "$ref": "https://nexa.dev/schemas/generation/httpapi/api-ir-v1.schema.json"
+    "operations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/closureOperation" }
     },
     "locales": {
       "type": "array",
-      "items": {
-        "$ref": "#/$defs/locale"
-      }
+      "items": { "$ref": "#/$defs/locale" }
     },
     "pages": {
       "type": "array",
-      "items": {
-        "$ref": "#/$defs/page"
-      }
+      "items": { "$ref": "#/$defs/page" }
     }
   },
   "$defs": {
-    "digest": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
     "path": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 1,
       "items": {
         "type": "string",
-        "minLength": 1
+        "pattern": "^(?:[a-z][a-zA-Z0-9]*|[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$"
       }
     },
-    "source": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "ref",
-        "digest"
-      ],
-      "properties": {
-        "ref": {
-          "type": "string"
-        },
-        "digest": {
-          "$ref": "#/$defs/digest"
-        }
-      }
-    },
-    "valueType": {
+    "closureValue": {
       "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "name"],
-          "properties": {
-            "kind": { "const": "scalar" },
-            "name": { "type": "string", "minLength": 1 }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "name"],
-          "properties": {
-            "kind": { "const": "ref" },
-            "name": { "type": "string", "minLength": 1 }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "object" },
-            "name": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "element"],
-          "properties": {
-            "kind": { "const": "array" },
-            "element": { "$ref": "#/$defs/nonOptionalValueType" }
-          }
-        }
+        { "$ref": "#/$defs/scalarClosureValue" },
+        { "$ref": "#/$defs/refClosureValue" },
+        { "$ref": "#/$defs/arrayClosureValue" },
+        { "$ref": "#/$defs/optionalClosureValue" }
       ]
     },
-    "scalarValueType": {
+    "scalarClosureValue": {
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "name"],
       "properties": {
         "kind": { "const": "scalar" },
+        "name": { "enum": ["string", "bool", "int32", "uint32", "int64", "uint64", "float32", "float64"] }
+      }
+    },
+    "refClosureValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "const": "ref" },
         "name": { "type": "string", "minLength": 1 }
       }
     },
-    "nonOptionalValueType": {
-      "oneOf": [
-        { "$ref": "#/$defs/scalarValueType" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "name"],
-          "properties": {
-            "kind": { "const": "ref" },
-            "name": { "type": "string", "minLength": 1 }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "object" },
-            "name": { "type": "string" }
-          }
-        }
-      ]
-    },
-    "context": {
+    "arrayClosureValue": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "context",
-        "path",
-        "valueType"
-      ],
+      "required": ["kind", "element"],
       "properties": {
-        "context": {
-          "type": "string"
-        },
-        "path": {
-          "$ref": "#/$defs/path"
-        },
-        "valueType": {
-          "$ref": "#/$defs/valueType"
-        }
+        "kind": { "const": "array" },
+        "element": { "$ref": "#/$defs/closureValue" }
       }
     },
-    "result": {
+    "optionalClosureValue": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["kind", "element"],
       "properties": {
-        "itemsPath": {
-          "$ref": "#/$defs/path"
-        },
-        "itemPath": {
-          "$ref": "#/$defs/path"
-        },
-        "totalPath": {
-          "$ref": "#/$defs/path"
-        },
-        "rowKeyPath": {
-          "$ref": "#/$defs/path"
-        }
+        "kind": { "const": "optional" },
+        "element": { "$ref": "#/$defs/closureValue" }
       }
     },
-    "pagination": {
+    "closureField": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "mode",
-        "limitPath",
-        "offsetPath",
-        "totalPath",
-        "pageSize"
-      ],
+      "required": ["path", "required", "valueType"],
       "properties": {
-        "mode": {
-          "const": "offset"
-        },
-        "limitPath": {
-          "$ref": "#/$defs/path"
-        },
-        "offsetPath": {
-          "$ref": "#/$defs/path"
-        },
-        "totalPath": {
-          "$ref": "#/$defs/path"
-        },
-        "pageSize": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 200
-        }
+        "path": { "$ref": "#/$defs/path" },
+        "required": { "type": "boolean" },
+        "valueType": { "$ref": "#/$defs/closureValue" }
       }
     },
-    "operation": {
+    "closureType": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "role",
-        "operationId",
-        "permission",
-        "requestType",
-        "responseType",
-        "contextBindings"
-      ],
+      "required": ["name", "typescriptName", "fields"],
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "role": {
-          "enum": [
-            "list",
-            "get",
-            "action",
-            "options"
-          ]
-        },
-        "operationId": {
-          "type": "string"
-        },
-        "permission": {
-          "type": "string"
-        },
-        "requestType": {
-          "type": "string"
-        },
-        "responseType": {
-          "type": "string"
-        },
-        "contextBindings": {
+        "name": { "type": "string", "minLength": 1 },
+        "typescriptName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$" },
+        "shape": { "$ref": "#/$defs/closureValue" },
+        "fields": {
           "type": "array",
-          "items": {
-            "$ref": "#/$defs/context"
-          }
-        },
-        "result": {
-          "$ref": "#/$defs/result"
-        },
-        "pagination": {
-          "$ref": "#/$defs/pagination"
+          "items": { "$ref": "#/$defs/closureField" }
         }
       }
     },
-    "binding": {
+    "closureOperation": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "operation",
-        "direction",
-        "path",
-        "valueType",
-        "required"
-      ],
+      "required": ["clientName", "id", "method", "path", "auth", "permission", "requestType", "responseType"],
       "properties": {
-        "operation": {
-          "type": "string"
-        },
-        "direction": {
-          "enum": [
-            "request",
-            "response"
-          ]
-        },
-        "path": {
-          "$ref": "#/$defs/path"
-        },
-        "valueType": {
-          "$ref": "#/$defs/valueType"
-        },
-        "required": {
-          "type": "boolean"
+        "clientName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$" },
+        "id": { "type": "string", "minLength": 1 },
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": { "type": "string", "minLength": 1 },
+        "auth": { "enum": ["none", "required"] },
+        "permission": { "type": "string" },
+        "requestType": { "type": "string", "minLength": 1 },
+        "responseType": { "type": "string" }
+      }
+    },
+    "locale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locale", "messages"],
+      "properties": {
+        "locale": { "type": "string", "minLength": 1 },
+        "messages": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
         }
       }
     },
-    "options": {
+    "route": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "operation",
-        "valuePath",
-        "labelPath"
-      ],
+      "required": ["path", "name"],
       "properties": {
-        "operation": {
-          "type": "string"
-        },
-        "valuePath": {
-          "$ref": "#/$defs/path"
-        },
-        "labelPath": {
-          "$ref": "#/$defs/path"
-        }
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
       }
     },
-    "choice": {
+    "menu": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "value",
-        "labelKey"
-      ],
+      "required": ["id", "titleKey", "path", "order"],
       "properties": {
-        "value": {
-          "type": "string"
-        },
-        "labelKey": {
-          "type": "string"
-        }
+        "id": { "type": "string", "minLength": 1 },
+        "parentId": { "type": "string", "minLength": 1 },
+        "titleKey": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "icon": { "type": "string", "minLength": 1 },
+        "order": { "type": "integer" }
       }
     },
-    "column": {
+    "pageOperations": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "labelKey",
-        "path",
-        "valueType",
-        "required"
-      ],
+      "required": ["list"],
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "labelKey": {
-          "type": "string"
-        },
-        "path": {
-          "$ref": "#/$defs/path"
-        },
-        "valueType": {
-          "$ref": "#/$defs/valueType"
-        },
-        "required": {
-          "type": "boolean"
-        }
+        "list": { "type": "string", "minLength": 1 },
+        "create": { "type": "string", "minLength": 1 },
+        "get": { "type": "string", "minLength": 1 },
+        "update": { "type": "string", "minLength": 1 },
+        "delete": { "type": "string", "minLength": 1 }
       }
     },
     "field": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "labelKey",
-        "surfaces",
-        "bindings"
-      ],
+      "required": ["name", "labelKey", "surfaces"],
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "labelKey": {
-          "type": "string"
-        },
+        "name": { "type": "string", "pattern": "^(?:[a-z][a-zA-Z0-9]*|[a-z][a-z0-9]*(?:_[a-z0-9]+)*)$" },
+        "labelKey": { "type": "string", "minLength": 1 },
         "surfaces": {
           "type": "array",
-          "items": {
-            "enum": [
-              "search",
-              "list",
-              "detail"
-            ]
-          }
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["search", "list", "create", "edit"] }
         },
-        "control": {
-          "enum": [
-            "text",
-            "textarea",
-            "password",
-            "number",
-            "toggle",
-            "select",
-            "multi-select"
-          ]
-        },
-        "bindings": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/binding"
-          }
-        },
-        "options": {
-          "$ref": "#/$defs/options"
-        },
-        "choices": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/choice"
-          }
-        },
-        "columns": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/column"
-          }
-        }
+        "control": { "enum": ["text", "textarea", "number", "switch", "select", "multi-select", "datetime", "readonly", "sensitive", "member", "reference", "attachment", "tags", "component", "i18n", "iconify", "permission", "route", "scope", "http-method", "http-path", "module", "locale", "timezone"] }
       }
     },
-      "action": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "labelKey",
-          "operation",
-          "effect",
-          "fields",
-          "placement"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "labelKey": {
-            "type": "string"
-          },
-          "operation": {
-            "type": "string"
-          },
-          "effect": {
-            "enum": [
-              "create",
-              "update",
-              "delete"
-            ]
-          },
-          "fields": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "placement": {
-            "enum": [
-              "toolbar",
-              "row"
-            ]
-          },
-          "confirmKey": {
-            "type": "string"
-          }
-        }
-      },
-      "route": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "path",
-          "name"
-        ],
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        }
-      },
-      "menu": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "titleKey",
-          "order"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "parentId": {
-            "type": "string"
-          },
-          "titleKey": {
-            "type": "string"
-          },
-          "icon": {
-            "type": "string"
-          },
-          "order": {
-            "type": "integer"
-          }
-        }
-      },
-      "locale": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "locale",
-          "messages",
-          "sourceRef"
-        ],
-        "properties": {
-          "locale": {
-            "type": "string"
-          },
-          "messages": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
-          "sourceRef": {
-            "type": "string"
-          }
-        }
-      },
-      "page": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "titleKey",
-          "mode",
-          "accessOperation",
-          "accessPermission",
-          "route",
-          "operations",
-          "fields",
-          "actions",
-          "extensionPoints",
-          "specSourceRef"
-        ],
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "titleKey": {
-            "type": "string"
-          },
-          "mode": {
-            "enum": [
-              "collection",
-              "singleton"
-            ]
-          },
-          "accessOperation": {
-            "type": "string"
-          },
-          "accessPermission": {
-            "type": "string"
-          },
-          "route": {
-            "$ref": "#/$defs/route"
-          },
-          "menu": {
-            "$ref": "#/$defs/menu"
-          },
-          "operations": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/operation"
-            }
-          },
-          "fields": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/field"
-            }
-          },
-          "actions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/action"
-            }
-          },
-          "extensionPoints": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "specSourceRef": {
-            "type": "string"
-          }
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "titleKey", "route", "pageSize", "operations", "fields"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "titleKey": { "type": "string", "minLength": 1 },
+        "route": { "$ref": "#/$defs/route" },
+        "extensionComponent": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\\.vue$"
+        },
+        "menu": { "$ref": "#/$defs/menu" },
+        "pageSize": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "operations": { "$ref": "#/$defs/pageOperations" },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" }
         }
       }
     }
+  }
 }

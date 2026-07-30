@@ -1,23 +1,34 @@
-// Package protocol compiles Proto sources and typed custom options into immutable ProtocolIR values.
+// Package protocol compiles Proto sources and source-comment facts into immutable ProtocolIR values.
 package protocol
 
 import (
 	"context"
 	"io"
 
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
 const (
-	APIVersion          = "nexa.dev/protocol-ir/v2"
+	APIVersion          = "nexa.dev/protocol-ir/v3"
 	Kind                = "ProtocolIR"
 	SourceSetAPIVersion = "nexa.dev/protocol-source-set/v1"
 )
 
 type CompileOptions struct {
-	ServiceID  string
-	EntryFiles []string
-	Resolver   Resolver
+	ServiceID        string
+	EntryFiles       []string
+	Resolver         Resolver
+	SourceProjection *SourceProjection
+}
+
+// SourceProjection is compiler-produced input for extending an earlier
+// validated FactGraph. It is not a Proto authoring surface.
+type SourceProjection struct {
+	Upstream       sourcecomment.FactGraph
+	Nodes          []sourcecomment.ProjectionExpectation
+	InheritedFacts []sourcecomment.InheritedFactExpectation
+	Lock           *sourcecomment.ProjectionLock
 }
 
 type Resolver interface {
@@ -59,8 +70,6 @@ type Service struct{ state *serviceState }
 type Method struct{ state *methodState }
 type Type struct{ state *typeState }
 type Location struct{ state *locationState }
-type HTTPProxy struct{ state *httpProxyState }
-type RPCContext struct{ state *rpcContextState }
 
 type documentState struct {
 	serviceID    string
@@ -72,6 +81,7 @@ type documentState struct {
 	sources      []provenance.Source
 	sourceIndex  map[string]int
 	sourceDigest provenance.Digest
+	factGraph    sourcecomment.FactGraph
 }
 type fileState struct {
 	path     string
@@ -114,8 +124,6 @@ type serviceState struct {
 type methodState struct {
 	fullName, filePath, name, input, output string
 	clientStreaming, serverStreaming        bool
-	httpProxy                               *httpProxyState
-	rpcContext                              *rpcContextState
 	location                                locationState
 	source                                  provenance.Source
 	canonicalSource                         []byte
@@ -128,17 +136,6 @@ type typeState struct {
 type locationState struct {
 	file         string
 	line, column int
-}
-type httpProxyState struct {
-	operationID, path, permission string
-	method                        HTTPMethod
-	auth                          authState
-	requestFields                 []*requestFieldState
-	responseFields                []*responseFieldState
-	errors                        []*errorProjectionState
-}
-type rpcContextState struct {
-	contextFields []*contextFieldState
 }
 
 func (d Document) ServiceID() string {
@@ -184,6 +181,13 @@ func (d Document) Method(fullName string) (Method, bool) {
 	}
 	value, ok := d.state.methods[fullName]
 	return Method{state: value}, ok
+}
+
+func (d Document) FactGraph() sourcecomment.FactGraph {
+	if d.state == nil {
+		return sourcecomment.FactGraph{}
+	}
+	return d.state.factGraph
 }
 
 func (f File) Path() string {
@@ -421,18 +425,6 @@ func (m Method) Output() string {
 }
 func (m Method) ClientStreaming() bool { return m.state != nil && m.state.clientStreaming }
 func (m Method) ServerStreaming() bool { return m.state != nil && m.state.serverStreaming }
-func (m Method) HTTPProxy() (HTTPProxy, bool) {
-	if m.state == nil || m.state.httpProxy == nil {
-		return HTTPProxy{}, false
-	}
-	return HTTPProxy{state: m.state.httpProxy}, true
-}
-func (m Method) RPCContext() RPCContext {
-	if m.state == nil {
-		return RPCContext{}
-	}
-	return RPCContext{state: m.state.rpcContext}
-}
 func (m Method) Location() Location {
 	if m.state == nil {
 		return Location{}

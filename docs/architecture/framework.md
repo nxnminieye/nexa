@@ -28,9 +28,9 @@ optional runtime package --------------------------------> consumer runtime
 
 领域事实尽量留在最近 owner：
 
-- Ent schema 使用 `nexaent` typed annotations 表达 schema、field、CRUD 和 tenant scope；
-- Proto 拥有 RPC/message/method 及其 typed transport metadata；
-- `.api` 拥有 native HTTP route/type/field；
+- Ent schema 用原生语法表达结构，并用严格 `@nexa` directive 补充 schema、field、CRUD 和 tenant scope；
+- Proto 拥有 RPC/message/method，并只用严格 `@nexa` directive 补充需要投影为 HTTP 的事实；
+- `.api` 拥有 native HTTP route/type/field，并用同一 Source Comment registry 补充 auth/permission；
 - Service Catalog 只表达服务拓扑和 service-to-capability binding；
 - manifest 和 source lock 没有人工 authoring surface，由 owner package 从当前输入重建。
 

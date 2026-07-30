@@ -3,12 +3,12 @@
 package entityvalue
 
 import (
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
 const (
-	apiVersion          = "nexa.dev/entity-ir/v2"
+	apiVersion          = "nexa.dev/entity-ir/v3"
 	kind                = "EntityIR"
 	sourceSetAPIVersion = "nexa.dev/entity-source-set/v1"
 )
@@ -22,8 +22,8 @@ type Projection struct {
 type EntityProjection struct {
 	Name      string
 	SourceRef provenance.SourceRef
-	Meta      nexaent.SchemaMeta
-	CRUD      *nexaent.CRUDSpec
+	Meta      sourcecomment.SchemaFacts
+	CRUD      *sourcecomment.CRUDOperations
 	Identity  IdentityProjection
 	Fields    []FieldProjection
 	Edges     []EdgeProjection
@@ -58,7 +58,7 @@ type FieldProjection struct {
 	Sensitive     bool
 	IsIdentity    bool
 	IsTenantField bool
-	Meta          nexaent.FieldMeta
+	Meta          sourcecomment.FieldFacts
 }
 
 type EnumValue struct {
@@ -85,8 +85,8 @@ type entityState struct {
 	name            string
 	source          provenance.Source
 	canonicalSource []byte
-	meta            nexaent.SchemaMeta
-	crud            nexaent.CRUDSpec
+	meta            sourcecomment.SchemaFacts
+	crud            sourcecomment.CRUDOperations
 	hasCRUD         bool
 	identity        *identityState
 	fields          []*fieldState
@@ -114,7 +114,7 @@ type fieldState struct {
 	sensitive       bool
 	isIdentity      bool
 	isTenantField   bool
-	meta            nexaent.FieldMeta
+	meta            sourcecomment.FieldFacts
 }
 
 type identityState struct {
@@ -246,15 +246,15 @@ func (e Entity) CanonicalSourceJSON() []byte {
 	}
 	return append([]byte(nil), e.state.canonicalSource...)
 }
-func (e Entity) Meta() nexaent.SchemaMeta {
+func (e Entity) Meta() sourcecomment.SchemaFacts {
 	if e.state == nil {
-		return nexaent.SchemaMeta{}
+		return sourcecomment.SchemaFacts{}
 	}
-	return cloneSchemaMeta(e.state.meta)
+	return cloneSchemaFacts(e.state.meta)
 }
-func (e Entity) CRUD() (nexaent.CRUDSpec, bool) {
+func (e Entity) CRUD() (sourcecomment.CRUDOperations, bool) {
 	if e.state == nil || !e.state.hasCRUD {
-		return nexaent.CRUDSpec{}, false
+		return sourcecomment.CRUDOperations{}, false
 	}
 	return e.state.crud, true
 }
@@ -434,23 +434,19 @@ func (f Field) HasDefault() bool    { return f.state != nil && f.state.hasDefaul
 func (f Field) Sensitive() bool     { return f.state != nil && f.state.sensitive }
 func (f Field) IsIdentity() bool    { return f.state != nil && f.state.isIdentity }
 func (f Field) IsTenantField() bool { return f.state != nil && f.state.isTenantField }
-func (f Field) Meta() nexaent.FieldMeta {
+func (f Field) Meta() sourcecomment.FieldFacts {
 	if f.state == nil {
-		return nexaent.FieldMeta{}
+		return sourcecomment.FieldFacts{}
 	}
-	return cloneFieldMeta(f.state.meta)
+	return cloneFieldFacts(f.state.meta)
 }
 
-func cloneSchemaMeta(meta nexaent.SchemaMeta) nexaent.SchemaMeta { return meta }
-func cloneFieldMeta(meta nexaent.FieldMeta) nexaent.FieldMeta {
+func cloneSchemaFacts(meta sourcecomment.SchemaFacts) sourcecomment.SchemaFacts { return meta }
+func cloneFieldFacts(meta sourcecomment.FieldFacts) sourcecomment.FieldFacts {
 	result := meta
-	if meta.PhysicalDisplay != nil {
-		value := *meta.PhysicalDisplay
-		result.PhysicalDisplay = &value
-	}
-	if meta.LogicalReference != nil {
-		value := *meta.LogicalReference
-		result.LogicalReference = &value
+	if meta.Reference != nil {
+		value := *meta.Reference
+		result.Reference = &value
 	}
 	if meta.CRUD != nil {
 		value := *meta.CRUD

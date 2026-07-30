@@ -11,7 +11,7 @@ import (
 const (
 	messageNodeAPIVersion = "nexa.dev/proto-message-node/v1"
 	fieldNodeAPIVersion   = "nexa.dev/proto-field-node/v1"
-	methodNodeAPIVersion  = "nexa.dev/proto-method-node/v2"
+	methodNodeAPIVersion  = "nexa.dev/proto-method-node/v3"
 )
 
 type canonicalSource struct {
@@ -41,63 +41,13 @@ type canonicalFieldNode struct {
 	Oneof       string        `json:"oneof,omitempty"`
 }
 type canonicalMethodNode struct {
-	APIVersion      string               `json:"apiVersion"`
-	Kind            string               `json:"kind"`
-	FullName        string               `json:"fullName"`
-	Input           string               `json:"input"`
-	Output          string               `json:"output"`
-	ClientStreaming bool                 `json:"clientStreaming"`
-	ServerStreaming bool                 `json:"serverStreaming"`
-	HTTPProxy       *canonicalHTTPProxy  `json:"httpProxy,omitempty"`
-	RPCContext      *canonicalRPCContext `json:"rpcContext,omitempty"`
-}
-type canonicalHTTPProxy struct {
-	OperationID    string                     `json:"operationId"`
-	Method         HTTPMethod                 `json:"method"`
-	Path           string                     `json:"path"`
-	Auth           canonicalAuth              `json:"auth"`
-	Permission     string                     `json:"permission"`
-	RequestFields  []canonicalRequestField    `json:"requestFields"`
-	ResponseFields []canonicalResponseField   `json:"responseFields"`
-	Errors         []canonicalErrorProjection `json:"errors"`
-}
-type canonicalRPCContext struct {
-	ContextFields []canonicalContextField `json:"contextFields"`
-}
-type canonicalAuth struct {
-	Mode        AuthMode              `json:"mode"`
-	Credentials []canonicalCredential `json:"credentials"`
-}
-type canonicalCredential struct {
-	ID   string             `json:"id"`
-	Type CredentialType     `json:"type"`
-	In   CredentialLocation `json:"in"`
-	Name string             `json:"name"`
-}
-type canonicalRequestField struct {
-	HTTPField string   `json:"httpField"`
-	RPCPath   []string `json:"rpcPath"`
-}
-type canonicalContextField struct {
-	Source  ContextValue `json:"source"`
-	RPCPath []string     `json:"rpcPath"`
-}
-type canonicalResponseField struct {
-	RPCPath   []string `json:"rpcPath"`
-	HTTPField string   `json:"httpField"`
-}
-type canonicalErrorProjection struct {
-	Match   canonicalErrorMatch  `json:"match"`
-	Project canonicalErrorTarget `json:"project"`
-}
-type canonicalErrorMatch struct {
-	Domain string `json:"domain"`
-	Code   string `json:"code"`
-}
-type canonicalErrorTarget struct {
-	Domain     string `json:"domain"`
-	Code       string `json:"code"`
-	HTTPStatus int    `json:"httpStatus"`
+	APIVersion      string `json:"apiVersion"`
+	Kind            string `json:"kind"`
+	FullName        string `json:"fullName"`
+	Input           string `json:"input"`
+	Output          string `json:"output"`
+	ClientStreaming bool   `json:"clientStreaming"`
+	ServerStreaming bool   `json:"serverStreaming"`
 }
 
 type canonicalDocument struct {
@@ -142,14 +92,12 @@ type canonicalService struct {
 	Methods  []canonicalMethod `json:"methods"`
 }
 type canonicalMethod struct {
-	FullName        string               `json:"fullName"`
-	Input           string               `json:"input"`
-	Output          string               `json:"output"`
-	ClientStreaming bool                 `json:"clientStreaming"`
-	ServerStreaming bool                 `json:"serverStreaming"`
-	HTTPProxy       *canonicalHTTPProxy  `json:"httpProxy,omitempty"`
-	RPCContext      *canonicalRPCContext `json:"rpcContext,omitempty"`
-	SourceRef       string               `json:"sourceRef"`
+	FullName        string `json:"fullName"`
+	Input           string `json:"input"`
+	Output          string `json:"output"`
+	ClientStreaming bool   `json:"clientStreaming"`
+	ServerStreaming bool   `json:"serverStreaming"`
+	SourceRef       string `json:"sourceRef"`
 }
 type canonicalSourceSet struct {
 	APIVersion string            `json:"apiVersion"`
@@ -186,7 +134,7 @@ func finalizeSources(state *documentState) error {
 		}
 		for _, service := range file.services {
 			for _, method := range service.methods {
-				node := canonicalMethodNode{APIVersion: methodNodeAPIVersion, Kind: "method", FullName: method.fullName, Input: method.input, Output: method.output, ClientStreaming: method.clientStreaming, ServerStreaming: method.serverStreaming, HTTPProxy: canonicalProxy(method.httpProxy), RPCContext: canonicalRPCContextValue(method.rpcContext)}
+				node := canonicalMethodNode{APIVersion: methodNodeAPIVersion, Kind: "method", FullName: method.fullName, Input: method.input, Output: method.output, ClientStreaming: method.clientStreaming, ServerStreaming: method.serverStreaming}
 				encoded, err := canonicalize(node)
 				if err != nil {
 					return err
@@ -231,37 +179,6 @@ func canonicalTypeValue(value *typeState) canonicalType {
 	return result
 }
 
-func canonicalProxy(value *httpProxyState) *canonicalHTTPProxy {
-	if value == nil {
-		return nil
-	}
-	result := &canonicalHTTPProxy{OperationID: value.operationID, Method: value.method, Path: value.path, Auth: canonicalAuth{Mode: value.auth.mode, Credentials: make([]canonicalCredential, len(value.auth.credentials))}, Permission: value.permission, RequestFields: make([]canonicalRequestField, len(value.requestFields)), ResponseFields: make([]canonicalResponseField, len(value.responseFields)), Errors: make([]canonicalErrorProjection, len(value.errors))}
-	for i, item := range value.auth.credentials {
-		result.Auth.Credentials[i] = canonicalCredential{ID: item.id, Type: item.typeID, In: item.location, Name: item.name}
-	}
-	for i, item := range value.requestFields {
-		result.RequestFields[i] = canonicalRequestField{HTTPField: item.httpField, RPCPath: append([]string(nil), item.rpcPath...)}
-	}
-	for i, item := range value.responseFields {
-		result.ResponseFields[i] = canonicalResponseField{HTTPField: item.httpField, RPCPath: append([]string(nil), item.rpcPath...)}
-	}
-	for i, item := range value.errors {
-		result.Errors[i] = canonicalErrorProjection{Match: canonicalErrorMatch{Domain: item.match.domain, Code: item.match.code}, Project: canonicalErrorTarget{Domain: item.project.domain, Code: item.project.code, HTTPStatus: item.project.httpStatus}}
-	}
-	return result
-}
-
-func canonicalRPCContextValue(value *rpcContextState) *canonicalRPCContext {
-	if value == nil {
-		return nil
-	}
-	result := &canonicalRPCContext{ContextFields: make([]canonicalContextField, len(value.contextFields))}
-	for i, item := range value.contextFields {
-		result.ContextFields[i] = canonicalContextField{Source: item.source, RPCPath: append([]string(nil), item.rpcPath...)}
-	}
-	return result
-}
-
 func CanonicalJSON(document Document) ([]byte, error) {
 	if document.state == nil {
 		return nil, protocolError("protocol_ir_invalid", "document_invalid", "", "/document", "Protocol document is invalid")
@@ -290,7 +207,7 @@ func CanonicalJSON(document Document) ([]byte, error) {
 		for j, service := range file.services {
 			serviceWire := canonicalService{FullName: service.fullName, Methods: make([]canonicalMethod, len(service.methods))}
 			for k, method := range service.methods {
-				serviceWire.Methods[k] = canonicalMethod{FullName: method.fullName, Input: method.input, Output: method.output, ClientStreaming: method.clientStreaming, ServerStreaming: method.serverStreaming, HTTPProxy: canonicalProxy(method.httpProxy), RPCContext: canonicalRPCContextValue(method.rpcContext), SourceRef: method.source.Ref.String()}
+				serviceWire.Methods[k] = canonicalMethod{FullName: method.fullName, Input: method.input, Output: method.output, ClientStreaming: method.clientStreaming, ServerStreaming: method.serverStreaming, SourceRef: method.source.Ref.String()}
 			}
 			item.Services[j] = serviceWire
 		}

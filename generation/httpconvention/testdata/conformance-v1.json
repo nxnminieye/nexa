@@ -1,59 +1,18 @@
 {
   "apiVersion": "nexa.dev/http-convention/v1",
   "kind": "HTTPConventionConformance",
-  "namingCases": [
-    {"source": "TenantID", "accepted": true, "canonical": "tenantId"},
-    {"source": "created_at", "accepted": true, "canonical": "createdAt"},
-    {"source": "tenant-id", "accepted": false}
-  ],
   "requestCases": [
-    {
-      "name": "list-records",
-      "method": "GET",
-      "path": "/api/records",
-      "fields": ["page", "pageSize", "query"],
-      "locations": ["query", "query", "query"]
-    },
-    {
-      "name": "update-record",
-      "method": "PATCH",
-      "path": "/api/records/{id}",
-      "fields": ["id", "expectedVersion", "name"],
-      "locations": ["path", "body", "body"]
-    },
-    {
-      "name": "delete-record",
-      "method": "DELETE",
-      "path": "/api/records/{id}",
-      "fields": ["id"],
-      "locations": ["path"]
-    }
+    {"name": "list-records", "method": "GET", "path": "/records", "fields": ["limit", "offset", "query"], "locations": ["query", "query", "query"]},
+    {"name": "update-record", "method": "PATCH", "path": "/records/{id}", "fields": ["id", "name"], "locations": ["path", "body"]}
   ],
   "successCases": [
-    {"method": "GET", "path": "/api/records", "hasRepresentation": true, "status": 200},
-    {"method": "POST", "path": "/api/records", "hasRepresentation": true, "status": 201},
-    {"method": "POST", "path": "/api/records/{id}/actions/archive", "hasRepresentation": true, "status": 200},
-    {"method": "PATCH", "path": "/api/records/{id}", "hasRepresentation": true, "status": 200},
-    {"method": "DELETE", "path": "/api/records/{id}", "hasRepresentation": false, "status": 204}
+    {"method": "GET", "path": "/records", "status": 200},
+    {"method": "POST", "path": "/records", "status": 200},
+    {"method": "DELETE", "path": "/records/{id}", "status": 200}
   ],
   "paginationCases": [
-    {"page": 1, "pageSize": 20, "accepted": true},
-    {"page": 0, "pageSize": 20, "accepted": false},
-    {"page": 1, "pageSize": 101, "accepted": false}
-  ],
-  "problemCases": [
-    {"category": "invalid_input", "code": "record_invalid", "status": 400, "type": "https://nexa.dev/problems/v1/invalid-input"},
-    {"category": "failed_precondition", "code": "record_version_mismatch", "status": 422, "type": "https://nexa.dev/problems/v1/failed-precondition"},
-    {"category": "not_ready", "code": "database_not_ready", "status": 503, "type": "https://nexa.dev/problems/v1/not-ready"}
-  ],
-  "scalarCases": [
-    {"kind": "decimal", "value": "-9223372036854775808", "accepted": true},
-    {"kind": "decimal", "value": "01", "accepted": false},
-    {"kind": "id", "value": "record-01", "accepted": true},
-    {"kind": "id", "value": "", "accepted": false},
-    {"kind": "timestamp", "value": "2026-07-28T03:04:05Z", "accepted": true},
-    {"kind": "timestamp", "value": "2026-07-28T11:04:05+08:00", "accepted": false},
-    {"kind": "date", "value": "2026-07-28", "accepted": true},
-    {"kind": "date", "value": "2026-02-30", "accepted": false}
+    {"limit": 20, "offset": 0, "accepted": true},
+    {"limit": 0, "offset": 0, "accepted": false},
+    {"limit": 20, "offset": -1, "accepted": false}
   ]
 }

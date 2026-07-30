@@ -139,8 +139,12 @@ func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invoc
 	if err := rejectAPISourceSymlink(repository, filepath.FromSlash(entry)); err != nil {
 		return nil, inputError("fact_source_invalid", "provider", "api_entry_unverified", "/project/services/api/entryFile", "")
 	}
-	if _, err := httpapi.Load(ctx, httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: entry}); err != nil {
+	document, err := httpapi.Load(ctx, httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: entry})
+	if err != nil {
 		return nil, inputError("fact_source_invalid", "provider", "api_source_invalid", "/project/services/api/entryFile", "")
+	}
+	if err := httpapi.ValidateConvention(document); err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "api_convention_invalid", "/project/services/api/entryFile", "")
 	}
 	return r.generateWithArgs(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, nil, []string{"--entry-file", entry}, invocation)
 }
@@ -197,7 +201,7 @@ func (r *commandRunner) generateFrontend(ctx context.Context, invocation plugin.
 	if err := validateDirectResult(result, project.Tool); err != nil {
 		return nil, err
 	}
-	if project.Facts.PageCount() == 0 {
+	if project.Facts.PageCount() == 0 && project.Facts.OperationCount() == 0 {
 		entries, readErr := os.ReadDir(filepath.Join(repository, filepath.FromSlash(prepared.GeneratedScope())))
 		if readErr != nil || len(entries) != 0 {
 			return nil, inputError("tool_result_invalid", "result", "frontend_empty_output_invalid", "/result/generatedScope", project.Tool.ID)

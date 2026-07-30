@@ -8,9 +8,9 @@ import (
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-const protocolSchemaURL = "https://nexa.dev/schemas/generation/protocol/protocol-ir-v2.schema.json"
+const protocolSchemaURL = "https://nexa.dev/schemas/generation/protocol/protocol-ir-v3.schema.json"
 
-//go:embed protocol-ir-v2.schema.json
+//go:embed protocol-ir-v3.schema.json
 var embeddedProtocolSchema []byte
 
 var protocolSchemaOnce sync.Once

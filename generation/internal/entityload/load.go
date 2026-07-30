@@ -15,6 +15,7 @@ import (
 	"github.com/nxnminieye/nexa/generation/internal/buildinput"
 	"github.com/nxnminieye/nexa/generation/internal/entexec"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -63,30 +64,79 @@ func LoadCurrentProcess(ctx context.Context, spec entexec.Spec) (document entity
 	if err != nil {
 		return entity.Document{}, err
 	}
-	projection, err := projectLoadedGraph(graph, moduleSources, retainedSourceResolver(run, spec.RepositoryRoot, spec.SchemaDir, inputs), spec.SchemaDir)
+	commentSources, err := retainedEntCommentSources(run, spec.SchemaDir, inputs)
+	if err != nil {
+		return entity.Document{}, err
+	}
+	facts, diagnostics, err := parseEntFactGraph(graph, commentSources)
+	if err != nil {
+		return entity.Document{}, err
+	}
+	if len(diagnostics) > 0 {
+		return entity.Document{}, sourceCommentDiagnosticsError(diagnostics)
+	}
+	projection, err := projectLoadedGraph(graph, facts, moduleSources, retainedSourceResolver(run, spec.RepositoryRoot, spec.SchemaDir, inputs), spec.SchemaDir)
 	if err != nil {
 		return entity.Document{}, err
 	}
 	if err := run.VerifyPostLoad(); err != nil {
 		return entity.Document{}, err
 	}
-	return adoptProjection(projection, spec.SchemaDir)
+	return adoptProjection(projection, facts, spec.SchemaDir)
 }
 
-func projectLoadedGraph(graph *gen.Graph, moduleSources []provenance.Source, resolve sourceResolver, source provenance.DomainSource) (entityvalue.Projection, error) {
-	projection, err := projectGraph(graph, moduleSources, resolve)
+func projectLoadedGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources []provenance.Source, resolve sourceResolver, source provenance.DomainSource) (entityvalue.Projection, error) {
+	projection, err := projectGraph(graph, facts, moduleSources, resolve)
 	if err != nil {
 		return entityvalue.Projection{}, entity.AdoptLoadedDocumentError(err, source)
 	}
 	return projection, nil
 }
 
-func adoptProjection(projection entityvalue.Projection, source provenance.DomainSource) (entity.Document, error) {
+func retainedEntCommentSources(run *entexec.Run, schemaDir provenance.DomainSource, inputs []buildinput.RetainedBuildInput) ([]entCommentSource, error) {
+	result := make([]entCommentSource, 0)
+	schema := schemaDir.String()
+	for _, input := range inputs {
+		if input.Kind != "go" || !input.Module.HasRepositoryPath || !strings.HasSuffix(input.Path, ".go") {
+			continue
+		}
+		root := strings.Trim(filepath.ToSlash(input.Module.RepositoryPath), "/")
+		if root == "." {
+			root = ""
+		}
+		path := strings.Trim(strings.TrimPrefix(root+"/"+filepath.ToSlash(input.Path), "/"), "/")
+		if path != schema && !strings.HasPrefix(path, schema+"/") {
+			continue
+		}
+		source, err := provenance.ParseDomainSource(path)
+		if err != nil {
+			return nil, fmt.Errorf("invalid retained Ent source %q: %w", path, err)
+		}
+		data, err := run.ReadRetainedInput(input)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entCommentSource{path: source, data: data})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].path.String() < result[j].path.String() })
+	return result, nil
+}
+
+func sourceCommentDiagnosticsError(values []sourcecomment.Diagnostic) error {
+	first := values[0]
+	location := first.File
+	if first.Line > 0 {
+		location += ":" + strconv.Itoa(first.Line)
+	}
+	return fmt.Errorf("%s: %s (%s): %s", location, first.Code, first.Category, first.Suggestion)
+}
+
+func adoptProjection(projection entityvalue.Projection, facts sourcecomment.FactGraph, source provenance.DomainSource) (entity.Document, error) {
 	value, err := entityvalue.NewDocument(projection)
 	if err != nil {
 		return entity.Document{}, entity.AdoptLoadedDocumentError(err, source)
 	}
-	return entity.AdoptLoadedDocument(value)
+	return entity.AdoptLoadedDocumentWithFactGraph(value, facts)
 }
 
 func schemaImportPath(run *entexec.Run, schemaDir provenance.DomainSource) (string, error) {

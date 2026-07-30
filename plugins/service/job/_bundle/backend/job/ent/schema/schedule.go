@@ -1,26 +1,55 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 package schema
 
 import (
 	"entgo.io/ent"
-	entschema "entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
-	"github.com/nxnminieye/nexa/nexaent"
 )
 
+// @nexa label.zh-CN: "任务计划"
+// @nexa label.en-US: "Job schedule"
+// @nexa description.zh-CN: "任务计划"
+// @nexa description.en-US: "Job schedule"
+// @nexa scope: "global"
 type Schedule struct{ ent.Schema }
 
 func (Schedule) Config() ent.Config { return ent.Config{Table: "job_schedules"} }
 
-func (Schedule) Annotations() []entschema.Annotation {
-	return []entschema.Annotation{nexaent.Schema(schemaMeta("schedule", "任务计划", "Job schedule"))}
-}
-
 func (Schedule) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("key").Unique().Immutable().Annotations(fieldMeta("schedule.key", "计划标识", "Schedule key", nexaent.UIHintReadonly, nexaent.VisibilityPublic)),
-		field.String("cron").Annotations(fieldMeta("schedule.cron", "Cron 表达式", "Cron expression", nexaent.UIHintText, nexaent.VisibilityPublic)),
-		field.String("task_id").Annotations(fieldMeta("schedule.task_id", "任务标识", "Task ID", nexaent.UIHintReference, nexaent.VisibilityPublic)),
-		field.Bytes("payload").Optional().Annotations(fieldMeta("schedule.payload", "任务载荷", "Task payload", nexaent.UIHintJSON, nexaent.VisibilityPublic)),
-		field.Bool("enabled").Default(true).Annotations(fieldMeta("schedule.enabled", "启用", "Enabled", nexaent.UIHintSwitch, nexaent.VisibilityPublic)),
+		// @nexa label.zh-CN: "计划标识"
+		// @nexa label.en-US: "Schedule key"
+		// @nexa description.zh-CN: "计划标识"
+		// @nexa description.en-US: "Schedule key"
+		// @nexa ui.control: "readonly"
+		// @nexa visibility: "public"
+		field.String("key").Unique().Immutable(),
+		// @nexa label.zh-CN: "Cron 表达式"
+		// @nexa label.en-US: "Cron expression"
+		// @nexa description.zh-CN: "Cron 表达式"
+		// @nexa description.en-US: "Cron expression"
+		// @nexa ui.control: "text"
+		// @nexa visibility: "public"
+		field.String("cron"),
+		// @nexa label.zh-CN: "任务标识"
+		// @nexa label.en-US: "Task ID"
+		// @nexa description.zh-CN: "任务标识"
+		// @nexa description.en-US: "Task ID"
+		// @nexa ui.control: "reference"
+		// @nexa visibility: "public"
+		field.String("task_id"),
+		// @nexa label.zh-CN: "任务载荷"
+		// @nexa label.en-US: "Task payload"
+		// @nexa description.zh-CN: "任务载荷"
+		// @nexa description.en-US: "Task payload"
+		// @nexa visibility: "public"
+		field.Bytes("payload").Optional(),
+		// @nexa label.zh-CN: "启用"
+		// @nexa label.en-US: "Enabled"
+		// @nexa description.zh-CN: "启用"
+		// @nexa description.en-US: "Enabled"
+		// @nexa ui.control: "switch"
+		// @nexa visibility: "public"
+		field.Bool("enabled").Default(true),
 	}
 }

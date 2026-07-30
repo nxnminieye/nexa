@@ -49,12 +49,13 @@ func TestCoreIAMPostgres(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(4)
-	if applied := applyMigrations(t, ctx, db); applied != 3 {
+	if applied := applyMigrations(t, ctx, db); applied != 4 {
 		t.Fatalf("fresh migrations = %d", applied)
 	}
 	if applied := applyMigrations(t, ctx, db); applied != 0 {
 		t.Fatalf("second migrations = %d", applied)
 	}
+	assertCoreShellMigration(t, ctx, db)
 	assertAccessHashMigrationRejectsDuplicates(t, ctx, db)
 
 	store, err := coreapp.NewPostgresStore(db)
@@ -99,16 +100,25 @@ func TestCoreIAMPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provision, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-a", DisplayName: "Tenant A", OwnerAccountID: account.ID})
+	provision, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-a", DisplayName: "Tenant A", OwnerAccountID: account.ID, DefaultRouter: "/home"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-a", DisplayName: "Tenant A", OwnerAccountID: account.ID})
+	again, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-a", DisplayName: "Tenant A", OwnerAccountID: account.ID, DefaultRouter: "/home"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if provision.Owner.ID != again.Owner.ID {
 		t.Fatal("provision was not idempotent")
+	}
+	var defaultRouter string
+	if err = db.QueryRowContext(ctx, `SELECT r.default_router
+FROM roles r JOIN tenants t ON t.id=r.tenant_id
+WHERE t.code='tenant-a' AND r.managed=TRUE AND r.source_owner='core.tenant-provision' AND r.source_key='tenant-owner'`).Scan(&defaultRouter); err != nil {
+		t.Fatal(err)
+	}
+	if defaultRouter != "/home" {
+		t.Fatalf("provisioned default router = %q", defaultRouter)
 	}
 
 	tenantID := provision.Tenant.ID
@@ -124,7 +134,7 @@ func TestCoreIAMPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-b", DisplayName: "Tenant B", OwnerAccountID: bob.ID})
+	other, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-b", DisplayName: "Tenant B", OwnerAccountID: bob.ID, DefaultRouter: "/home"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +267,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatal(err)
 	}
 	sourceAPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}, {Code: "legacy"}}
-	sourceAMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home"}, {Code: "legacy-menu", DisplayName: "Legacy"}}
+	sourceAMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home", RouteName: "home", Path: "/home", Component: "home", PermissionCode: "read", KeepAlive: true, Visible: true}, {Code: "legacy-menu", DisplayName: "Legacy"}}
 	sourceADigest := catalogDigest(t, sourceAPermissions, sourceAMenus)
 	first, err := catalog.Sync(ctx, coreapp.CatalogSyncInput{SourceID: "source-a", Digest: sourceADigest, Permissions: sourceAPermissions, Menus: sourceAMenus})
 	if err != nil {
@@ -276,7 +286,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatal("repeat catalog sync was not stable")
 	}
 	upgradedPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}}
-	upgradedMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home"}}
+	upgradedMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home", RouteName: "home", Path: "/home", Component: "home", PermissionCode: "read", KeepAlive: true, Visible: true}}
 	upgradedDigest := catalogDigest(t, upgradedPermissions, upgradedMenus)
 	upgraded, err := catalog.Sync(ctx, coreapp.CatalogSyncInput{SourceID: "source-a", Digest: upgradedDigest, Permissions: upgradedPermissions, Menus: upgradedMenus})
 	if err != nil {
@@ -337,7 +347,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatalf("menu list=%#v err=%v", menus, err)
 	}
 	menuReadback, err := iam.GetMenu(ctx, "home")
-	if err != nil || menuReadback.DisplayName != "Home" || menuReadback.SourceID != "source-a" {
+	if err != nil || menuReadback.DisplayName != "Home" || menuReadback.SourceID != "source-a" || menuReadback.RouteName != "home" || menuReadback.Path != "/home" || menuReadback.Component != "home" || menuReadback.PermissionCode != "read" || !menuReadback.KeepAlive || !menuReadback.Visible {
 		t.Fatalf("menu get=%#v err=%v", menuReadback, err)
 	}
 	permissions, err := iam.ListPermissions(ctx, coreapp.ListPermissionsInput{ListQuery: coreapp.ListQuery{Status: coreapp.IAMStatusEnabled}})
@@ -364,7 +374,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			result, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-concurrent", DisplayName: "Concurrent", OwnerAccountID: account.ID})
+			result, err := iam.ProvisionTenant(ctx, coreapp.ProvisionTenantInput{TenantCode: "tenant-concurrent", DisplayName: "Concurrent", OwnerAccountID: account.ID, DefaultRouter: "/home"})
 			outcomes <- provisionOutcome{result: result, err: err}
 		}()
 	}
@@ -565,6 +575,22 @@ func assertAccessHashMigrationRejectsDuplicates(t *testing.T, ctx context.Contex
 	}
 	if _, err = tx.ExecContext(ctx, string(data)); err == nil {
 		t.Fatal("access hash migration accepted existing duplicates")
+	}
+}
+
+func assertCoreShellMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	var columns int
+	err := db.QueryRowContext(ctx, `SELECT count(*)
+FROM information_schema.columns
+WHERE table_schema=current_schema()
+  AND ((table_name='roles' AND column_name='default_router')
+    OR (table_name='menus' AND column_name IN ('route_name','permission_code','keep_alive','visible')))`).Scan(&columns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if columns != 5 {
+		t.Fatalf("core shell migration columns = %d", columns)
 	}
 }
 

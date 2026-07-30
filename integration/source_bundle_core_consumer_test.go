@@ -100,34 +100,29 @@ func TestSourceBundleCoreCompositionRendersTypedArtifacts(t *testing.T) {
 	}
 }
 
-func TestSourceBundleCoreDetachedFrontendAndMigrationFactsValidateStructurally(t *testing.T) {
+func TestSourceBundleCoreDetachedMigrationFactsValidateStructurally(t *testing.T) {
 	temporary := canonicalIntegrationDirectory(t, t.TempDir())
 	bundle := filepath.Join(repositoryRoot(t), "plugins", "service", "core", "_bundle")
 	if err := os.CopyFS(temporary, os.DirFS(bundle)); err != nil {
 		t.Fatal(err)
 	}
-	validateDetachedFrontendFacts(t, temporary)
 	validateDetachedMigrationFacts(t, temporary)
 }
 
-type sourceBundleProtocolResolver struct{ root, framework string }
+type sourceBundleProtocolResolver struct{ root string }
 
 func (resolver sourceBundleProtocolResolver) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if name == "nexa/protocol/v1/options.proto" {
-		name = filepath.Join(resolver.framework, "generation", "protocol", "nexa", "protocol", "v1", "options.proto")
-	} else {
-		name = filepath.Join(resolver.root, filepath.FromSlash(name))
-	}
+	name = filepath.Join(resolver.root, filepath.FromSlash(name))
 	return os.Open(name)
 }
 
 func compileSourceBundleProtocol(t *testing.T, root, service string) generationprotocol.Document {
 	t.Helper()
 	entry := "backend/" + service + "/desc/" + service + ".proto"
-	resolver := sourceBundleProtocolResolver{root: root, framework: repositoryRoot(t)}
+	resolver := sourceBundleProtocolResolver{root: root}
 	document, err := generationprotocol.Compile(context.Background(), generationprotocol.CompileOptions{ServiceID: service, EntryFiles: []string{entry}, Resolver: resolver})
 	if err != nil {
 		t.Fatalf("compile %s ProtocolIR fixture: %v", service, err)

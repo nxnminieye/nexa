@@ -37,7 +37,7 @@ func TestDG2TypedHTTPProjectionExternalConsumer(t *testing.T) {
 
 	protocolDocument, err := protocol.Compile(context.Background(), protocol.CompileOptions{
 		ServiceID: "account", EntryFiles: []string{"backend/account/desc/account.proto"},
-		Resolver: dg2ProtocolResolver{consumer: consumer, framework: repositoryRoot(t)},
+		Resolver: dg2ProtocolResolver{consumer: consumer},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,11 +66,9 @@ func TestDG2TypedHTTPProjectionExternalConsumer(t *testing.T) {
 				t.Fatalf("parse rendered API: %v", parseErr)
 			}
 			rendered[artifact.ID] = true
-		case "client.account":
-			rendered[artifact.ID] = true
 		}
 	}
-	if !rendered["api.account"] || !rendered["client.account"] {
+	if !rendered["api.account"] {
 		t.Fatalf("composition.Render artifacts = %#v", rendered)
 	}
 
@@ -151,12 +149,9 @@ func runDG2Generation(t *testing.T, cli *host.Host, consumer string) {
 	}
 }
 
-type dg2ProtocolResolver struct{ consumer, framework string }
+type dg2ProtocolResolver struct{ consumer string }
 
 func (resolver dg2ProtocolResolver) Open(_ context.Context, name string) (io.ReadCloser, error) {
-	if name == "nexa/protocol/v1/options.proto" {
-		return os.Open(filepath.Join(resolver.framework, "generation", "protocol", "nexa", "protocol", "v1", "options.proto"))
-	}
 	return os.Open(filepath.Join(resolver.consumer, filepath.FromSlash(name)))
 }
 
@@ -184,30 +179,30 @@ services:
         apiVersion: %s
 `
 
-const dg2NativeAPI = `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
+const dg2NativeAPI = `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
 type HealthRequest {}
 type HealthResponse { Ready bool }
-@server (nexaOperationId: "core.health" nexaAuthMode: "none")
-service core-api { @handler health get /health (HealthRequest) returns (HealthResponse) }
+service core-api {
+  // @nexa auth: "none"
+  @handler Health
+  get /health (HealthRequest) returns (HealthResponse)
+}
 `
 
-const dg2ProtocolSource = `syntax = "proto3";
+const dg2ProtocolSource = `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "proto3";
 package account.v1;
-import "nexa/protocol/v1/options.proto";
 enum State { STATE_UNSPECIFIED = 0; STATE_ACTIVE = 1; }
 message Settings { string locale = 1; }
 message Member { string id = 1; repeated string role_codes = 2; Settings settings = 3; }
 message ReplaceRequest { repeated string role_codes = 1; repeated State states = 2; Settings settings = 3; repeated Member items = 4; }
-message ReplaceResponse { int64 total = 1; repeated Member items = 2; }
-service AccountService { rpc Replace(ReplaceRequest) returns (ReplaceResponse) {
-  option (nexa.protocol.v1.http_proxy) = { operation_id: "account.replace" method: POST path: "/accounts/replace" auth: { mode: NONE }
-    request_fields: { http_field: "roleCodes" rpc_field: "role_codes" }
-    request_fields: { http_field: "states" rpc_field: "states" }
-    request_fields: { http_field: "settings" rpc_field: "settings" }
-    request_fields: { http_field: "items" rpc_field: "items" }
-    response_fields: { rpc_field: "total" http_field: "total" }
-    response_fields: { rpc_field: "items" http_field: "items" }
-  };
-} }
+message ReplaceResponse { int64 revision = 1; repeated Member members = 2; }
+service AccountService {
+  // @nexa auth: "none"
+  // @nexa http.method: "POST"
+  // @nexa http.path: "/accounts/replace"
+  rpc Replace(ReplaceRequest) returns (ReplaceResponse);
+}
 `

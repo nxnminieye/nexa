@@ -26,7 +26,7 @@ contracts:
 	GOWORK=off GOTOOLCHAIN=local GOENV=off go test ./integration -run 'TestBusinessContractExternalConsumer|TestAPIContractDoesNotChangeMinimalHostComposition|TestReferenceNexactlInspect' -count=1
 
 generation-contracts:
-	GOWORK=off GOTOOLCHAIN=local GOENV=off go test ./nexaent ./generation/... -count=1
+	GOWORK=off GOTOOLCHAIN=local GOENV=off go test ./generation/... -count=1
 
 generated-check: generation-contracts
 	GOWORK=off GOTOOLCHAIN=local GOENV=off go test ./plugins/nexactl/generation -count=1

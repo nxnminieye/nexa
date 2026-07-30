@@ -17,6 +17,10 @@ Core service source bundle 提供中性的 IAM 存储与 RPC 契约。Consumer �
 全部 tenant-scoped mutation 使用数据库中的 numeric tenant ID；tenant code 与 numeric
 tenant ID 不得混用或由 adapter 静默猜测。
 
+公开登录 DTO 只包含用户名和密码。登录所需 tenant code 由 consumer 拥有的全局请求上下文或
+部署配置确定；撤销 DTO 为空，待撤销 session ID 只来自已经认证的 `AccessPrincipal`。两者都不
+作为逐 operation 字段重新进入 DTO，也不允许客户端覆盖。
+
 租户、成员和角色从 `version = 1` 开始。Application mutation 比较并递增该值，版本
 不匹配时返回 `concurrent_write`。身份账号独立使用从 1 开始的
 `credential_version`；密码重置必须递增该值，使旧凭据和 session 失效。
@@ -94,7 +98,7 @@ principal 的 numeric tenant ID 作为服务调用上下文；请求显式携带
 
 ## 所有权
 
-- 人工事实源：service source bundle 中的 Core Proto message/options 和 Ent schema。
+- 人工事实源：service source bundle 中的 Core Proto message 与 `@nexa` source-comment facts，以及 Ent schema。
 - 数据库投影：由 materialized consumer 持有的有序 SQL migration。
 - 派生投影：generated RPC/API transport、CRUD artifact 和 FrontendIR。
 - Consumer 事实：目录条目、角色模板、身份提供方配置、凭据、租户实例和产品文案。

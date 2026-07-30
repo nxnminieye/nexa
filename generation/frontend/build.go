@@ -1,1029 +1,937 @@
 package frontend
 
 import (
-	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
-	"github.com/gowebpki/jcs"
 	"github.com/nxnminieye/nexa/generation/api"
-	"github.com/nxnminieye/nexa/generation/httpapi"
+	"github.com/nxnminieye/nexa/generation/httpconvention"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
-var numericScalars = map[string]bool{"int": true, "int8": true, "int16": true, "int32": true, "int64": true, "uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true, "float": true, "float32": true, "float64": true, "number": true}
-var integerScalars = map[string]bool{"int": true, "int8": true, "int16": true, "int32": true, "int64": true, "uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true}
+type resourceOperations struct {
+	list, create, get, update, delete api.ClosureOperation
+}
 
-func Build(apiDocument httpapi.Document, specs []PageSpec, locales ...Locale) (Document, error) {
-	apiJSON, err := httpapi.CanonicalJSON(apiDocument)
-	if err != nil {
-		return Document{}, buildError("api_invalid", "/api", "HTTP API document is invalid")
+func Build(apiDocument api.Closure, specs []PageSpec) (Document, error) {
+	return BuildApplication(apiDocument, specs, nil)
+}
+
+// BuildApplication builds one application-level FrontendIR. Page operations and
+// explicitly selected shell operations share the same canonical API closure.
+func BuildApplication(apiDocument api.Closure, specs []PageSpec, shellOperationIDs []string) (Document, error) {
+	if apiDocument.Convention() != httpconvention.APIVersion {
+		return Document{}, buildError("http_convention_invalid", "/httpConvention", "frontend API closure must use the Nexa HTTP Convention v1")
 	}
-	apiDigest := provenance.SHA256(apiJSON)
+	facts := apiDocument.FactGraph()
+	if !facts.Valid() {
+		return Document{}, buildError("source_graph_invalid", "/sourceFacts", "frontend API closure must carry one validated source FactGraph")
+	}
 	pages := make([]wirePage, len(specs))
-	pageIDs, routePaths, routeNames, menuIDs, menuOrders := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]int{}, map[string]bool{}
-	contextTypes := map[string]string{}
-	validatedResponseTypes := map[string]bool{}
+	pageIDs, routePaths, routeNames, menuOrders := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	operationPointers := map[string]string{}
 	for index, spec := range specs {
 		base := "/pages/" + strconv.Itoa(index)
 		if spec.state == nil {
 			return Document{}, buildError("page_spec_invalid", base, "frontend page spec is invalid")
 		}
-		page := spec.state.document
-		if pageIDs[page.ID] {
+		projected, selected, failure := projectPage(apiDocument, facts, spec, base)
+		if failure != nil {
+			return Document{}, failure
+		}
+		if pageIDs[projected.ID] {
 			return Document{}, buildError("page_id_duplicate", base+"/id", "frontend page id is duplicated")
 		}
-		pageIDs[page.ID] = true
-		if routePaths[page.Route.Path] {
+		pageIDs[projected.ID] = true
+		if routePaths[projected.Route.Path] {
 			return Document{}, buildError("route_path_duplicate", base+"/route/path", "frontend route path is duplicated")
 		}
-		routePaths[page.Route.Path] = true
-		if routeNames[page.Route.Name] {
+		routePaths[projected.Route.Path] = true
+		if routeNames[projected.Route.Name] {
 			return Document{}, buildError("route_name_duplicate", base+"/route/name", "frontend route name is duplicated")
 		}
-		routeNames[page.Route.Name] = true
-		if page.Menu != nil {
-			if _, ok := menuIDs[page.Menu.ID]; ok {
-				return Document{}, buildError("menu_id_duplicate", base+"/menu/id", "frontend menu id is duplicated")
-			}
-			menuIDs[page.Menu.ID] = index
-			key := page.Menu.ParentID + "\x00" + strconv.Itoa(page.Menu.Order)
+		routeNames[projected.Route.Name] = true
+		if projected.Menu != nil {
+			key := projected.Menu.ParentID + "\x00" + strconv.Itoa(projected.Menu.Order)
 			if menuOrders[key] {
 				return Document{}, buildError("menu_order_duplicate", base+"/menu/order", "menu order is duplicated under the same parent")
 			}
 			menuOrders[key] = true
 		}
-		projected, failure := projectPage(apiDocument, spec, base, contextTypes, validatedResponseTypes)
-		if failure != nil {
-			return Document{}, failure
+		for operationID := range selected {
+			if _, exists := operationPointers[operationID]; !exists {
+				operationPointers[operationID] = base + "/entity"
+			}
 		}
 		pages[index] = projected
 	}
-	if failure := validateMenuGraph(specs, menuIDs); failure != nil {
+	shellPointers := make(map[string]string, len(shellOperationIDs))
+	for index, operationID := range shellOperationIDs {
+		pointer := "/shellOperationIds/" + strconv.Itoa(index)
+		if strings.TrimSpace(operationID) == "" {
+			return Document{}, buildError("operation_id_invalid", pointer, "selected shell operation id must not be empty")
+		}
+		if _, duplicate := shellPointers[operationID]; duplicate {
+			return Document{}, buildError("operation_id_duplicate", pointer, "selected shell operation id is duplicated")
+		}
+		if _, usedByPage := operationPointers[operationID]; usedByPage {
+			return Document{}, buildError("operation_id_duplicate", pointer, "selected shell operation is already owned by a page")
+		}
+		shellPointers[operationID] = pointer
+		operationPointers[operationID] = pointer
+	}
+	if failure := validateMenuGraph(pages); failure != nil {
 		return Document{}, failure
 	}
-	projectedLocales, err := validateAndProjectLocales(specs, locales)
+	selectedClosure, failure := selectClosure(apiDocument, operationPointers)
+	if failure != nil {
+		return Document{}, failure
+	}
+	typeNames, failure := generatedTypeScriptNames(apiDocument)
+	if failure != nil {
+		return Document{}, failure
+	}
+	clientNames, failure := generatedClientNames(apiDocument)
+	if failure != nil {
+		return Document{}, failure
+	}
+	for operationID, pointer := range shellPointers {
+		operation, ok := apiDocument.Operation(operationID)
+		if !ok {
+			continue
+		}
+		if failure := validateOperationConvention(apiDocument, operation, pointer); failure != nil {
+			return Document{}, failure
+		}
+	}
+	projectedLocales, err := projectFactLocales(pages, facts)
 	if err != nil {
 		return Document{}, err
-	}
-	sources, err := mergeSources(apiDocument.Sources(), specs, locales)
-	if err != nil {
-		return Document{}, err
-	}
-	sourceDigest, err := computeSourceDigest(apiDigest, sources)
-	if err != nil {
-		return Document{}, buildError("source_digest_invalid", "/sourceDigest", "frontend source digest cannot be computed")
 	}
 	sort.Slice(pages, func(i, j int) bool { return pages[i].ID < pages[j].ID })
-	wire := wireDocument{APIVersion: APIVersion, Kind: documentKind, APIDigest: apiDigest.String(), SourceDigest: sourceDigest.String(), Sources: wireSources(sources), API: append(json.RawMessage(nil), apiJSON...), Locales: projectedLocales, Pages: pages}
+	operations, failure := closureOperations(selectedClosure, clientNames)
+	if failure != nil {
+		return Document{}, failure
+	}
+	wire := wireDocument{
+		APIVersion: APIVersion, Kind: documentKind, HTTPConvention: httpconvention.APIVersion,
+		Types: closureTypes(selectedClosure, typeNames), Operations: operations, Locales: projectedLocales, Pages: pages,
+	}
 	return Document{state: &documentState{wire: cloneWireDocument(wire)}}, nil
 }
 
-type operationProjection struct {
-	spec  operationDocument
-	api   httpapi.Operation
-	index int
-}
-
-func projectPage(document httpapi.Document, spec PageSpec, base string, globalContexts map[string]string, validatedResponseTypes map[string]bool) (wirePage, *Error) {
-	page := clonePageDocument(spec.state.document)
-	aliases := map[string]operationProjection{}
-	roleCounts := map[string]int{}
-	operations := make([]wireOperation, len(page.Operations))
-	for index, item := range page.Operations {
-		pointer := base + "/operations/" + strconv.Itoa(index)
-		op, ok := document.Operation(item.OperationID)
+func generatedClientNames(closure api.Closure) (map[string]string, *Error) {
+	baseNames := map[string]string{}
+	baseCounts := map[string]int{}
+	for _, operation := range closure.Operations {
+		parts := strings.Split(operation.ID(), ".")
+		base, ok := generatedClientIdentifier(parts[len(parts)-1])
 		if !ok {
-			return wirePage{}, buildError("operation_unresolved", pointer+"/operationId", "API operation does not exist")
+			return nil, buildError("generated_operation_name_invalid", "/operations", "operation id cannot become a TypeScript function identifier")
 		}
-		if op.ResponseBody() == api.ResponseBodyJSON && !validatedResponseTypes[op.ResponseType()] {
-			if failure := validateResponseWireClosure(document, op.ResponseType()); failure != nil {
-				return wirePage{}, failure
-			}
-			validatedResponseTypes[op.ResponseType()] = true
-		}
-		aliases[item.ID] = operationProjection{item, op, index}
-		roleCounts[item.Role]++
-		if failure := validateResult(document, op, item, pointer); failure != nil {
-			return wirePage{}, failure
-		}
-		if item.Role == "list" || item.Role == "options" {
-			if item.Pagination == nil {
-				return wirePage{}, buildError("pagination_required", pointer+"/pagination", "list and options operations require offset pagination")
-			}
-			if failure := validatePagination(document, op, item.Pagination, pointer+"/pagination"); failure != nil {
-				return wirePage{}, failure
-			}
-			if !equalPath(item.Result.TotalPath, item.Pagination.TotalPath) {
-				return wirePage{}, buildError("pagination_total_mismatch", pointer+"/pagination/totalPath", "pagination totalPath must match result totalPath")
-			}
-		} else if item.Pagination != nil {
-			return wirePage{}, buildError("pagination_role_invalid", pointer+"/pagination", "pagination is only valid for list and options operations")
-		}
-		contexts := make([]wireContextBinding, len(item.ContextBindings))
-		for bindingIndex, binding := range item.ContextBindings {
-			_, value, required, ok := resolveDirectFieldPresence(document, op.RequestType(), binding.Path)
-			if !ok || !required || !isContextScalar(value) {
-				return wirePage{}, buildError("context_binding_type_invalid", pointer+"/contextBindings/"+strconv.Itoa(bindingIndex)+"/path", "context binding must target a required direct string or integer scalar")
-			}
-			typeID := exactType(value)
-			if previous, exists := globalContexts[binding.Context]; exists && previous != typeID {
-				return wirePage{}, buildError("context_type_inconsistent", pointer+"/contextBindings/"+strconv.Itoa(bindingIndex)+"/context", "context id must keep one exact scalar type across the IR")
-			}
-			globalContexts[binding.Context] = typeID
-			contexts[bindingIndex] = wireContextBinding{Context: binding.Context, Path: clonePath(binding.Path), ValueType: wireValue(value)}
-		}
-		sort.Slice(contexts, func(i, j int) bool { return contexts[i].Context < contexts[j].Context })
-		responseType := op.ResponseType()
-		operations[index] = wireOperation{ID: item.ID, Role: item.Role, OperationID: item.OperationID, Permission: op.Permission(), RequestType: op.RequestType(), ResponseType: responseType, ContextBindings: contexts, Result: cloneResult(item.Result), Pagination: clonePaginationPtr(item.Pagination)}
+		baseNames[operation.ID()] = base
+		baseCounts[base]++
 	}
-	if failure := validatePageMode(page, aliases, roleCounts, base); failure != nil {
-		return wirePage{}, failure
-	}
-	access := aliases[page.AccessOperation]
-	actionsByOperation := map[string]actionDocument{}
-	fieldsByID := map[string]fieldDocument{}
-	for _, field := range page.Fields {
-		fieldsByID[field.ID] = field
-	}
-	for index, action := range page.Actions {
-		pointer := base + "/actions/" + strconv.Itoa(index)
-		projection, ok := aliases[action.Operation]
-		if !ok || projection.spec.Role != "action" {
-			return wirePage{}, buildError("action_operation_invalid", pointer+"/operation", "action must reference a role=action operation")
-		}
-		if _, exists := actionsByOperation[action.Operation]; exists {
-			return wirePage{}, buildError("action_operation_duplicate", pointer+"/operation", "action operation must be referenced exactly once")
-		}
-		if action.Effect == "create" && action.Placement != "toolbar" || action.Effect != "create" && action.Placement != "row" {
-			return wirePage{}, buildError("action_placement_invalid", pointer+"/placement", "create actions are toolbar actions; update and delete actions are row actions")
-		}
-		seen := map[string]bool{}
-		for fieldIndex, fieldID := range action.Fields {
-			field, exists := fieldsByID[fieldID]
-			if !exists {
-				return wirePage{}, buildError("action_field_unresolved", pointer+"/fields/"+strconv.Itoa(fieldIndex), "action field does not exist")
-			}
-			if seen[fieldID] {
-				return wirePage{}, buildError("action_field_duplicate", pointer+"/fields/"+strconv.Itoa(fieldIndex), "action field is duplicated")
-			}
-			seen[fieldID] = true
-			if field.Control == "" || !hasBinding(field, action.Operation, "request") {
-				return wirePage{}, buildError("action_field_binding_missing", pointer+"/fields/"+strconv.Itoa(fieldIndex), "action field requires a control and request binding to the action operation")
-			}
-		}
-		actionsByOperation[action.Operation] = action
-	}
-	for alias, projection := range aliases {
-		if projection.spec.Role == "action" {
-			if _, ok := actionsByOperation[alias]; !ok {
-				return wirePage{}, buildError("action_operation_unreferenced", base+"/operations/"+strconv.Itoa(projection.index), "role=action operation must be referenced exactly once")
-			}
-		}
-	}
-
-	pageBindingPaths := map[string]bool{}
-	optionRefs := map[string]bool{}
-	actionFieldRefs := map[string]bool{}
-	for _, action := range page.Actions {
-		for _, fieldID := range action.Fields {
-			actionFieldRefs[fieldID] = true
-		}
-	}
-	wireFields := make([]wireField, len(page.Fields))
-	for fieldIndex, field := range page.Fields {
-		pointer := base + "/fields/" + strconv.Itoa(fieldIndex)
-		if field.Options != nil && len(field.Surfaces) != 0 {
-			return wirePage{}, buildError("options_surface_forbidden", pointer+"/surfaces", "dynamic options field is forbidden from search, list, and detail surfaces")
-		}
-		if len(field.Columns) != 0 && field.Control != "" {
-			return wirePage{}, buildError("columns_control_forbidden", pointer+"/control", "object array columns cannot have a control")
-		}
-		bindingTypes := ""
-		wireBindings := make([]wireBinding, len(field.Bindings))
-		for bindingIndex, binding := range field.Bindings {
-			bp := pointer + "/bindings/" + strconv.Itoa(bindingIndex)
-			projection, ok := aliases[binding.Operation]
-			if !ok {
-				return wirePage{}, buildError("binding_operation_unresolved", bp+"/operation", "field binding operation alias does not exist")
-			}
-			key := binding.Operation + "\x00" + binding.Direction + "\x00" + strings.Join(binding.Path, "\x00")
-			if pageBindingPaths[key] {
-				return wirePage{}, buildError("binding_path_duplicate", bp+"/path", "operation direction path is bound more than once")
-			}
-			pageBindingPaths[key] = true
-			var value httpapi.ValueType
-			var found, required bool
-			if binding.Direction == "request" {
-				_, value, required, found = resolveDirectFieldPresence(document, projection.api.RequestType(), binding.Path)
-				if !found || !isRequestLeaf(value) {
-					return wirePage{}, buildError("request_binding_path_invalid", bp+"/path", "request binding must target a direct scalar or scalar array leaf")
+	operationNames := map[string]string{}
+	result := make(map[string]string, len(closure.Operations))
+	for _, operation := range closure.Operations {
+		name := baseNames[operation.ID()]
+		if baseCounts[name] > 1 {
+			var prefixed strings.Builder
+			for _, part := range strings.Split(operation.ID(), ".") {
+				identifier, ok := generatedIdentifier(part)
+				if !ok {
+					return nil, buildError("generated_operation_name_invalid", "/operations", "operation id cannot become a TypeScript function identifier")
 				}
-			} else {
-				if projection.spec.Role != "list" && projection.spec.Role != "get" {
-					return wirePage{}, buildError("response_binding_role_invalid", bp+"/operation", "response bindings are only allowed on primary list or singleton get")
-				}
-				if projection.api.ResponseBody() != api.ResponseBodyJSON {
-					return wirePage{}, buildError("binding_response_missing", bp+"/path", "response binding requires a JSON response")
-				}
-				_, value, required, found = resolveFieldPathPresence(document, projection.api.ResponseType(), binding.Path, allowedArrayFor(projection.spec))
-				if !found || !bindingWithinResult(binding.Path, projection.spec) {
-					return wirePage{}, buildError("response_binding_scope_invalid", bp+"/path", "response binding must stay within the primary result root")
-				}
+				prefixed.WriteString(identifier)
 			}
-			identity := exactType(value)
-			if !isIRValue(value) {
-				return wirePage{}, buildError("binding_value_type_invalid", bp+"/path", "binding value type is not representable by closed frontend IR")
-			}
-			if bindingTypes == "" {
-				bindingTypes = identity
-			} else if bindingTypes != identity {
-				return wirePage{}, buildError("binding_type_inconsistent", bp+"/path", "field bindings must have the same exact value type")
-			}
-			if failure := validateControlBinding(field.Control, value, bp+"/path"); failure != nil {
-				return wirePage{}, failure
-			}
-			wireBindings[bindingIndex] = wireBinding{Operation: binding.Operation, Direction: binding.Direction, Path: clonePath(binding.Path), ValueType: wireValue(value), Required: required}
+			name = prefixed.String()
 		}
-		if failure := validateSurfaces(page, field, aliases, pointer); failure != nil {
-			return wirePage{}, failure
+		if typeScriptReservedWords[name] {
+			return nil, buildError("generated_operation_name_reserved", "/operations", "operation client name is a reserved TypeScript word")
 		}
-		if (field.Options != nil || len(field.Choices) > 0) && field.Control != "select" && field.Control != "multi-select" {
-			return wirePage{}, buildError("selection_control_required", pointer+"/control", "choices and options require select or multi-select control")
+		if previous, exists := operationNames[name]; exists && previous != operation.ID() {
+			return nil, buildError("generated_operation_name_collision", "/operations", "operation ids collide after TypeScript function generation")
 		}
-		if field.Options != nil && len(field.Choices) != 0 {
-			return wirePage{}, buildError("selection_source_conflict", pointer, "choices and options are mutually exclusive")
-		}
-		if field.Options != nil {
-			if !actionFieldRefs[field.ID] {
-				return wirePage{}, buildError("options_action_required", pointer+"/options", "dynamic options field must be referenced by at least one action")
-			}
-			projection, ok := aliases[field.Options.Operation]
-			if !ok || projection.spec.Role != "options" {
-				return wirePage{}, buildError("options_operation_invalid", pointer+"/options/operation", "field options must reference a role=options operation")
-			}
-			optionRefs[field.Options.Operation] = true
-			for _, candidate := range []struct {
-				name string
-				path []string
-			}{{"valuePath", field.Options.ValuePath}, {"labelPath", field.Options.LabelPath}} {
-				combined := append(clonePath(projection.spec.Result.ItemsPath), candidate.path...)
-				_, value, found := resolveFieldPath(document, projection.api.ResponseType(), combined, len(projection.spec.Result.ItemsPath)-1)
-				if !found || !isStringScalar(value) {
-					return wirePage{}, buildError("options_value_type_invalid", pointer+"/options/"+candidate.name, "option value and label must be string scalar leaves")
-				}
-			}
-		}
-		wireColumns, failure := projectColumns(document, page, field, aliases, pointer)
-		if failure != nil {
-			return wirePage{}, failure
-		}
-		used := len(field.Surfaces) > 0
-		for _, action := range page.Actions {
-			if contains(action.Fields, field.ID) || hasBinding(field, action.Operation, "request") {
-				used = true
-			}
-		}
-		if !used {
-			return wirePage{}, buildError("field_unused", pointer, "field must be consumed by a surface, action, options, or hidden action row source")
-		}
-		wireFields[fieldIndex] = wireField{ID: field.ID, LabelKey: field.LabelKey, Surfaces: sortedStrings(field.Surfaces), Control: field.Control, Bindings: wireBindings, Options: field.Options, Choices: field.Choices, Columns: wireColumns}
-	}
-	for alias, projection := range aliases {
-		if projection.spec.Role == "options" && !optionRefs[alias] {
-			return wirePage{}, buildError("options_operation_unreferenced", base+"/operations/"+strconv.Itoa(projection.index), "options operation must be referenced by a field")
-		}
-	}
-	if failure := validateOperationClosure(document, page, aliases, actionsByOperation, base); failure != nil {
-		return wirePage{}, failure
-	}
-	sort.Slice(operations, func(i, j int) bool { return operations[i].ID < operations[j].ID })
-	sort.Slice(wireFields, func(i, j int) bool { return wireFields[i].ID < wireFields[j].ID })
-	sort.Slice(page.Actions, func(i, j int) bool { return page.Actions[i].ID < page.Actions[j].ID })
-	for i := range page.Actions {
-		page.Actions[i].Fields = sortedStrings(page.Actions[i].Fields)
-	}
-	return wirePage{ID: page.ID, TitleKey: page.TitleKey, Mode: page.Mode, AccessOperation: page.AccessOperation, AccessPermission: access.api.Permission(), Route: page.Route, Menu: page.Menu, Operations: operations, Fields: wireFields, Actions: page.Actions, ExtensionPoints: sortedStrings(page.ExtensionPoints), SpecSourceRef: spec.state.sourceRef.String()}, nil
-}
-
-func validateResponseWireClosure(document httpapi.Document, rootType string) *Error {
-	types := document.Types()
-	typeIndexes := make(map[string]int, len(types))
-	for index, value := range types {
-		typeIndexes[value.Name()] = index
-	}
-	visited := map[string]bool{}
-	var validateObject func(string, []string) *Error
-	validateObject = func(typeName string, prefix []string) *Error {
-		objectKey := typeName + "\x00" + strings.Join(prefix, "\x00")
-		if visited[objectKey] {
-			return nil
-		}
-		visited[objectKey] = true
-		typeValue, ok := document.Type(typeName)
-		if !ok {
-			return buildError("response_wire_type_unresolved", "/api/types", "JSON response type closure contains an unresolved type")
-		}
-		fields := typeValue.Fields()
-		wireNames := map[string]bool{}
-		for fieldIndex, field := range fields {
-			path := field.Path()
-			if len(path) != len(prefix)+1 || !samePathPrefix(path, prefix) {
-				continue
-			}
-			fieldPointer := "/api/types/" + strconv.Itoa(typeIndexes[typeName]) + "/fields/" + strconv.Itoa(fieldIndex)
-			binding, hasBinding := field.Binding()
-			if !hasBinding {
-				return buildError("response_wire_binding_missing", fieldPointer+"/binding", "JSON response object field requires an explicit body binding")
-			}
-			if binding.Location() != api.RequestBindingBody {
-				return buildError("response_wire_binding_location_invalid", fieldPointer+"/binding/in", "JSON response object field binding must use body location")
-			}
-			if wireNames[binding.Name()] {
-				return buildError("response_wire_name_duplicate", fieldPointer+"/binding/name", "JSON response object sibling wire name is duplicated")
-			}
-			wireNames[binding.Name()] = true
-			value := unwrapResponseContainer(field.ValueType())
-			switch value.Kind() {
-			case httpapi.ValueObject:
-				if failure := validateObject(typeName, path); failure != nil {
-					return failure
-				}
-			case httpapi.ValueRef:
-				if failure := validateObject(value.Name(), nil); failure != nil {
-					return failure
-				}
-			}
-		}
-		return nil
-	}
-	return validateObject(rootType, nil)
-}
-
-func unwrapResponseContainer(value httpapi.ValueType) httpapi.ValueType {
-	for value.Kind() == httpapi.ValueOptional || value.Kind() == httpapi.ValueArray {
-		next, ok := value.Element()
-		if !ok {
-			return httpapi.ValueType{}
-		}
-		value = next
-	}
-	return value
-}
-
-func samePathPrefix(path, prefix []string) bool {
-	for index := range prefix {
-		if path[index] != prefix[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func projectColumns(document httpapi.Document, page pageDocument, field fieldDocument, aliases map[string]operationProjection, pointer string) ([]wireColumn, *Error) {
-	if len(field.Columns) == 0 {
-		if len(field.Surfaces) > 0 {
-			for _, binding := range field.Bindings {
-				projection, ok := aliases[binding.Operation]
-				if ok && binding.Operation == page.AccessOperation && binding.Direction == "response" {
-					_, value, found := resolveFieldPath(document, projection.api.ResponseType(), binding.Path, allowedArrayFor(projection.spec))
-					if found && isObjectArray(value) {
-						return nil, buildError("columns_required", pointer+"/columns", "displayed object arrays require nonempty columns")
-					}
-				}
-			}
-		}
-		return nil, nil
-	}
-	if field.Control != "" {
-		return nil, buildError("columns_control_forbidden", pointer+"/control", "object array columns cannot have a control")
-	}
-	if len(field.Bindings) != 1 {
-		return nil, buildError("columns_binding_invalid", pointer+"/bindings", "columns require exactly one response binding to the page access operation")
-	}
-	binding := field.Bindings[0]
-	projection, ok := aliases[binding.Operation]
-	if !ok || binding.Operation != page.AccessOperation || binding.Direction != "response" {
-		return nil, buildError("columns_binding_invalid", pointer+"/bindings", "columns require exactly one response binding to the page access operation")
-	}
-	_, value, bindingRequired, found := resolveFieldPathPresence(document, projection.api.ResponseType(), binding.Path, allowedArrayFor(projection.spec))
-	if !found || !isObjectArray(value) {
-		return nil, buildError("columns_type_invalid", pointer+"/bindings/0/path", "columns require an array of object or ref")
-	}
-	element, _ := unwrapOptional(value).Element()
-	if element.Kind() == httpapi.ValueOptional {
-		return nil, buildError("column_optional_element_forbidden", pointer+"/bindings/0/path", "column array elements cannot be optional")
-	}
-	result := make([]wireColumn, len(field.Columns))
-	for index, column := range field.Columns {
-		combined := append(clonePath(binding.Path), column.Path...)
-		allowedArrays := map[int]bool{allowedArrayFor(projection.spec): true, len(binding.Path) - 1: true}
-		_, terminal, required, ok := resolveFieldPathPresenceArrays(document, projection.api.ResponseType(), combined, allowedArrays)
-		if !ok {
-			return nil, buildError("column_path_invalid", pointer+"/columns/"+strconv.Itoa(index)+"/path", "column path must resolve relative to the array item without crossing map or array")
-		}
-		terminal = unwrapOptional(terminal)
-		if terminal.Kind() == httpapi.ValueArray {
-			item, exists := terminal.Element()
-			if !exists || item.Kind() == httpapi.ValueOptional || unwrapOptional(item).Kind() != httpapi.ValueScalar {
-				return nil, buildError("column_type_invalid", pointer+"/columns/"+strconv.Itoa(index)+"/path", "column terminal must be scalar or array of non-optional scalar")
-			}
-		} else if terminal.Kind() != httpapi.ValueScalar {
-			return nil, buildError("column_type_invalid", pointer+"/columns/"+strconv.Itoa(index)+"/path", "column terminal must be scalar or array of non-optional scalar")
-		}
-		result[index] = wireColumn{ID: column.ID, LabelKey: column.LabelKey, Path: clonePath(column.Path), ValueType: wireValue(terminal), Required: bindingRequired && required}
+		operationNames[name] = operation.ID()
+		result[operation.ID()] = name
 	}
 	return result, nil
 }
 
-func isObjectArray(value httpapi.ValueType) bool {
+func generatedTypeScriptNames(closure api.Closure) (map[string]string, *Error) {
+	typeNames := map[string]string{}
+	result := make(map[string]string, len(closure.Types))
+	for _, value := range closure.Types {
+		generated, ok := generatedIdentifier(value.Name())
+		if !ok {
+			return nil, buildError("generated_type_name_invalid", "/types", "API type cannot become a TypeScript identifier")
+		}
+		if previous, exists := typeNames[generated]; exists && previous != value.Name() {
+			return nil, buildError("generated_type_name_collision", "/types", "API types collide after TypeScript identifier generation")
+		}
+		typeNames[generated] = value.Name()
+		result[value.Name()] = generated
+	}
+	return result, nil
+}
+
+var typeScriptReservedWords = map[string]bool{
+	"as": true, "async": true, "await": true, "break": true, "case": true, "catch": true,
+	"class": true, "const": true, "continue": true, "debugger": true, "default": true, "delete": true,
+	"do": true, "else": true, "enum": true, "export": true, "extends": true, "false": true,
+	"finally": true, "for": true, "from": true, "function": true, "if": true,
+	"implements": true, "import": true, "in": true, "instanceof": true, "interface": true, "let": true,
+	"new": true, "null": true, "of": true, "package": true, "private": true, "protected": true,
+	"public": true, "return": true, "static": true, "super": true, "switch": true,
+	"this": true, "throw": true, "true": true, "try": true, "type": true, "typeof": true,
+	"var": true, "void": true, "while": true, "with": true, "yield": true,
+}
+
+func generatedClientIdentifier(value string) (string, bool) {
+	generated, ok := generatedIdentifier(value)
+	if !ok {
+		return "", false
+	}
+	characters := []rune(generated)
+	characters[0] = unicode.ToLower(characters[0])
+	return string(characters), true
+}
+
+func generatedIdentifier(value string) (string, bool) {
+	parts := strings.FieldsFunc(value, func(character rune) bool {
+		return character > unicode.MaxASCII || !unicode.IsLetter(character) && !unicode.IsDigit(character)
+	})
+	if len(parts) == 0 {
+		return "", false
+	}
+	var result strings.Builder
+	for _, part := range parts {
+		characters := []rune(part)
+		characters[0] = unicode.ToUpper(characters[0])
+		result.WriteString(string(characters))
+	}
+	generated := result.String()
+	if generated == "" || !unicode.IsLetter([]rune(generated)[0]) {
+		return "", false
+	}
+	return generated, true
+}
+
+func projectPage(document api.Closure, facts sourcecomment.FactGraph, spec PageSpec, base string) (wirePage, map[string]bool, *Error) {
+	pageID := pageFactID(spec.state.facts)
+	entity, ok := spec.state.facts.PageEntity(pageID)
+	if !ok {
+		return wirePage{}, nil, buildError("page_entity_missing", base+"/entity", "frontend page must declare ui.entity")
+	}
+	operations, itemType, failure := resolveResource(document, entity, base+"/entity")
+	if failure != nil {
+		return wirePage{}, nil, failure
+	}
+	declared, exists, err := facts.CRUD(entity)
+	if err != nil || !exists {
+		return wirePage{}, nil, buildError("crud_facts_missing", base+"/entity", "page entity must have canonical crud.operations facts")
+	}
+	wanted := map[sourcecomment.CRUDOperation]bool{}
+	for _, operation := range declared.Operations() {
+		wanted[operation] = true
+	}
+	if !wanted[sourcecomment.CRUDList] {
+		return wirePage{}, nil, buildError("list_operation_missing", base+"/entity", "frontend page entity must expose the standard list operation")
+	}
+	for role, operation := range map[sourcecomment.CRUDOperation]*api.ClosureOperation{
+		sourcecomment.CRUDCreate: &operations.create, sourcecomment.CRUDGet: &operations.get,
+		sourcecomment.CRUDUpdate: &operations.update, sourcecomment.CRUDDelete: &operations.delete,
+	} {
+		if !wanted[role] {
+			*operation = api.ClosureOperation{}
+		} else if operation.ID() == "" {
+			return wirePage{}, nil, buildError("resource_operation_missing", base+"/entity", "declared CRUD operation is missing from the canonical HTTP closure")
+		}
+	}
+
+	fields := make([]wireField, 0)
+	fieldSurfaces := map[string]map[string]bool{}
+	shapeFields := map[string][]struct {
+		surface, typeName string
+		value             api.ClosureValue
+	}{}
+	addShape := func(typeName, surface string, automatic map[string]bool) *Error {
+		if typeName == "" {
+			return nil
+		}
+		typeValue, exists := document.Type(typeName)
+		if !exists {
+			return buildError("type_unresolved", base+"/entity", "canonical CRUD type is unresolved")
+		}
+		for _, field := range typeValue.Fields() {
+			path := field.Path()
+			if len(path) != 1 || automatic[path[0]] {
+				continue
+			}
+			shapeFields[path[0]] = append(shapeFields[path[0]], struct {
+				surface, typeName string
+				value             api.ClosureValue
+			}{surface, typeName, unwrapOptional(field.ValueType())})
+		}
+		return nil
+	}
+	if failure := addShape(itemType.Name(), "list", nil); failure != nil {
+		return wirePage{}, nil, failure
+	}
+	if failure := addShape(operations.list.RequestType(), "search", map[string]bool{"limit": true, "offset": true}); failure != nil {
+		return wirePage{}, nil, failure
+	}
+	if failure := addShape(operations.create.RequestType(), "create", nil); failure != nil {
+		return wirePage{}, nil, failure
+	}
+	if failure := addShape(operations.update.RequestType(), "edit", map[string]bool{"id": true}); failure != nil {
+		return wirePage{}, nil, failure
+	}
+	names := make([]string, 0, len(shapeFields))
+	for name := range shapeFields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		shapes := shapeFields[name]
+		semanticID, fieldFacts, err := resolveFieldFacts(facts, entity, name, shapes)
+		if err != nil {
+			return wirePage{}, nil, buildError("field_facts_missing", base+"/fields/"+name, err.Error())
+		}
+		surfaces := map[string]bool{}
+		var canonicalType api.ClosureValue
+		for _, shape := range shapes {
+			if canonicalType.Kind() == "" {
+				canonicalType = shape.value
+			}
+			if exactValueType(canonicalType) != exactValueType(shape.value) {
+				return wirePage{}, nil, buildError("field_type_inconsistent", base+"/fields/"+name, "same-name fields must keep one exact canonical type")
+			}
+			if includeSurface(fieldFacts, shape.surface) {
+				surfaces[shape.surface] = true
+			}
+		}
+		if len(surfaces) == 0 {
+			continue
+		}
+		control := string(fieldFacts.Control)
+		if !controlCompatible(control, canonicalType) {
+			return wirePage{}, nil, buildError("field_control_invalid", base+"/fields/"+name, "field fact control is incompatible with its canonical type")
+		}
+		ordered := make([]string, 0, len(surfaces))
+		for _, surface := range []string{"search", "list", "create", "edit"} {
+			if surfaces[surface] {
+				ordered = append(ordered, surface)
+			}
+		}
+		fields = append(fields, wireField{Name: name, LabelKey: fieldFacts.Label.Key, Surfaces: ordered, Control: control})
+		fieldSurfaces[name] = surfaces
+		_ = semanticID
+	}
+
+	if failure := validateRequestCoverage(document, operations.list, map[string]bool{"limit": true, "offset": true}, fieldSurfaces, "search", base+"/entity"); failure != nil {
+		return wirePage{}, nil, failure
+	}
+	extensionComponent, _ := spec.state.facts.PageString(pageID, "ui.extensionComponent")
+	if extensionComponent == "" && hasFieldSurface(fieldSurfaces, "create") {
+		if operations.create.ID() == "" {
+			return wirePage{}, nil, buildError("create_operation_missing", base+"/fields", "create fields require a standard create operation")
+		}
+		if failure := validateRequestCoverage(document, operations.create, map[string]bool{}, fieldSurfaces, "create", base+"/entity"); failure != nil {
+			return wirePage{}, nil, failure
+		}
+	}
+	if extensionComponent == "" && hasFieldSurface(fieldSurfaces, "edit") {
+		if operations.get.ID() == "" || operations.update.ID() == "" {
+			return wirePage{}, nil, buildError("edit_operation_missing", base+"/fields", "edit fields require standard get and update operations")
+		}
+		if failure := validateIDOnlyRequest(document, operations.get, base+"/entity"); failure != nil {
+			return wirePage{}, nil, failure
+		}
+		if failure := validateRequestCoverage(document, operations.update, map[string]bool{"id": true}, fieldSurfaces, "edit", base+"/entity"); failure != nil {
+			return wirePage{}, nil, failure
+		}
+	}
+	if extensionComponent == "" && operations.delete.ID() != "" {
+		if failure := validateIDOnlyRequest(document, operations.delete, base+"/entity"); failure != nil {
+			return wirePage{}, nil, failure
+		}
+	}
+
+	pageSize, ok := spec.state.facts.PageSize(pageID)
+	if !ok {
+		pageSize = httpconvention.DefaultPageSize
+	}
+	routePath, ok := spec.state.facts.PageString(pageID, "route.path")
+	if !ok {
+		return wirePage{}, nil, buildError("route_path_missing", base+"/route/path", "frontend page must declare route.path")
+	}
+	routeNameValue, ok := spec.state.facts.PageString(pageID, "route.name")
+	if !ok {
+		routeNameValue = routeName(pageID)
+	}
+	icon, hasIcon := spec.state.facts.PageString(pageID, "route.icon")
+	order, hasOrder := spec.state.facts.PageMenuOrder(pageID)
+	var menu *wireMenu
+	entityMeta, err := facts.SchemaFacts(entity)
+	if err != nil {
+		return wirePage{}, nil, buildError("schema_facts_missing", base+"/entity", err.Error())
+	}
+	if hasIcon || hasOrder {
+		menu = &wireMenu{ID: pageID, TitleKey: entityMeta.Label.Key, Path: routePath, Icon: icon, Order: order}
+	}
+	projected := wirePage{
+		ID: pageID, TitleKey: entityMeta.Label.Key, Route: wireRoute{Path: routePath, Name: routeNameValue}, ExtensionComponent: extensionComponent,
+		Menu: menu, PageSize: pageSize, Fields: fields,
+		Operations: wirePageOperations{List: operations.list.ID(), Create: operations.create.ID(), Get: operations.get.ID(), Update: operations.update.ID(), Delete: operations.delete.ID()},
+	}
+	sort.Slice(projected.Fields, func(i, j int) bool { return projected.Fields[i].Name < projected.Fields[j].Name })
+	selected := map[string]bool{operations.list.ID(): true}
+	for _, operation := range []api.ClosureOperation{operations.create, operations.get, operations.update, operations.delete} {
+		if operation.ID() != "" {
+			selected[operation.ID()] = true
+		}
+	}
+	return projected, selected, nil
+}
+
+func hasFieldSurface(surfaces map[string]map[string]bool, target string) bool {
+	for _, fieldSurfaces := range surfaces {
+		if fieldSurfaces[target] {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveFieldFacts(facts sourcecomment.FactGraph, entity, name string, shapes []struct {
+	surface, typeName string
+	value             api.ClosureValue
+}) (string, sourcecomment.FieldFacts, error) {
+	candidates := []string{entity + "." + name}
+	seen := map[string]bool{candidates[0]: true}
+	for _, shape := range shapes {
+		candidate := shape.typeName + "." + name
+		if !seen[candidate] {
+			seen[candidate] = true
+			candidates = append(candidates, candidate)
+		}
+	}
+	for _, candidate := range candidates {
+		if _, ok := facts.Fact(sourcecomment.FactID{SemanticID: candidate, Key: "label.zh-CN"}); !ok {
+			continue
+		}
+		value, err := facts.FieldFacts(candidate)
+		if err != nil {
+			return "", sourcecomment.FieldFacts{}, err
+		}
+		return candidate, value, nil
+	}
+	return "", sourcecomment.FieldFacts{}, fmt.Errorf("field %s has no upstream schema or operation field facts", name)
+}
+
+func includeSurface(facts sourcecomment.FieldFacts, surface string) bool {
+	if facts.Visibility != sourcecomment.VisibilityPublic {
+		return false
+	}
+	if surface == "search" && facts.CRUD == nil {
+		return true
+	}
+	if facts.CRUD == nil {
+		return false
+	}
+	switch surface {
+	case "list":
+		return facts.CRUD.Read == sourcecomment.ReadInclude
+	case "search":
+		return facts.CRUD.Read == sourcecomment.ReadInclude
+	case "create":
+		return facts.CRUD.Mutation == sourcecomment.MutationCreate || facts.CRUD.Mutation == sourcecomment.MutationCreateUpdate
+	case "edit":
+		return facts.CRUD.Mutation == sourcecomment.MutationUpdate || facts.CRUD.Mutation == sourcecomment.MutationCreateUpdate
+	default:
+		return false
+	}
+}
+
+func resolveResource(document api.Closure, entity, pointer string) (resourceOperations, api.ClosureType, *Error) {
+	var list api.ClosureOperation
+	for _, candidate := range document.Operations {
+		if candidate.Method() != api.MethodGET || candidate.ResponseType() == "" {
+			continue
+		}
+		_, items, _, ok := directField(document, candidate.ResponseType(), "items")
+		if !ok {
+			continue
+		}
+		items = unwrapOptional(items)
+		element, ok := items.Element()
+		if !ok {
+			continue
+		}
+		if value := unwrapOptional(element); value.Kind() == api.ValueRef && value.Name() == entity {
+			if list.ID() != "" {
+				return resourceOperations{}, api.ClosureType{}, buildError("resource_operation_ambiguous", pointer, "entity has more than one canonical list operation")
+			}
+			list = candidate
+		}
+	}
+	if list.ID() == "" {
+		return resourceOperations{}, api.ClosureType{}, buildError("operation_unresolved", pointer, "entity has no canonical list operation")
+	}
+	if list.Method() != api.MethodGET || list.ResponseType() == "" {
+		return resourceOperations{}, api.ClosureType{}, buildError("list_operation_invalid", pointer, "list operation must be GET with a JSON response")
+	}
+	placeholders, err := httpconvention.ValidateRoute(list.Path())
+	if err != nil || len(placeholders) != 0 {
+		return resourceOperations{}, api.ClosureType{}, buildError("list_route_invalid", pointer, "list operation must use a canonical collection route")
+	}
+	if failure := validateOperationConvention(document, list, pointer); failure != nil {
+		return resourceOperations{}, api.ClosureType{}, failure
+	}
+	_, items, itemsRequired, itemsOK := directField(document, list.ResponseType(), "items")
+	_, total, totalRequired, totalOK := directField(document, list.ResponseType(), "total")
+	items = unwrapOptional(items)
+	listResponse, listResponseOK := document.Type(list.ResponseType())
+	if !listResponseOK || len(listResponse.Fields()) != 2 || !itemsOK || !itemsRequired || items.Kind() != api.ValueArray || !totalOK || !totalRequired || !safeNumberScalar(total) {
+		return resourceOperations{}, api.ClosureType{}, buildError("list_response_invalid", pointer, "list response must be exact required {items,total}")
+	}
+	element, ok := items.Element()
+	if !ok || unwrapOptional(element).Kind() != api.ValueRef {
+		return resourceOperations{}, api.ClosureType{}, buildError("list_item_type_invalid", pointer, "list items must reference one canonical resource type")
+	}
+	element = unwrapOptional(element)
+	itemType, ok := document.Type(element.Name())
+	if !ok {
+		return resourceOperations{}, api.ClosureType{}, buildError("list_item_type_invalid", pointer, "list resource type is unresolved")
+	}
+	_, id, idRequired, idOK := directField(document, itemType.Name(), "id")
+	if !idOK || !idRequired || unwrapOptional(id).Kind() != api.ValueScalar || !resourceIDScalar(unwrapOptional(id).Name()) {
+		return resourceOperations{}, api.ClosureType{}, buildError("resource_id_invalid", pointer, "resource row key must be a required PDCL scalar id")
+	}
+	for _, name := range []string{"limit", "offset"} {
+		_, value, _, exists := directField(document, list.RequestType(), name)
+		if !exists || !safeNumberScalar(value) {
+			return resourceOperations{}, api.ClosureType{}, buildError("pagination_request_invalid", pointer, "list request must contain canonical limit and offset numbers")
+		}
+	}
+
+	operations := resourceOperations{list: list}
+	itemPath := list.Path() + "/{id}"
+	for _, candidate := range document.Operations {
+		if candidate.ID() == list.ID() {
+			continue
+		}
+		var target *api.ClosureOperation
+		switch {
+		case candidate.Path() == list.Path() && candidate.Method() == api.MethodPOST:
+			target = &operations.create
+		case candidate.Path() == itemPath && candidate.Method() == api.MethodGET:
+			target = &operations.get
+		case candidate.Path() == itemPath && (candidate.Method() == api.MethodPUT || candidate.Method() == api.MethodPATCH):
+			target = &operations.update
+		case candidate.Path() == itemPath && candidate.Method() == api.MethodDELETE:
+			target = &operations.delete
+		default:
+			continue
+		}
+		if target.ID() != "" {
+			return resourceOperations{}, api.ClosureType{}, buildError("resource_operation_ambiguous", pointer, "resource has more than one operation for a standard CRUD role")
+		}
+		*target = candidate
+		if failure := validateOperationConvention(document, candidate, pointer); failure != nil {
+			return resourceOperations{}, api.ClosureType{}, failure
+		}
+	}
+	return operations, itemType, nil
+}
+
+func validateOperationConvention(document api.Closure, operation api.ClosureOperation, pointer string) *Error {
+	if operation.Auth() != api.AuthNone && operation.Auth() != api.AuthRequired {
+		return buildError("auth_convention_invalid", pointer, "operation auth must be required or none")
+	}
+	typeValue, ok := document.Type(operation.RequestType())
+	if !ok {
+		return buildError("request_type_unresolved", pointer, "operation request type is unresolved")
+	}
+	fields := make([]string, 0, len(typeValue.Fields()))
+	for _, field := range typeValue.Fields() {
+		if len(field.Path()) != 1 {
+			return buildError("request_shape_invalid", pointer, "frontend CRUD request fields must be direct canonical fields")
+		}
+		fields = append(fields, field.Path()[0])
+	}
+	if _, err := httpconvention.ClassifyRequest(string(operation.Method()), operation.Path(), fields); err != nil {
+		return buildError("request_convention_invalid", pointer, err.Error())
+	}
+	hasRepresentation := operation.ResponseType() != ""
+	if _, err := httpconvention.SuccessStatus(string(operation.Method()), operation.Path(), hasRepresentation); err != nil {
+		return buildError("success_convention_invalid", pointer, err.Error())
+	}
+	return nil
+}
+
+func validateRequestCoverage(document api.Closure, operation api.ClosureOperation, automatic map[string]bool, surfaces map[string]map[string]bool, surface, pointer string) *Error {
+	typeValue, ok := document.Type(operation.RequestType())
+	if !ok {
+		return buildError("request_type_unresolved", pointer, "operation request type is unresolved")
+	}
+	for _, field := range typeValue.Fields() {
+		path := field.Path()
+		if len(path) != 1 {
+			return buildError("request_shape_invalid", pointer, "frontend CRUD request fields must be direct")
+		}
+		value := field.ValueType()
+		if !requestLeaf(value) {
+			return buildError("request_field_unsupported", pointer, "frontend CRUD request fields must be scalar or scalar arrays")
+		}
+		covered := automatic[path[0]] || surfaces[path[0]][surface]
+		if field.Required() && value.Kind() != api.ValueOptional && !covered {
+			return buildError("required_request_field_uncovered", pointer, "required request field "+path[0]+" has no fixed or UI source")
+		}
+	}
+	return nil
+}
+
+func validateIDOnlyRequest(document api.Closure, operation api.ClosureOperation, pointer string) *Error {
+	typeValue, ok := document.Type(operation.RequestType())
+	if !ok {
+		return buildError("request_type_unresolved", pointer, "operation request type is unresolved")
+	}
+	if len(typeValue.Fields()) != 1 {
+		return buildError("standard_action_request_invalid", pointer, "standard get and delete requests must contain only id")
+	}
+	field := typeValue.Fields()[0]
+	if len(field.Path()) != 1 || field.Path()[0] != "id" || !field.Required() || unwrapOptional(field.ValueType()).Kind() != api.ValueScalar {
+		return buildError("standard_action_request_invalid", pointer, "standard get and delete requests must contain one required scalar id")
+	}
+	return nil
+}
+
+func directField(document api.Closure, typeName, name string) (api.ClosureField, api.ClosureValue, bool, bool) {
+	typeValue, ok := document.Type(typeName)
+	if !ok {
+		return api.ClosureField{}, api.ClosureValue{}, false, false
+	}
+	field, ok := typeValue.Field(name)
+	if !ok || len(field.Path()) != 1 {
+		return api.ClosureField{}, api.ClosureValue{}, false, false
+	}
+	value := field.ValueType()
+	required := field.Required() && value.Kind() != api.ValueOptional
+	return field, unwrapOptional(value), required, true
+}
+
+func unwrapOptional(value api.ClosureValue) api.ClosureValue {
+	for value.Kind() == api.ValueOptional {
+		element, ok := value.Element()
+		if !ok {
+			return api.ClosureValue{}
+		}
+		value = element
+	}
+	return value
+}
+
+func requestLeaf(value api.ClosureValue) bool {
 	value = unwrapOptional(value)
-	if value.Kind() != httpapi.ValueArray {
+	if value.Kind() == api.ValueScalar {
+		return supportedScalar(value.Name())
+	}
+	if value.Kind() != api.ValueArray {
 		return false
 	}
 	element, ok := value.Element()
-	if !ok {
+	return ok && unwrapOptional(element).Kind() == api.ValueScalar && supportedScalar(unwrapOptional(element).Name())
+}
+
+func supportedScalar(name string) bool {
+	switch name {
+	case "string", "bool", "int32", "uint32", "int64", "uint64", "float32", "float64":
+		return true
+	default:
 		return false
 	}
-	element = unwrapOptional(element)
-	return element.Kind() == httpapi.ValueObject || element.Kind() == httpapi.ValueRef
 }
 
-func validatePageMode(page pageDocument, aliases map[string]operationProjection, counts map[string]int, base string) *Error {
-	access, ok := aliases[page.AccessOperation]
-	if !ok {
-		return buildError("access_operation_unresolved", base+"/accessOperation", "access operation alias does not exist")
-	}
-	if page.Mode == "collection" {
-		if counts["list"] != 1 || counts["get"] != 0 {
-			return buildError("collection_operation_shape_invalid", base+"/operations", "collection requires exactly one list and forbids get")
-		}
-		if access.spec.Role != "list" {
-			return buildError("access_operation_role_invalid", base+"/accessOperation", "collection access operation must be its primary list")
-		}
-		return nil
-	}
-	if counts["get"] != 1 || len(page.Operations) != 1 || len(page.Actions) != 0 {
-		return buildError("singleton_operation_shape_invalid", base+"/operations", "singleton requires exactly one get and no actions or other operations")
-	}
-	if access.spec.Role != "get" {
-		return buildError("access_operation_role_invalid", base+"/accessOperation", "singleton access operation must be its get")
-	}
-	return nil
+func safeNumberScalar(value api.ClosureValue) bool {
+	value = unwrapOptional(value)
+	return value.Kind() == api.ValueScalar && (value.Name() == "int32" || value.Name() == "uint32" || value.Name() == "int64" || value.Name() == "uint64")
 }
 
-func validateResult(document httpapi.Document, op httpapi.Operation, spec operationDocument, pointer string) *Error {
-	r := spec.Result
-	if spec.Role == "list" || spec.Role == "options" {
-		if r == nil || len(r.ItemsPath) == 0 || len(r.TotalPath) == 0 {
-			return buildError("collection_result_required", pointer+"/result", "list and options require itemsPath and totalPath")
-		}
-		if spec.Role == "list" && len(r.RowKeyPath) == 0 {
-			return buildError("row_key_required", pointer+"/result/rowKeyPath", "list requires rowKeyPath")
-		}
-		if spec.Role == "options" && len(r.RowKeyPath) > 0 {
-			return buildError("row_key_forbidden", pointer+"/result/rowKeyPath", "rowKeyPath is only valid for list")
-		}
-	} else if spec.Role == "get" {
-		if r != nil && (len(r.ItemsPath) > 0 || len(r.TotalPath) > 0 || len(r.RowKeyPath) > 0) {
-			return buildError("get_result_invalid", pointer+"/result", "get result may only declare itemPath")
-		}
-	} else if r != nil {
-		return buildError("action_result_forbidden", pointer+"/result", "action operations cannot declare result")
-	}
-	if r == nil {
-		return nil
-	}
-	if op.ResponseBody() != api.ResponseBodyJSON || op.ResponseType() == "" {
-		return buildError("result_response_missing", pointer+"/result", "operation result requires a JSON response")
-	}
-	if len(r.ItemsPath) > 0 {
-		_, v, ok := resolveFieldPath(document, op.ResponseType(), r.ItemsPath, -1)
-		if !ok || unwrapOptional(v).Kind() != httpapi.ValueArray {
-			return buildError("result_items_type_invalid", pointer+"/result/itemsPath", "itemsPath must resolve without crossing an array or map to an array")
-		}
-	}
-	if len(r.ItemPath) > 0 {
-		_, v, ok := resolveFieldPath(document, op.ResponseType(), r.ItemPath, -1)
-		k := unwrapOptional(v).Kind()
-		if !ok || (k != httpapi.ValueObject && k != httpapi.ValueRef) {
-			return buildError("result_item_type_invalid", pointer+"/result/itemPath", "itemPath must resolve to object or ref")
-		}
-	}
-	if len(r.TotalPath) > 0 {
-		_, v, ok := resolveFieldPath(document, op.ResponseType(), r.TotalPath, -1)
-		if !ok || !isIntegerScalar(v) {
-			return buildError("result_total_type_invalid", pointer+"/result/totalPath", "totalPath must resolve to an integer scalar")
-		}
-	}
-	if len(r.RowKeyPath) > 0 {
-		combined := append(clonePath(r.ItemsPath), r.RowKeyPath...)
-		_, v, required, ok := resolveFieldPathPresence(document, op.ResponseType(), combined, len(r.ItemsPath)-1)
-		if !ok || !required || (!isStringScalar(v) && !isIntegerScalar(v)) {
-			return buildError("row_key_type_invalid", pointer+"/result/rowKeyPath", "rowKeyPath must resolve relative to itemsPath to a required string or integer scalar")
-		}
-	}
-	return nil
+func resourceIDScalar(name string) bool {
+	return name == "string" || name == "int32" || name == "uint32" || name == "int64" || name == "uint64"
 }
 
-func validatePagination(document httpapi.Document, op httpapi.Operation, p *paginationDocument, pointer string) *Error {
-	if equalPath(p.LimitPath, p.OffsetPath) {
-		return buildError("pagination_path_duplicate", pointer+"/offsetPath", "limitPath and offsetPath must differ")
+func exactValueType(value api.ClosureValue) string {
+	value = unwrapOptional(value)
+	if element, ok := value.Element(); ok {
+		return value.Kind() + ":" + exactValueType(element)
 	}
-	for _, c := range []struct {
-		name string
-		path []string
-	}{{"limitPath", p.LimitPath}, {"offsetPath", p.OffsetPath}} {
-		_, v, ok := resolveDirectField(document, op.RequestType(), c.path)
-		if !ok || !isIntegerScalar(v) {
-			return buildError("pagination_request_type_invalid", pointer+"/"+c.name, "pagination request path must be a direct integer scalar")
-		}
-	}
-	if op.ResponseBody() != api.ResponseBodyJSON {
-		return buildError("pagination_response_missing", pointer+"/totalPath", "pagination requires JSON response")
-	}
-	_, v, ok := resolveFieldPath(document, op.ResponseType(), p.TotalPath, -1)
-	if !ok || !isIntegerScalar(v) {
-		return buildError("pagination_total_type_invalid", pointer+"/totalPath", "pagination total must be an integer scalar")
-	}
-	return nil
+	return value.Kind() + ":" + value.Name()
 }
 
-func validateSurfaces(page pageDocument, field fieldDocument, aliases map[string]operationProjection, pointer string) *Error {
-	for i, s := range field.Surfaces {
-		switch s {
-		case "search":
-			if field.Control == "" || !hasBinding(field, page.AccessOperation, "request") {
-				return buildError("search_surface_binding_invalid", pointer+"/surfaces/"+strconv.Itoa(i), "search surface requires a control and primary list request binding")
-			}
-		case "list":
-			if !hasBinding(field, page.AccessOperation, "response") {
-				return buildError("list_surface_binding_invalid", pointer+"/surfaces/"+strconv.Itoa(i), "list surface requires primary list response binding")
-			}
-		case "detail":
-			if page.Mode != "singleton" || !hasBinding(field, page.AccessOperation, "response") {
-				return buildError("detail_surface_binding_invalid", pointer+"/surfaces/"+strconv.Itoa(i), "detail surface requires singleton get response binding")
-			}
-		}
-	}
-	for _, b := range field.Bindings {
-		if b.Operation == page.AccessOperation && b.Direction == "request" && !contains(field.Surfaces, "search") {
-			return buildError("binding_surface_mismatch", pointer+"/bindings", "primary list request binding requires search surface")
-		}
-	}
-	return nil
-}
-
-func validateOperationClosure(document httpapi.Document, page pageDocument, aliases map[string]operationProjection, actions map[string]actionDocument, base string) *Error {
-	for alias, p := range aliases {
-		covered := map[string]string{}
-		add := func(path []string, source, pointer string) *Error {
-			key := strings.Join(path, "\x00")
-			if previous := covered[key]; previous != "" {
-				return buildError("request_binding_conflict", pointer, "request path is covered by both "+previous+" and "+source)
-			}
-			covered[key] = source
-			return nil
-		}
-		for i, c := range p.spec.ContextBindings {
-			if e := add(c.Path, "context", base+"/operations/"+strconv.Itoa(p.index)+"/contextBindings/"+strconv.Itoa(i)+"/path"); e != nil {
-				return e
-			}
-		}
-		if p.spec.Pagination != nil {
-			if e := add(p.spec.Pagination.LimitPath, "pagination", base+"/operations/"+strconv.Itoa(p.index)+"/pagination/limitPath"); e != nil {
-				return e
-			}
-			if e := add(p.spec.Pagination.OffsetPath, "pagination", base+"/operations/"+strconv.Itoa(p.index)+"/pagination/offsetPath"); e != nil {
-				return e
-			}
-		}
-		for fi, f := range page.Fields {
-			for bi, b := range f.Bindings {
-				if b.Operation != alias || b.Direction != "request" {
-					continue
-				}
-				if e := add(b.Path, "field", base+"/fields/"+strconv.Itoa(fi)+"/bindings/"+strconv.Itoa(bi)+"/path"); e != nil {
-					return e
-				}
-				if p.spec.Role == "action" {
-					a := actions[alias]
-					controlled := contains(a.Fields, f.ID)
-					if controlled {
-						if f.Control == "" {
-							return buildError("controlled_field_control_missing", base+"/fields/"+strconv.Itoa(fi)+"/control", "action input field requires a control")
-						}
-					} else {
-						if a.Effect == "create" {
-							return buildError("create_row_source_forbidden", base+"/fields/"+strconv.Itoa(fi)+"/bindings/"+strconv.Itoa(bi), "create action cannot use row source")
-						}
-						source, ok := bindingFor(f, page.AccessOperation, "response")
-						if !ok {
-							return buildError("row_source_missing", base+"/fields/"+strconv.Itoa(fi)+"/bindings/"+strconv.Itoa(bi), "uncontrolled row action binding requires primary list response source")
-						}
-						_, _, sourceRequired, _ := resolveFieldPathPresence(document, aliases[page.AccessOperation].api.ResponseType(), source.Path, allowedArrayFor(aliases[page.AccessOperation].spec))
-						_, _, targetRequired, _ := resolveDirectFieldPresence(document, p.api.RequestType(), b.Path)
-						if !sourceRequired && targetRequired {
-							return buildError("optional_row_source_required_target", base+"/fields/"+strconv.Itoa(fi)+"/bindings/"+strconv.Itoa(bi), "optional row source cannot populate required action input")
-						}
-					}
-				}
-			}
-		}
-		t, ok := document.Type(p.api.RequestType())
-		if !ok {
-			return buildError("request_type_unresolved", base+"/operations/"+strconv.Itoa(p.index)+"/operationId", "request type does not exist")
-		}
-		for _, f := range t.Fields() {
-			if len(f.Path()) != 1 {
-				continue
-			}
-			v := unwrapOptional(f.ValueType())
-			if !isRequestLeaf(v) {
-				return buildError("request_leaf_type_invalid", base+"/operations/"+strconv.Itoa(p.index)+"/operationId", "v1 request DTO direct fields must be scalar or scalar arrays")
-			}
-			key := f.Path()[0]
-			if f.Required() && covered[key] == "" {
-				return buildError("required_request_binding_missing", base+"/operations/"+strconv.Itoa(p.index)+"/operationId", "required direct request field "+key+" is not covered")
-			}
-		}
-		if p.spec.Role == "get" {
-			for _, f := range page.Fields {
-				if hasBinding(f, alias, "request") {
-					return buildError("singleton_request_field_forbidden", base+"/fields", "singleton get request fields must come only from context bindings")
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func resolveDirectField(d httpapi.Document, typeName string, path []string) (httpapi.Field, httpapi.ValueType, bool) {
-	field, value, _, ok := resolveDirectFieldPresence(d, typeName, path)
-	return field, value, ok
-}
-func resolveDirectFieldPresence(d httpapi.Document, typeName string, path []string) (httpapi.Field, httpapi.ValueType, bool, bool) {
-	if len(path) != 1 {
-		return httpapi.Field{}, httpapi.ValueType{}, false, false
-	}
-	return resolveFieldPathPresence(d, typeName, path, -1)
-}
-func resolveFieldPath(d httpapi.Document, typeName string, path []string, allowedArray int) (httpapi.Field, httpapi.ValueType, bool) {
-	field, value, _, ok := resolveFieldPathPresence(d, typeName, path, allowedArray)
-	return field, value, ok
-}
-func resolveFieldPathPresence(d httpapi.Document, typeName string, path []string, allowedArray int) (httpapi.Field, httpapi.ValueType, bool, bool) {
-	allowed := map[int]bool{}
-	if allowedArray >= 0 {
-		allowed[allowedArray] = true
-	}
-	return resolveFieldPathPresenceArrays(d, typeName, path, allowed)
-}
-func resolveFieldPathPresenceArrays(d httpapi.Document, typeName string, path []string, allowedArrays map[int]bool) (httpapi.Field, httpapi.ValueType, bool, bool) {
-	if typeName == "" || len(path) == 0 || invalidTypedPathSegment(path) >= 0 {
-		return httpapi.Field{}, httpapi.ValueType{}, false, false
-	}
-	current, ok := d.Type(typeName)
-	if !ok {
-		return httpapi.Field{}, httpapi.ValueType{}, false, false
-	}
-	prefix := []string{}
-	required := true
-	for i, s := range path {
-		prefix = append(prefix, s)
-		field, found := current.Field(strings.Join(prefix, "."))
-		if !found {
-			return httpapi.Field{}, httpapi.ValueType{}, false, false
-		}
-		raw := field.ValueType()
-		required = required && field.Required() && raw.Kind() != httpapi.ValueOptional
-		v := unwrapOptional(raw)
-		if i == len(path)-1 {
-			return field, v, required, true
-		}
-		switch v.Kind() {
-		case httpapi.ValueObject:
-		case httpapi.ValueRef:
-			current, ok = d.Type(v.Name())
-			if !ok {
-				return httpapi.Field{}, httpapi.ValueType{}, false, false
-			}
-			prefix = nil
-		case httpapi.ValueArray:
-			if !allowedArrays[i] {
-				return httpapi.Field{}, httpapi.ValueType{}, false, false
-			}
-			e, x := v.Element()
-			if !x {
-				return httpapi.Field{}, httpapi.ValueType{}, false, false
-			}
-			required = required && e.Kind() != httpapi.ValueOptional
-			e = unwrapOptional(e)
-			if e.Kind() == httpapi.ValueRef {
-				current, ok = d.Type(e.Name())
-				if !ok {
-					return httpapi.Field{}, httpapi.ValueType{}, false, false
-				}
-				prefix = nil
-			} else if e.Kind() != httpapi.ValueObject {
-				return httpapi.Field{}, httpapi.ValueType{}, false, false
-			}
-		default:
-			return httpapi.Field{}, httpapi.ValueType{}, false, false
-		}
-	}
-	return httpapi.Field{}, httpapi.ValueType{}, false, false
-}
-func invalidTypedPathSegment(path []string) int {
-	for i, s := range path {
-		if strings.Contains(s, ".") {
-			return i
-		}
-	}
-	return -1
-}
-func unwrapOptional(v httpapi.ValueType) httpapi.ValueType {
-	for v.Kind() == httpapi.ValueOptional {
-		n, ok := v.Element()
-		if !ok {
-			break
-		}
-		v = n
-	}
-	return v
-}
-func exactType(v httpapi.ValueType) string {
-	v = unwrapOptional(v)
-	if v.Kind() == httpapi.ValueArray {
-		e, ok := v.Element()
-		if !ok {
-			return "array:?"
-		}
-		return "array:" + exactType(e)
-	}
-	return string(v.Kind()) + ":" + v.Name()
-}
-func wireValue(v httpapi.ValueType) wireValueType {
-	v = unwrapOptional(v)
-	r := wireValueType{Kind: string(v.Kind()), Name: v.Name()}
-	if v.Kind() == httpapi.ValueArray {
-		e, _ := v.Element()
-		x := wireValue(e)
-		r.Element = &x
-	}
-	return r
-}
-func isIRValue(v httpapi.ValueType) bool {
-	v = unwrapOptional(v)
-	if v.Kind() == httpapi.ValueScalar || v.Kind() == httpapi.ValueRef || v.Kind() == httpapi.ValueObject {
+func controlCompatible(control string, value api.ClosureValue) bool {
+	value = unwrapOptional(value)
+	if control == "" {
 		return true
 	}
-	if v.Kind() != httpapi.ValueArray {
-		return false
-	}
-	element, ok := v.Element()
-	return ok && element.Kind() != httpapi.ValueOptional && isIRValue(element)
-}
-func isRequestLeaf(v httpapi.ValueType) bool {
-	v = unwrapOptional(v)
-	if v.Kind() == httpapi.ValueScalar {
-		return true
-	}
-	if v.Kind() != httpapi.ValueArray {
-		return false
-	}
-	e, ok := v.Element()
-	return ok && unwrapOptional(e).Kind() == httpapi.ValueScalar
-}
-func isIntegerScalar(v httpapi.ValueType) bool {
-	v = unwrapOptional(v)
-	return v.Kind() == httpapi.ValueScalar && integerScalars[v.Name()]
-}
-func isStringScalar(v httpapi.ValueType) bool {
-	v = unwrapOptional(v)
-	return v.Kind() == httpapi.ValueScalar && v.Name() == "string"
-}
-func isContextScalar(v httpapi.ValueType) bool { return isStringScalar(v) || isIntegerScalar(v) }
-func validateControlBinding(control string, v httpapi.ValueType, p string) *Error {
-	v = unwrapOptional(v)
-	valid := true
 	switch control {
-	case "toggle":
-		valid = v.Kind() == httpapi.ValueScalar && v.Name() == "bool"
-	case "select", "text", "password", "textarea":
-		valid = isStringScalar(v)
-	case "multi-select":
-		valid = false
-		if v.Kind() == httpapi.ValueArray {
-			e, ok := v.Element()
-			valid = ok && isStringScalar(e)
-		}
+	case "switch":
+		return value.Kind() == api.ValueScalar && value.Name() == "bool"
+	case "select", "text", "textarea", "readonly", "sensitive", "member", "reference", "attachment", "tags", "component", "i18n", "iconify", "permission", "route", "scope", "http-method", "http-path", "module", "locale", "timezone":
+		return value.Kind() == api.ValueScalar && (value.Name() == "string" || value.Name() == "int64" || value.Name() == "uint64")
 	case "number":
-		valid = v.Kind() == httpapi.ValueScalar && numericScalars[v.Name()]
-	}
-	if control != "" && !valid {
-		return buildError("control_binding_type_invalid", p, "control is incompatible with exact binding type")
-	}
-	return nil
-}
-func allowedArrayFor(spec operationDocument) int {
-	if spec.Result != nil && len(spec.Result.ItemsPath) > 0 {
-		return len(spec.Result.ItemsPath) - 1
-	}
-	return -1
-}
-func bindingWithinResult(path []string, spec operationDocument) bool {
-	if spec.Role == "list" {
-		return len(path) > len(spec.Result.ItemsPath) && hasPrefix(path, spec.Result.ItemsPath)
-	}
-	if spec.Role == "get" {
-		if spec.Result == nil || len(spec.Result.ItemPath) == 0 {
-			return true
-		}
-		return len(path) > len(spec.Result.ItemPath) && hasPrefix(path, spec.Result.ItemPath)
-	}
-	return false
-}
-func hasPrefix(path, prefix []string) bool {
-	if len(path) < len(prefix) {
+		return value.Kind() == api.ValueScalar && (value.Name() == "int32" || value.Name() == "uint32" || value.Name() == "int64" || value.Name() == "uint64" || value.Name() == "float32" || value.Name() == "float64")
+	case "multi-select":
+		element, ok := value.Element()
+		return value.Kind() == api.ValueArray && ok && unwrapOptional(element).Kind() == api.ValueScalar && unwrapOptional(element).Name() == "string"
+	default:
 		return false
 	}
-	for i := range prefix {
-		if path[i] != prefix[i] {
-			return false
-		}
-	}
-	return true
-}
-func hasBinding(f fieldDocument, op, dir string) bool { _, ok := bindingFor(f, op, dir); return ok }
-func bindingFor(f fieldDocument, op, dir string) (bindingDocument, bool) {
-	for _, b := range f.Bindings {
-		if b.Operation == op && b.Direction == dir {
-			return b, true
-		}
-	}
-	return bindingDocument{}, false
-}
-func contains(v []string, w string) bool {
-	for _, x := range v {
-		if x == w {
-			return true
-		}
-	}
-	return false
-}
-func equalPath(a, b []string) bool  { return strings.Join(a, "\x00") == strings.Join(b, "\x00") }
-func clonePath(v []string) []string { return append([]string(nil), v...) }
-func clonePaginationPtr(v *paginationDocument) *paginationDocument {
-	if v == nil {
-		return nil
-	}
-	x := clonePagination(v)
-	return &x
 }
 
-func validateMenuGraph(specs []PageSpec, menus map[string]int) *Error {
-	for i, s := range specs {
-		if s.state == nil || s.state.document.Menu == nil {
-			continue
+func validateMenuGraph(pages []wirePage) *Error {
+	parents := map[string]string{}
+	for _, page := range pages {
+		if page.Menu != nil {
+			parents[page.Menu.ID] = page.Menu.ParentID
 		}
-		m := s.state.document.Menu
-		if m.ParentID == "" {
-			continue
-		}
-		if m.ParentID == m.ID {
-			return buildError("menu_self_parent", "/pages/"+strconv.Itoa(i)+"/menu/parentId", "menu cannot be its own parent")
-		}
-		if _, ok := menus[m.ParentID]; !ok {
-			return buildError("menu_parent_unresolved", "/pages/"+strconv.Itoa(i)+"/menu/parentId", "menu parent does not exist")
-		}
-		seen := map[string]bool{m.ID: true}
-		p := m.ParentID
-		for p != "" {
-			if seen[p] {
-				return buildError("menu_cycle", "/pages/"+strconv.Itoa(i)+"/menu/parentId", "menu parent graph contains a cycle")
+	}
+	for id := range parents {
+		seen := map[string]bool{}
+		for current := id; current != "" && parents[current] != ""; current = parents[current] {
+			if seen[current] {
+				return buildError("menu_cycle", "/pages", "frontend menu graph contains a cycle")
 			}
-			seen[p] = true
-			p = specs[menus[p]].state.document.Menu.ParentID
+			seen[current] = true
 		}
 	}
 	return nil
 }
 
-func validateAndProjectLocales(specs []PageSpec, locales []Locale) ([]wireLocale, error) {
-	if len(specs) > 0 && len(locales) == 0 {
-		return nil, buildError("locale_required", "/locales", "pages require at least one frontend locale")
-	}
-	labels := map[string]bool{}
-	for _, s := range specs {
-		p := s.state.document
-		labels[p.TitleKey] = true
-		if p.Menu != nil {
-			labels[p.Menu.TitleKey] = true
+func projectFactLocales(pages []wirePage, facts sourcecomment.FactGraph) ([]wireLocale, error) {
+	keys := map[string]bool{}
+	for _, page := range pages {
+		keys[page.TitleKey] = true
+		for _, field := range page.Fields {
+			keys[field.LabelKey] = true
 		}
-		for _, f := range p.Fields {
-			labels[f.LabelKey] = true
-			for _, c := range f.Choices {
-				labels[c.LabelKey] = true
-			}
-			for _, c := range f.Columns {
-				labels[c.LabelKey] = true
+		for name, enabled := range map[string]bool{"create": page.Operations.Create != "", "update": page.Operations.Update != "", "delete": page.Operations.Delete != ""} {
+			if enabled {
+				keys[page.ID+".actions."+name] = true
 			}
 		}
-		for _, a := range p.Actions {
-			labels[a.LabelKey] = true
-			if a.ConfirmKey != "" {
-				labels[a.ConfirmKey] = true
-			}
+		if page.Operations.Delete != "" {
+			keys[page.ID+".actions.deleteConfirm"] = true
 		}
 	}
-	for key := range labels {
+	orderedKeys := make([]string, 0, len(keys))
+	for key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+	for _, key := range orderedKeys {
 		parts := strings.Split(key, ".")
 		for index := 1; index < len(parts); index++ {
-			if labels[strings.Join(parts[:index], ".")] {
-				return nil, buildError("locale_message_prefix_collision", "/locales", "required locale message keys cannot be both a leaf and a namespace")
+			if keys[strings.Join(parts[:index], ".")] {
+				return nil, buildError("locale_message_prefix_collision", "/locales", "required locale keys collide by prefix")
 			}
 		}
 	}
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
+	messages := map[string]map[string]string{"zh-CN": {}, "en-US": {}}
+	semanticIDs := map[string]bool{}
+	for _, fact := range facts.Facts() {
+		if fact.ID().Key == "label.zh-CN" || fact.ID().Key == "label.en-US" {
+			semanticIDs[fact.ID().SemanticID] = true
+		}
 	}
-	sort.Strings(keys)
-	seen := map[string]bool{}
-	out := make([]wireLocale, len(locales))
-	for i, l := range locales {
-		base := "/locales/" + strconv.Itoa(i)
-		if l.state == nil {
-			return nil, buildError("locale_invalid", base, "frontend locale is invalid")
+	for semanticID := range semanticIDs {
+		if value, err := facts.SchemaFacts(semanticID); err == nil {
+			messages["zh-CN"][value.Label.Key], messages["en-US"][value.Label.Key] = value.Label.ZhCN, value.Label.EnUS
+			continue
 		}
-		name := l.state.document.Locale
-		if seen[name] {
-			return nil, buildError("locale_duplicate", base+"/locale", "frontend locale is duplicated")
+		if value, err := facts.FieldFacts(semanticID); err == nil {
+			messages["zh-CN"][value.Label.Key], messages["en-US"][value.Label.Key] = value.Label.ZhCN, value.Label.EnUS
 		}
-		seen[name] = true
-		for _, k := range keys {
-			if strings.TrimSpace(l.state.document.Messages[k]) == "" {
-				return nil, buildError("locale_message_missing", base+"/messages/"+escapePointer(k), "required locale message is missing or empty")
+	}
+	actions := map[string][2]string{
+		"create": {"新建", "Create"}, "update": {"编辑", "Edit"}, "delete": {"删除", "Delete"}, "deleteConfirm": {"确认删除？", "Confirm deletion?"},
+	}
+	for _, page := range pages {
+		for action, values := range actions {
+			key := page.ID + ".actions." + action
+			if keys[key] {
+				messages["zh-CN"][key], messages["en-US"][key] = values[0], values[1]
 			}
 		}
-		out[i] = wireLocale{Locale: name, Messages: cloneLocaleDocument(l.state.document).Messages, SourceRef: l.state.sourceRef.String()}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Locale < out[j].Locale })
-	return out, nil
-}
-func escapePointer(v string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(v, "~", "~0"), "/", "~1")
-}
-func mergeSources(apiSources []provenance.Source, specs []PageSpec, locales []Locale) ([]provenance.Source, error) {
-	by := map[string]provenance.Source{}
-	for _, s := range apiSources {
-		by[s.Ref.String()] = s
-	}
-	for i, s := range specs {
-		x := provenance.Source{Ref: s.state.sourceRef, Digest: s.state.digest}
-		if p, ok := by[x.Ref.String()]; ok && p.Digest != x.Digest {
-			return nil, buildError("source_digest_conflict", "/pages/"+strconv.Itoa(i)+"/specSourceRef", "source reference has conflicting digests")
+	for _, key := range orderedKeys {
+		for _, locale := range []string{"zh-CN", "en-US"} {
+			if strings.TrimSpace(messages[locale][key]) == "" {
+				return nil, buildError("locale_message_missing", "/locales/"+locale+"/messages/"+escapePointer(key), "required locale message is missing from upstream facts")
+			}
 		}
-		by[x.Ref.String()] = x
 	}
-	for i, l := range locales {
-		x := provenance.Source{Ref: l.state.sourceRef, Digest: l.state.digest}
-		if p, ok := by[x.Ref.String()]; ok && p.Digest != x.Digest {
-			return nil, buildError("source_digest_conflict", "/locales/"+strconv.Itoa(i)+"/sourceRef", "source reference has conflicting digests")
+	if len(pages) == 0 {
+		return []wireLocale{}, nil
+	}
+	return []wireLocale{{Locale: "en-US", Messages: messages["en-US"]}, {Locale: "zh-CN", Messages: messages["zh-CN"]}}, nil
+}
+
+func selectClosure(document api.Closure, operationPointers map[string]string) (api.Closure, *Error) {
+	operationIDs := make([]string, 0, len(operationPointers))
+	for operationID := range operationPointers {
+		operationIDs = append(operationIDs, operationID)
+	}
+	sort.Strings(operationIDs)
+	selected := api.Closure{ConventionValue: document.Convention(), FactGraphValue: document.FactGraph()}
+	types := map[string]api.ClosureType{}
+	sources := map[string]provenance.Source{}
+	addSources := func(values []provenance.Source, pointer string) *Error {
+		for _, source := range values {
+			key := source.Ref.String()
+			if previous, exists := sources[key]; exists && previous.Digest != source.Digest {
+				return buildError("source_digest_conflict", pointer, "referenced API facts have conflicting source digests")
+			}
+			sources[key] = source
 		}
-		by[x.Ref.String()] = x
-	}
-	out := make([]provenance.Source, 0, len(by))
-	for _, s := range by {
-		out = append(out, s)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ref.String() < out[j].Ref.String() })
-	return out, nil
-}
-func computeSourceDigest(d provenance.Digest, s []provenance.Source) (provenance.Digest, error) {
-	b, e := json.Marshal(sourceSetEnvelope{APIVersion: sourceSetAPI, APIDigest: d.String(), Sources: wireSources(s)})
-	if e != nil {
-		return provenance.Digest{}, e
-	}
-	b, e = jcs.Transform(b)
-	if e != nil {
-		return provenance.Digest{}, e
-	}
-	return provenance.SHA256(b), nil
-}
-func cloneResult(v *resultDocument) *resultDocument {
-	if v == nil {
 		return nil
 	}
-	r := *v
-	r.ItemsPath = clonePath(v.ItemsPath)
-	r.ItemPath = clonePath(v.ItemPath)
-	r.TotalPath = clonePath(v.TotalPath)
-	r.RowKeyPath = clonePath(v.RowKeyPath)
-	return &r
+	var visitType func(string, string) *Error
+	var visitValue func(api.ClosureValue, string) *Error
+	visitValue = func(value api.ClosureValue, pointer string) *Error {
+		if value.Kind() == api.ValueRef {
+			return visitType(value.Name(), pointer)
+		}
+		if element, ok := value.Element(); ok {
+			return visitValue(element, pointer)
+		}
+		return nil
+	}
+	visitType = func(name, pointer string) *Error {
+		if name == "" {
+			return nil
+		}
+		if _, exists := types[name]; exists {
+			return nil
+		}
+		value, ok := document.Type(name)
+		if !ok {
+			return buildError("type_unresolved", pointer, "referenced API type does not exist")
+		}
+		types[name] = value
+		if failure := addSources(value.Sources(), pointer); failure != nil {
+			return failure
+		}
+		for _, field := range value.Fields() {
+			if failure := addSources(field.Sources(), pointer); failure != nil {
+				return failure
+			}
+			if failure := visitValue(field.ValueType(), pointer); failure != nil {
+				return failure
+			}
+		}
+		if failure := visitValue(value.Shape(), pointer); failure != nil {
+			return failure
+		}
+		return nil
+	}
+	for _, operationID := range operationIDs {
+		pointer := operationPointers[operationID]
+		operation, ok := document.Operation(operationID)
+		if !ok {
+			return api.Closure{}, buildError("operation_unresolved", pointer, "API operation does not exist")
+		}
+		selected.Operations = append(selected.Operations, operation)
+		if failure := addSources(operation.Sources(), pointer); failure != nil {
+			return api.Closure{}, failure
+		}
+		if failure := visitType(operation.RequestType(), pointer); failure != nil {
+			return api.Closure{}, failure
+		}
+		if failure := visitType(operation.ResponseType(), pointer); failure != nil {
+			return api.Closure{}, failure
+		}
+	}
+	typeNames := make([]string, 0, len(types))
+	for name := range types {
+		typeNames = append(typeNames, name)
+	}
+	sort.Strings(typeNames)
+	for _, name := range typeNames {
+		selected.Types = append(selected.Types, types[name])
+	}
+	sourceRefs := make([]string, 0, len(sources))
+	for ref := range sources {
+		sourceRefs = append(sourceRefs, ref)
+	}
+	sort.Strings(sourceRefs)
+	for _, ref := range sourceRefs {
+		selected.Sources = append(selected.Sources, sources[ref])
+	}
+	return selected, nil
 }
-func bindingKey(v bindingDocument) string {
-	return v.Operation + "\x00" + v.Direction + "\x00" + strings.Join(v.Path, "\x00")
+
+func closureTypes(closure api.Closure, typeNames map[string]string) []wireClosureType {
+	result := make([]wireClosureType, len(closure.Types))
+	for index, value := range closure.Types {
+		result[index] = wireClosureType{Name: value.Name(), TypeScriptName: typeNames[value.Name()], Fields: make([]wireClosureField, len(value.Fields()))}
+		if shape := value.Shape(); shape.Kind() != "" && shape.Kind() != api.ValueObject {
+			converted := closureValue(shape)
+			result[index].Shape = &converted
+		}
+		for fieldIndex, field := range value.Fields() {
+			result[index].Fields[fieldIndex] = wireClosureField{Path: field.Path(), Required: field.Required(), ValueType: closureValue(field.ValueType())}
+		}
+		sort.Slice(result[index].Fields, func(left, right int) bool {
+			return strings.Join(result[index].Fields[left].Path, "\x00") < strings.Join(result[index].Fields[right].Path, "\x00")
+		})
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Name < result[right].Name })
+	return result
+}
+
+func closureOperations(closure api.Closure, clientNames map[string]string) ([]wireClosureOperation, *Error) {
+	result := make([]wireClosureOperation, len(closure.Operations))
+	for index, operation := range closure.Operations {
+		clientName, ok := clientNames[operation.ID()]
+		if !ok {
+			return nil, buildError("generated_operation_name_missing", "/operations", "operation client name is missing")
+		}
+		result[index] = wireClosureOperation{ClientName: clientName, ID: operation.ID(), Method: string(operation.Method()), Path: operation.Path(), Auth: string(operation.Auth()), Permission: operation.Permission(), RequestType: operation.RequestType(), ResponseType: operation.ResponseType()}
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].ID < result[right].ID })
+	return result, nil
+}
+
+func closureValue(value api.ClosureValue) wireClosureValue {
+	result := wireClosureValue{Kind: value.Kind(), Name: value.Name()}
+	if element, ok := value.Element(); ok {
+		converted := closureValue(element)
+		result.Element = &converted
+	}
+	return result
+}
+
+func routeName(id string) string {
+	var result strings.Builder
+	upper := true
+	for _, character := range id {
+		if character == '-' || character == '.' {
+			upper = true
+			continue
+		}
+		if upper {
+			character = unicode.ToUpper(character)
+			upper = false
+		}
+		result.WriteRune(character)
+	}
+	return result.String()
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/nxnminieye/nexa/generation/entity"
 	"github.com/nxnminieye/nexa/generation/internal/crudbuild"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -123,15 +123,15 @@ func TestResultPlanRoundTripIsRequestBoundAndReadOnly(t *testing.T) {
 	entities := planSnapshot.EntitySnapshot()
 	entityValues := entities.Entities()
 	if len(entityValues) != 1 || entityValues[0].Meta() != resultTestEntityDocument(t).Entities()[0].Meta() {
-		t.Fatal("plan snapshot lost typed SchemaMeta")
+		t.Fatal("plan snapshot lost typed SchemaFacts")
 	}
 	account := entityValues[0]
 	fields := account.Fields()
 	if len(fields) != 1 || !reflect.DeepEqual(fields[0].Meta(), resultTestEntityDocument(t).Entities()[0].Fields()[0].Meta()) {
-		t.Fatal("plan snapshot lost typed FieldMeta")
+		t.Fatal("plan snapshot lost typed FieldFacts")
 	}
 	crud, ok := account.CRUD()
-	if !ok || !reflect.DeepEqual(crud.Operations(), []nexaent.CRUDOperation{nexaent.CRUDList, nexaent.CRUDGet}) {
+	if !ok || !reflect.DeepEqual(crud.Operations(), []sourcecomment.CRUDOperation{sourcecomment.CRUDList, sourcecomment.CRUDGet}) {
 		t.Fatal("plan snapshot lost typed CRUD metadata")
 	}
 	projected := entities.ProjectedSources()
@@ -218,10 +218,6 @@ func TestTenantPlanResultRetainsVerifiedCRUDSnapshot(t *testing.T) {
 			}
 			if withCRUD {
 				for _, method := range crudSnapshot.Services()[0].Methods() {
-					bindings := method.RPCContext().ContextFields()
-					if len(bindings) != 1 || bindings[0].Source() != crudbuild.ContextTenantID || bindings[0].RPCField() != "tenant_id" {
-						t.Fatalf("method %s context = %#v", method.Name(), bindings)
-					}
 					var request crudbuild.Message
 					for _, message := range crudSnapshot.Messages() {
 						if message.Name() == method.Input() {
@@ -229,15 +225,10 @@ func TestTenantPlanResultRetainsVerifiedCRUDSnapshot(t *testing.T) {
 							break
 						}
 					}
-					var tenant crudbuild.Field
 					for _, field := range request.Fields() {
-						if field.IsTenantContext() {
-							tenant = field
-							break
+						if field.Name() == "tenant_id" {
+							t.Fatalf("method %s request leaked infrastructure tenant_id", method.Name())
 						}
-					}
-					if tenant.Name() != "tenant_id" || tenant.Type() != "int64" || !tenant.Internal() {
-						t.Fatalf("method %s tenant field = %#v", method.Name(), tenant)
 					}
 				}
 			}
@@ -588,16 +579,12 @@ func resultTestEntityDocumentAt(t *testing.T, path string) entity.Document {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := nexaent.CRUD(nexaent.CRUDList, nexaent.CRUDGet).CanonicalJSON()
+	crud, err := sourcecomment.NewCRUDOperations(sourcecomment.CRUDList, sourcecomment.CRUDGet)
 	if err != nil {
 		t.Fatal(err)
 	}
-	crud, err := nexaent.DecodeCRUD(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	meta := nexaent.SchemaMeta{Label: nexaent.LocalizedText{Key: "account.label", ZhCN: "账户", EnUS: "Account"}, Description: nexaent.LocalizedText{Key: "account.desc", ZhCN: "账户", EnUS: "Account"}, Identity: nexaent.IdentityEntID, Scope: nexaent.ScopeTenant}
-	fieldMeta := nexaent.FieldMeta{Label: nexaent.LocalizedText{Key: "account.name", ZhCN: "名称", EnUS: "Name"}, Description: nexaent.LocalizedText{Key: "account.name.desc", ZhCN: "名称", EnUS: "Name"}, UIHint: nexaent.UIHintText, Visibility: nexaent.VisibilityPublic, CRUD: &nexaent.CRUDFieldPolicy{Read: nexaent.ReadInclude, Mutation: nexaent.MutationCreateUpdate}}
+	meta := sourcecomment.SchemaFacts{Label: sourcecomment.LocalizedText{Key: "account.label", ZhCN: "账户", EnUS: "Account"}, Description: sourcecomment.LocalizedText{Key: "account.desc", ZhCN: "账户", EnUS: "Account"}, Scope: sourcecomment.ScopeTenant}
+	fieldMeta := sourcecomment.FieldFacts{Label: sourcecomment.LocalizedText{Key: "account.name", ZhCN: "名称", EnUS: "Name"}, Description: sourcecomment.LocalizedText{Key: "account.name.desc", ZhCN: "名称", EnUS: "Name"}, Control: sourcecomment.UIControlText, Visibility: sourcecomment.VisibilityPublic, CRUD: &sourcecomment.CRUDFieldPolicy{Read: sourcecomment.ReadInclude, Mutation: sourcecomment.MutationCreateUpdate}}
 	value, err := entityvalue.NewDocument(entityvalue.Projection{
 		ExecutionModuleSources: []provenance.Source{{Ref: testSourceRef(t, "go.mod"), Digest: provenance.SHA256([]byte("go.mod"))}},
 		Entities:               []entityvalue.EntityProjection{{Name: "Account", SourceRef: ref, Meta: meta, CRUD: &crud, Identity: entityvalue.IdentityProjection{Kind: string(entity.IdentityImplicit), Name: "id", Type: string(entity.ScalarInt64)}, Fields: []entityvalue.FieldProjection{{Name: "name", SourceRef: fieldRef, Type: string(entity.ScalarString), Meta: fieldMeta}}}},
@@ -619,12 +606,12 @@ func resultTestTenantDocument(t *testing.T, withCRUD bool) entity.Document {
 	tenantRef, _ := provenance.RepositoryRef(path, "schema:TenantAccount/field:tenant_id")
 	projection := entityvalue.EntityProjection{
 		Name: "TenantAccount", SourceRef: ref,
-		Meta:     nexaent.SchemaMeta{Label: nexaent.LocalizedText{Key: "tenant_account.label", ZhCN: "Tenant Account", EnUS: "Tenant Account"}, Description: nexaent.LocalizedText{Key: "tenant_account.description", ZhCN: "Tenant Account", EnUS: "Tenant Account"}, Identity: nexaent.IdentityEntID, Scope: nexaent.ScopeTenant},
+		Meta:     sourcecomment.SchemaFacts{Label: sourcecomment.LocalizedText{Key: "tenant_account.label", ZhCN: "Tenant Account", EnUS: "Tenant Account"}, Description: sourcecomment.LocalizedText{Key: "tenant_account.description", ZhCN: "Tenant Account", EnUS: "Tenant Account"}, Scope: sourcecomment.ScopeTenant},
 		Identity: entityvalue.IdentityProjection{Kind: string(entity.IdentityImplicit), Name: "id", Type: string(entity.ScalarInt64)},
-		Fields:   []entityvalue.FieldProjection{{Name: "tenant_id", SourceRef: tenantRef, Type: string(entity.ScalarInt64), Immutable: true, IsTenantField: true, Meta: nexaent.FieldMeta{Label: nexaent.LocalizedText{Key: "tenant_account.tenant_id.label", ZhCN: "Tenant", EnUS: "Tenant"}, Description: nexaent.LocalizedText{Key: "tenant_account.tenant_id.description", ZhCN: "Tenant", EnUS: "Tenant"}, UIHint: nexaent.UIHintReadonly, Visibility: nexaent.VisibilityInternal}}},
+		Fields:   []entityvalue.FieldProjection{{Name: "tenant_id", SourceRef: tenantRef, Type: string(entity.ScalarInt64), Immutable: true, IsTenantField: true, Meta: sourcecomment.FieldFacts{Label: sourcecomment.LocalizedText{Key: "tenant_account.tenant_id.label", ZhCN: "Tenant", EnUS: "Tenant"}, Description: sourcecomment.LocalizedText{Key: "tenant_account.tenant_id.description", ZhCN: "Tenant", EnUS: "Tenant"}, Control: sourcecomment.UIControlReadonly, Visibility: sourcecomment.VisibilityInternal}}},
 	}
 	if withCRUD {
-		crud := taskResultCRUD(t, nexaent.CRUDGet, nexaent.CRUDCreate)
+		crud := taskResultCRUD(t, sourcecomment.CRUDGet, sourcecomment.CRUDCreate)
 		projection.CRUD = &crud
 	}
 	value, err := entityvalue.NewDocument(entityvalue.Projection{ExecutionModuleSources: []provenance.Source{{Ref: testSourceRef(t, "go.mod"), Digest: provenance.SHA256([]byte("go.mod"))}}, Entities: []entityvalue.EntityProjection{projection}})
@@ -638,13 +625,9 @@ func resultTestTenantDocument(t *testing.T, withCRUD bool) entity.Document {
 	return document
 }
 
-func taskResultCRUD(t *testing.T, operations ...nexaent.CRUDOperation) nexaent.CRUDSpec {
+func taskResultCRUD(t *testing.T, operations ...sourcecomment.CRUDOperation) sourcecomment.CRUDOperations {
 	t.Helper()
-	raw, err := nexaent.CRUD(operations...).CanonicalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	crud, err := nexaent.DecodeCRUD(raw)
+	crud, err := sourcecomment.NewCRUDOperations(operations...)
 	if err != nil {
 		t.Fatal(err)
 	}

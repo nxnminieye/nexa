@@ -2,236 +2,261 @@ package httpapi_test
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nxnminieye/nexa/generation/api"
 	"github.com/nxnminieye/nexa/generation/httpapi"
-	"github.com/nxnminieye/nexa/provenance"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 )
 
-type recordingResolver struct {
-	want provenance.Source
-	seen []provenance.Source
+func TestLoadBuildsTypedFactsForNativeAPITypeAndFields(t *testing.T) {
+	root := t.TempDir()
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+// @nexa crud.operations: ["list", "get", "create", "update", "delete"]
+// @nexa scope: "global"
+type Item {
+  // @nexa label.zh-CN: "名称"
+  // @nexa crud.read: "include"
+  // @nexa crud.mutation: "create-update"
+  Name string
 }
-
-func (r *recordingResolver) Resolve(_ context.Context, ref provenance.SourceRef, digest provenance.Digest) error {
-	source := provenance.Source{Ref: ref, Digest: digest}
-	r.seen = append(r.seen, source)
-	if source != r.want {
-		return os.ErrInvalid
-	}
-	return nil
+type Request {}
+type Response { Item Item }
+service sample {
+  // @nexa auth: "none"
+  @handler Get
+  get /items (Request) returns (Response)
 }
-
-func TestLoadProjectsFormalAPIIntoNativeOwnerNodes(t *testing.T) {
-	repository := t.TempDir()
-	writeAPI(t, repository, "desc/types.api", fmt.Sprintf(`syntax = "v1"
-
-type GetSampleResponse {
-  Name string %cjson:"name"%c
-}
-`, '`', '`'))
-	originRef := mustRef(t, "rpc/sample.proto", "message:sample.v1.Sample.field:name")
-	originDigest := provenance.SHA256([]byte("rpc-name"))
-	writeAPI(t, repository, "desc/core.api", fmt.Sprintf(`syntax = "v1"
-
-info (
-  nexaContractVersion: "nexa.dev/http-api/v1"
-)
-
-import "types.api"
-
-type GetSampleRequest {
-  ID string %cpath:"id"%c
-  Query *string %cform:"q,optional"%c
-  Trace string %cheader:"X-Trace"%c
-  Payload {
-    Name string %cjson:"name" nexaOriginRef:"%s" nexaOriginDigest:"%s"%c
-  } %cjson:"payload"%c
-}
-
-@server (
-  nexaOperationId: "sample.get"
-  nexaAuthMode: "required"
-  nexaCredentialId: "primary"
-  nexaCredentialType: "bearer"
-  nexaCredentialLocation: "header"
-  nexaCredentialName: "Authorization"
-  nexaPermission: "sample.read"
-  nexaCapabilityId: "nexa.dev/sample-api"
-  nexaCapabilityVersion: "nexa.dev/sample-api/v1"
-)
-service core-api {
-  @handler getSample
-  get /samples/:id (GetSampleRequest) returns (GetSampleResponse)
-}
-`, '`', '`', '`', '`', '`', '`', '`', originRef.String(), originDigest.String(), '`', '`', '`'))
-	resolver := &recordingResolver{want: provenance.Source{Ref: originRef, Digest: originDigest}}
-
-	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{
-		RepositoryRoot: repository,
-		EntryFile:      "desc/core.api",
-		SourceResolver: resolver,
-	})
+`)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatal(err)
 	}
-	if got, want := document.APIVersion(), httpapi.APIVersion; got != want {
-		t.Fatalf("APIVersion() = %q, want %q", got, want)
+	facts := document.FactGraph()
+	for id, want := range map[sourcecomment.FactID]string{
+		{SemanticID: "Item", Key: "scope"}:            "global",
+		{SemanticID: "Item.name", Key: "label.zh-CN"}: "名称",
+		{SemanticID: "Item.name", Key: "crud.read"}:   "include",
+	} {
+		fact, ok := facts.Fact(id)
+		if !ok {
+			t.Fatalf("fact %s missing", id.String())
+		}
+		value, ok := fact.Value().String()
+		if !ok || value != want {
+			t.Fatalf("fact %s = %q, %v", id.String(), value, ok)
+		}
+		if fact.FirstSource().Stage() != sourcecomment.StageAPI {
+			t.Fatalf("fact %s source = %s", id.String(), fact.FirstSource().String())
+		}
 	}
-	if got := len(document.Types()); got != 2 {
-		t.Fatalf("Types() length = %d, want 2", got)
+	crud, ok, err := facts.CRUD("Item")
+	operations := crud.Operations()
+	if err != nil || !ok || len(operations) != 5 || operations[4] != sourcecomment.CRUDDelete {
+		t.Fatalf("CRUD = %#v, %v, %v", crud, ok, err)
 	}
-	response, ok := document.Type("GetSampleResponse")
-	if !ok || response.Shape().Kind() != httpapi.ValueObject {
-		t.Fatalf("imported response type = %#v, %v", response, ok)
-	}
-	assertNativeOwner(t, response.Provenance(), "desc/types.api", "type:GetSampleResponse")
-
-	request, ok := document.Type("GetSampleRequest")
-	if !ok {
-		t.Fatal("GetSampleRequest not found")
-	}
-	assertNativeOwner(t, request.Provenance(), "desc/core.api", "type:GetSampleRequest")
-	fields := request.Fields()
-	if got := len(fields); got != 5 {
-		t.Fatalf("request Fields() length = %d, want 5", got)
-	}
-	query, ok := request.Field("Query")
-	if !ok || query.Required() || query.ValueType().Kind() != httpapi.ValueOptional {
-		t.Fatalf("Query = %#v, %v", query, ok)
-	}
-	trace, _ := request.Field("Trace")
-	binding, ok := trace.Binding()
-	if !ok || binding.Location() != api.RequestBindingHeader || binding.Name() != "x-trace" {
-		t.Fatalf("Trace binding = %#v, %v", binding, ok)
-	}
-	nested, ok := request.Field("Payload.Name")
-	if !ok || nested.ValueType().Kind() != httpapi.ValueScalar {
-		t.Fatalf("nested field = %#v, %v", nested, ok)
-	}
-	origin, ok := nested.Origin()
-	if !ok || origin != resolver.want || len(resolver.seen) != 1 {
-		t.Fatalf("origin = %#v, %v; resolver calls = %#v", origin, ok, resolver.seen)
-	}
-	assertNativeOwner(t, nested.Provenance(), "desc/core.api", "field:GetSampleRequest.Payload.Name")
-
-	operation, ok := document.Operation("sample.get")
-	if !ok {
-		t.Fatal("sample.get operation not found")
-	}
-	if operation.Method() != api.MethodGET || operation.Path() != "/samples/{id}" || operation.RequestType() != "GetSampleRequest" || operation.ResponseType() != "GetSampleResponse" {
-		t.Fatalf("operation projection = %#v", operation)
-	}
-	if operation.ResponseBody() != api.ResponseBodyJSON || operation.Permission() != "sample.read" {
-		t.Fatalf("operation response/permission = %q, %q", operation.ResponseBody(), operation.Permission())
-	}
-	auth := operation.Auth()
-	credentials := auth.Credentials()
-	if auth.Mode() != api.AuthRequired || len(credentials) != 1 || credentials[0].Name() != "authorization" {
-		t.Fatalf("operation auth = %#v", auth)
-	}
-	capability, ok := operation.Capability()
-	if !ok || capability.ID() != "nexa.dev/sample-api" || capability.APIVersion() != "nexa.dev/sample-api/v1" {
-		t.Fatalf("operation capability = %#v, %v", capability, ok)
-	}
-	assertNativeOwner(t, operation.Provenance(), "desc/core.api", "route:GET /samples/{id}")
 }
 
-func TestLoadRejectsInvalidFormalAndTypedMetadata(t *testing.T) {
-	tests := map[string]struct {
-		source, reason string
-	}{
-		"parser error": {source: `syntax = "v1"
-type Broken {`, reason: "parser_error"},
-		"missing contract version": {source: `syntax = "v1"
-type Request { ID string }
-service api { @handler x get /x (Request) }`, reason: "contract_version_missing"},
-		"wrong contract version": {source: `syntax = "v1"
-info (nexaContractVersion: "wrong")
-type Request { ID string }
-service api { @handler x get /x (Request) }`, reason: "contract_version_unsupported"},
-		"unknown nexa server key": {source: `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type Request { ID string }
-@server (nexaOperationId: "x.get" nexaAuthMode: "none" nexaUnknown: "x")
-service api { @handler x get /x (Request) }`, reason: "server_metadata_unknown"},
-		"half credential": {source: `syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type Request { ID string }
-@server (nexaOperationId: "x.get" nexaAuthMode: "required" nexaCredentialId: "primary")
-service api { @handler x get /x (Request) }`, reason: "server_metadata_invalid"},
-		"half origin": {source: fmt.Sprintf(`syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type Request { ID string %cjson:"id" nexaOriginRef:"repo:x.api#field%%3AX.id"%c }
-@server (nexaOperationId: "x.get" nexaAuthMode: "none")
-service api { @handler x get /x (Request) }`, '`', '`'), reason: "field_tags_invalid"},
-		"multiple bindings": {source: fmt.Sprintf(`syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
-type Request { ID string %cpath:"id" json:"id"%c }
-@server (nexaOperationId: "x.get" nexaAuthMode: "none")
-service api { @handler x get /x/:id (Request) }`, '`', '`'), reason: "field_tags_invalid"},
+func TestLoadAcceptsCanonicalAuthoringWithoutTransportMetadata(t *testing.T) {
+	root := t.TempDir()
+	source := `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type ListRequest {
+  Limit int64
+  Offset int64
+}
+type Item {
+  ID string
+  DisplayName string
+}
+type ListResponse {
+  Items []Item
+  Total int32
+}
+service sample {
+  // @nexa auth: "required"
+  // @nexa permission: "sample.read"
+  @handler List
+  get /samples (ListRequest) returns (ListResponse)
+}
+`
+	writeHTTPAPI(t, root, source)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for name, test := range tests {
+	if err := httpapi.ValidateConvention(document); err != nil {
+		t.Fatal(err)
+	}
+	operation, ok := document.Operation("list")
+	if !ok || operation.Method() != api.MethodGET || operation.Auth().Mode() != api.AuthRequired || operation.ResponseType() != "ListResponse" {
+		t.Fatalf("operation = %#v, %v", operation, ok)
+	}
+	item, ok := document.Type("Item")
+	if !ok || len(item.Fields()) != 2 {
+		t.Fatalf("item = %#v, %v", item, ok)
+	}
+}
+
+func TestLoadAcceptsPDCLTransportTagsAndRejectsAliases(t *testing.T) {
+	for name, mutation := range map[string]string{
+		"accepted transport tag":   "type Request { ID string `path:\"id\"` }\nservice sample {\n// @nexa auth: \"required\"\n// @nexa permission: \"sample.read\"\n@handler Get\nget /samples/:id (Request) returns (Request)\n}",
+		"accepted lower snake tag": "type Request { TenantID string `form:\"tenant_id\"` }\nservice sample {\n// @nexa auth: \"required\"\n// @nexa permission: \"sample.read\"\n@handler List\nget /samples (Request) returns (Request)\n}",
+		"transport alias":          "type Request { ID string `json:\"alias\"` }",
+		"legacy Nexa metadata":     "type Request { ID string }\n@server (nexaOperationId: \"sample.get\" nexaAuthMode: \"required\")\nservice sample { @handler Get get /samples/:id (Request) returns (Request) }",
+	} {
 		t.Run(name, func(t *testing.T) {
-			repository := t.TempDir()
-			writeAPI(t, repository, "core.api", test.source)
-			_, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: "core.api"})
-			if err == nil {
-				t.Fatal("Load() succeeded")
+			root := t.TempDir()
+			writeHTTPAPI(t, root, "// @nexa $contract: \"nexa.dev/source-comment/v1\"\nsyntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-convention/v1\")\n"+mutation)
+			document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
+			if name == "accepted transport tag" || name == "accepted lower snake tag" {
+				if err != nil || httpapi.ValidateConvention(document) != nil {
+					t.Fatalf("PDCL transport tag rejected: %v", err)
+				}
+				if name == "accepted lower snake tag" {
+					request, ok := document.Type("Request")
+					if !ok || len(request.Fields()) != 1 || request.Fields()[0].Path()[0] != "tenant_id" {
+						t.Fatalf("lower_snake identity = %#v, %v", request, ok)
+					}
+				}
+				return
 			}
-			var typed *httpapi.Error
-			if !errors.As(err, &typed) || typed.Reason() != test.reason {
-				t.Fatalf("Load() error = %T %v, want reason %q", err, err, test.reason)
+			if err == nil {
+				t.Fatal("non-convention authoring accepted")
 			}
 		})
 	}
 }
 
-func assertNativeOwner(t *testing.T, owner httpapi.NodeProvenance, path, fragment string) {
-	t.Helper()
-	if owner.Kind() != httpapi.NodeFactNative {
-		t.Fatalf("Kind() = %q, want native", owner.Kind())
-	}
-	source, ok := owner.NativeSource()
-	if !ok {
-		t.Fatal("NativeSource() not available")
-	}
-	wantRef := mustRef(t, path, fragment)
-	canonical, ok := owner.CanonicalSourceJSON()
-	if !ok || len(canonical) == 0 || canonical[len(canonical)-1] == '\n' {
-		t.Fatalf("CanonicalSourceJSON() = %q, %v", canonical, ok)
-	}
-	if source.Ref != wantRef || source.Digest != provenance.SHA256(canonical) {
-		t.Fatalf("native source = %#v, want ref %q and canonical digest", source, wantRef.String())
-	}
-	canonical[0] ^= 0xff
-	again, _ := owner.CanonicalSourceJSON()
-	if again[0] == canonical[0] {
-		t.Fatal("CanonicalSourceJSON() returned aliased bytes")
-	}
+func TestLoadAcceptsPatchInConventionGate(t *testing.T) {
+	root := t.TempDir()
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type Request {
+  ID string
+  Name string
 }
-
-func writeAPI(t *testing.T, root, name, source string) {
-	t.Helper()
-	path := filepath.Join(root, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
-		t.Fatal(err)
-	}
+type Response {
+  ID string
+  Name string
 }
-
-func mustRef(t *testing.T, path, fragment string) provenance.SourceRef {
-	t.Helper()
-	ref, err := provenance.RepositoryRef(path, fragment)
+service sample {
+  // @nexa auth: "required"
+  // @nexa permission: "sample.write"
+  @handler Patch
+  patch /samples/:id (Request) returns (Response)
+}
+`)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ref
+	if err := httpapi.ValidateConvention(document); err != nil {
+		t.Fatalf("PATCH convention error = %v", err)
+	}
+}
+
+func TestLoadAcceptsRecursiveNamedDTO(t *testing.T) {
+	root := t.TempDir()
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type Request {}
+type RouteItem {
+  Name string
+  Children []RouteItem
+}
+type Response { Routes []RouteItem }
+service core {
+  // @nexa auth: "required"
+  // @nexa permission: "nexa.menu.read"
+  @handler GetAllMenus
+  get /menu/all (Request) returns (Response)
+}
+`)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := httpapi.ValidateConvention(document); err != nil {
+		t.Fatal(err)
+	}
+	route, ok := document.Type("RouteItem")
+	if !ok {
+		t.Fatal("RouteItem missing")
+	}
+	children, ok := route.Field("children")
+	if !ok {
+		t.Fatal("RouteItem.Children missing")
+	}
+	element, ok := children.ValueType().Element()
+	if !ok || element.Kind() != httpapi.ValueRef || element.Name() != "RouteItem" {
+		t.Fatalf("RouteItem.Children = %#v, %v", element, ok)
+	}
+}
+
+func TestLoadDerivesGoZeroGroupHandlerIdentityAndRejectsCanonicalCollision(t *testing.T) {
+	root := t.TempDir()
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type Request {}
+type Response { OK bool }
+@server (group: asset)
+service api {
+  // @nexa auth: "none"
+  @handler List
+  get /assets (Request) returns (Response)
+}
+@server (group: role)
+service api {
+  // @nexa auth: "none"
+  @handler List
+  get /roles (Request) returns (Response)
+}
+`)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operationID := range []string{"asset.list", "role.list"} {
+		if _, ok := document.Operation(operationID); !ok {
+			t.Fatalf("operation %q missing", operationID)
+		}
+	}
+
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type Request {}
+type Response { OK bool }
+@server (group: foo_bar)
+service api {
+  // @nexa auth: "none"
+  @handler List
+  get /one (Request) returns (Response)
+}
+@server (group: fooBar)
+service api {
+  // @nexa auth: "none"
+  @handler List
+  get /two (Request) returns (Response)
+}
+`)
+	if _, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"}); err == nil {
+		t.Fatal("canonical group/handler collision accepted")
+	}
+}
+
+func writeHTTPAPI(t *testing.T, root, source string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "sample.api"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }

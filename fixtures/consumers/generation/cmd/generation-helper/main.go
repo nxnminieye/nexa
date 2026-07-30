@@ -20,7 +20,7 @@ var outputs = map[string]map[string]string{
 		"account.generated.go":    "package generated\n\ntype Account struct{ Name string }\n",
 	},
 	"api": {
-		"core.generated.api": "syntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-api/v1\")\ntype GeneratedHealthRequest {}\ntype GeneratedHealthResponse { OK bool }\n@server (nexaOperationId: \"generated.health\" nexaAuthMode: \"none\")\nservice generated-api { @handler generatedHealth get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse) }\n",
+		"core.generated.api": "// @nexa $contract: \"nexa.dev/source-comment/v1\"\nsyntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-convention/v1\")\ntype GeneratedHealthRequest {}\ntype GeneratedHealthResponse { OK bool }\nservice generated-api {\n  // @nexa $source: \"proto://backend/core/desc/core.proto#core.v1.CoreService.Health\"\n  @handler GeneratedHealth\n  get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse)\n}\n",
 		"core.generated.go":  "package generated\n\nconst HealthPath = \"/generated/health\"\n",
 	},
 }

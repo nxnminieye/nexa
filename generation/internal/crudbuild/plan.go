@@ -8,7 +8,6 @@ import (
 
 	"github.com/bufbuild/protocompile"
 	"github.com/nxnminieye/nexa/generation/entity"
-	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/provenance"
 )
 
@@ -306,7 +305,7 @@ func compileProto(path string, data []byte) error {
 	if !validOutputPath(path) {
 		return renderError("proto_artifact_path_invalid", "/protoArtifact/path")
 	}
-	resolver := &protocompile.SourceResolver{Accessor: protocompile.SourceAccessorFromMap(map[string]string{path: string(data), "nexa/protocol/v1/options.proto": string(genprotocol.OptionsProto())})}
+	resolver := &protocompile.SourceResolver{Accessor: protocompile.SourceAccessorFromMap(map[string]string{path: string(data)})}
 	compiler := protocompile.Compiler{Resolver: protocompile.WithStandardImports(resolver)}
 	files, err := compiler.Compile(context.Background(), path)
 	if err != nil || len(files) != 1 {

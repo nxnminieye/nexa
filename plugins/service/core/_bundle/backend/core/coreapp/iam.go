@@ -34,22 +34,27 @@ type TenantRole struct {
 	DisplayName     string
 	Status          IAMStatus
 	Managed         bool
+	DefaultRouter   string
 	PermissionCodes []string
 	MenuCodes       []string
 	Version         uint64
 }
 
 type Menu struct {
-	ID          string
-	SourceID    string
-	Code        string
-	ParentCode  string
-	DisplayName string
-	Path        string
-	Component   string
-	Icon        string
-	SortOrder   int32
-	Status      IAMStatus
+	ID             string
+	SourceID       string
+	Code           string
+	ParentCode     string
+	DisplayName    string
+	RouteName      string
+	Path           string
+	Component      string
+	Icon           string
+	SortOrder      int32
+	PermissionCode string
+	KeepAlive      bool
+	Visible        bool
+	Status         IAMStatus
 }
 
 type Permission struct {
@@ -133,6 +138,7 @@ func (s *IAMService) GetIdentityAccount(ctx context.Context, accountID IdentityA
 type ProvisionTenantInput struct {
 	TenantCode     string
 	DisplayName    string
+	DefaultRouter  string
 	OwnerAccountID IdentityAccountID
 	OwnerUsername  string
 	OwnerEmail     string
@@ -146,10 +152,11 @@ func (s *IAMService) ProvisionTenant(ctx context.Context, input ProvisionTenantI
 	}
 	command := ProvisionTenantStoreInput{
 		TenantCode: strings.TrimSpace(input.TenantCode), DisplayName: strings.TrimSpace(input.DisplayName),
+		DefaultRouter:  strings.TrimSpace(input.DefaultRouter),
 		OwnerAccountID: input.OwnerAccountID, OwnerUsername: strings.TrimSpace(input.OwnerUsername),
 		OwnerEmail: strings.TrimSpace(input.OwnerEmail), OwnerName: strings.TrimSpace(input.OwnerName),
 	}
-	if command.TenantCode == "" || command.DisplayName == "" || command.OwnerAccountID == "" {
+	if command.TenantCode == "" || command.DisplayName == "" || !strings.HasPrefix(command.DefaultRouter, "/") || command.OwnerAccountID == "" {
 		return ProvisionTenantResult{}, invalid(operation)
 	}
 	result, err := s.store.ProvisionTenant(ctx, command)

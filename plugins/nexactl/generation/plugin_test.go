@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nxnminieye/nexa/generation/composition"
 	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
@@ -435,7 +436,7 @@ func rpcDocument(t *testing.T) genprotocol.Document {
 
 func apiDocument(t *testing.T, repository string) httpapi.Document {
 	t.Helper()
-	mustWrite(t, filepath.Join(repository, "sample.api"), []byte("syntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-api/v1\")\ntype Request {}\ntype Response { OK bool }\n@server (nexaOperationId: \"sample.get\" nexaAuthMode: \"none\")\nservice sample-api { @handler sample get /sample (Request) returns (Response) }\n"))
+	mustWrite(t, filepath.Join(repository, "sample.api"), []byte("// @nexa $contract: \"nexa.dev/source-comment/v1\"\nsyntax = \"v1\"\ninfo (nexaContractVersion: \"nexa.dev/http-convention/v1\")\ntype Request {}\ntype Response { OK bool }\nservice sample-api {\n  // @nexa auth: \"none\"\n  @handler Sample\n  get /sample (Request) returns (Response)\n}\n"))
 	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: "sample.api"})
 	if err != nil {
 		t.Fatal(err)
@@ -445,7 +446,11 @@ func apiDocument(t *testing.T, repository string) httpapi.Document {
 
 func frontendDocument(t *testing.T, repository string) genfrontend.Document {
 	t.Helper()
-	document, err := genfrontend.Build(apiDocument(t, repository), nil)
+	closure, err := composition.FrontendClosure(apiDocument(t, repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := genfrontend.Build(closure, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

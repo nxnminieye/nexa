@@ -8,18 +8,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nxnminieye/nexa/generation/httpapi"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 )
 
-const pageSchemaURL = "https://nexa.dev/schemas/generation/frontend/frontend-page-spec-v1.schema.json"
 const localeSchemaURL = "https://nexa.dev/schemas/generation/frontend/frontend-locale-v1.schema.json"
 const irSchemaURL = "https://nexa.dev/schemas/generation/frontend/frontend-ir-v1.schema.json"
 const renderSchemaURL = "https://nexa.dev/schemas/generation/frontend/frontend-render-request-v1.schema.json"
-
-//go:embed frontend-page-spec-v1.schema.json
-var embeddedPageSchema string
 
 //go:embed frontend-locale-v1.schema.json
 var embeddedLocaleSchema string
@@ -30,14 +25,10 @@ var embeddedIRSchema string
 //go:embed frontend-render-request-v1.schema.json
 var embeddedRenderSchema string
 
-var pageSchemaOnce sync.Once
-var compiledPageSchema *jsonschema.Schema
-var pageSchemaError error
 var localeSchemaOnce sync.Once
 var compiledLocaleSchema *jsonschema.Schema
 var localeSchemaError error
 
-func PageSpecSchema() []byte      { return []byte(embeddedPageSchema) }
 func LocaleSchema() []byte        { return []byte(embeddedLocaleSchema) }
 func IRSchema() []byte            { return []byte(embeddedIRSchema) }
 func RenderRequestSchema() []byte { return []byte(embeddedRenderSchema) }
@@ -47,7 +38,6 @@ func validateWireSchema(schemaURL string, schemaBytes []byte, document any) erro
 	resources := map[string][]byte{
 		schemaURL:   schemaBytes,
 		irSchemaURL: IRSchema(),
-		"https://nexa.dev/schemas/generation/httpapi/api-ir-v1.schema.json": httpapi.Schema(),
 	}
 	for url, data := range resources {
 		var value any
@@ -73,24 +63,6 @@ func validateWireSchema(schemaURL string, schemaBytes []byte, document any) erro
 	return compiled.Validate(normalized)
 }
 
-func validatePageSchema(document any) error {
-	pageSchemaOnce.Do(func() {
-		var value any
-		if pageSchemaError = json.Unmarshal([]byte(embeddedPageSchema), &value); pageSchemaError != nil {
-			return
-		}
-		compiler := jsonschema.NewCompiler()
-		if pageSchemaError = compiler.AddResource(pageSchemaURL, value); pageSchemaError != nil {
-			return
-		}
-		compiledPageSchema, pageSchemaError = compiler.Compile(pageSchemaURL)
-	})
-	if pageSchemaError != nil {
-		return pageSchemaError
-	}
-	return compiledPageSchema.Validate(document)
-}
-
 func validateLocaleSchema(document any) error {
 	localeSchemaOnce.Do(func() {
 		var value any
@@ -107,10 +79,6 @@ func validateLocaleSchema(document any) error {
 		return localeSchemaError
 	}
 	return compiledLocaleSchema.Validate(document)
-}
-
-func schemaFailures(source string, err error) []*Error {
-	return validationFailures(source, err, pageError)
 }
 
 func localeSchemaFailures(source string, err error) []*Error {

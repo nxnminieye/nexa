@@ -3,7 +3,6 @@ package core_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,17 +10,14 @@ import (
 	"testing"
 
 	"entgo.io/ent"
-	entschema "entgo.io/ent/schema"
 
 	"github.com/nxnminieye/nexa/generation/composition"
-	"github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	"github.com/nxnminieye/nexa/generation/protocol"
-	"github.com/nxnminieye/nexa/nexaent"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	core "github.com/nxnminieye/nexa/plugins/service/core"
 	coreschema "github.com/nxnminieye/nexa/plugins/service/core/_bundle/backend/core/ent/schema"
 	"github.com/nxnminieye/nexa/project/servicecatalog"
-	"github.com/nxnminieye/nexa/provenance"
 	"github.com/nxnminieye/nexa/sourceplugin"
 )
 
@@ -38,8 +34,6 @@ func TestProfileClosuresAreIndependent(t *testing.T) {
 	}{
 		{profile: "backend", wantProfiles: []string{"backend"}, present: []string{"backend/core/coreapp/health.go", "backend/core/desc/core.proto"}, absent: []string{"backend/core/coreapp/oidc_adapter.go", "frontend/frontend/core/pages/accounts.page.json"}},
 		{profile: "identity-oidc", wantProfiles: []string{"backend", "identity-oidc"}, present: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}, absent: []string{"frontend/frontend/core/pages/accounts.page.json"}},
-		{profile: "frontend", wantProfiles: []string{"frontend"}, present: []string{"frontend/frontend/core/pages/accounts.page.json"}, absent: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}},
-		{profile: "full", wantProfiles: []string{"backend", "frontend", "full"}, present: []string{"backend/core/coreapp/health.go", "frontend/frontend/core/pages/accounts.page.json"}, absent: []string{"backend/core/coreapp/oidc_adapter.go"}},
 	}
 	for _, test := range tests {
 		t.Run(test.profile, func(t *testing.T) {
@@ -63,21 +57,21 @@ func TestProfileClosuresAreIndependent(t *testing.T) {
 			}
 		})
 	}
+	for _, removed := range []string{"frontend", "full"} {
+		if _, ok := provider.Manifest().LookupProfile(removed); ok {
+			t.Fatalf("consumer-owned %q profile remains public", removed)
+		}
+	}
 }
 
-func TestProfileBackendFactsLoadSemantically(t *testing.T) {
-	models := []interface {
-		Annotations() []entschema.Annotation
-		Fields() []ent.Field
-	}{coreschema.Tenant{}, coreschema.IdentityAccount{}, coreschema.TenantMember{}, coreschema.Role{}, coreschema.TenantMemberRoleGrant{}, coreschema.Permission{}, coreschema.AuthSession{}}
+func TestProfileBackendNativeFactsLoadSemantically(t *testing.T) {
+	models := []interface{ Fields() []ent.Field }{coreschema.Tenant{}, coreschema.IdentityAccount{}, coreschema.TenantMember{}, coreschema.Role{}, coreschema.TenantMemberRoleGrant{}, coreschema.Permission{}, coreschema.AuthSession{}}
 	for _, model := range models {
-		assertTypedAnnotation(t, model.Annotations(), nexaent.SchemaAnnotationName)
 		for _, value := range model.Fields() {
 			descriptor := value.Descriptor()
 			if descriptor.Err != nil {
 				t.Fatalf("%T.%s: %v", model, descriptor.Name, descriptor.Err)
 			}
-			assertTypedAnnotation(t, descriptor.Annotations, nexaent.FieldAnnotationName)
 		}
 	}
 	rolePermissions := coreschema.Role{}.Edges()[2].Descriptor()
@@ -128,16 +122,6 @@ func TestProfileBackendFactsLoadSemantically(t *testing.T) {
 		}
 		t.Fatalf("compile Proto: %v", err)
 	}
-	if _, ok := proto.Method("core.v1.CoreService.Login"); !ok {
-		t.Fatal("Login method missing")
-	}
-	if _, ok := proto.Method("core.v1.CoreService.Register"); !ok {
-		t.Fatal("Register method missing")
-	}
-	if _, ok := proto.Method("core.v1.CoreService.Revoke"); !ok {
-		t.Fatal("Revoke method missing")
-	}
-
 	repository := t.TempDir()
 	apiFile, _ := provider.Tree().Lookup("backend/core/desc/core.api")
 	path := filepath.Join(repository, "desc", "core.api")
@@ -151,29 +135,70 @@ func TestProfileBackendFactsLoadSemantically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load API: %v", err)
 	}
-	if _, ok := api.Operation("core.auth.providers"); !ok {
+	if _, ok := api.Operation("listProviders"); !ok {
 		t.Fatal("provider discovery operation missing")
-	}
-	nativeIDs := make(map[string]struct{})
-	nativeRoutes := make(map[string]struct{})
-	for _, operation := range api.Operations() {
-		nativeIDs[operation.ID()] = struct{}{}
-		nativeRoutes[string(operation.Method())+"\x00"+operation.Path()] = struct{}{}
 	}
 	service, ok := proto.Service("core.v1.CoreService")
 	if !ok {
 		t.Fatal("CoreService missing")
 	}
-	for _, method := range service.Methods() {
-		proxy, selected := method.HTTPProxy()
-		if !selected {
-			continue
+	if len(service.Methods()) != 35 {
+		t.Fatalf("CoreService methods = %d, want 35", len(service.Methods()))
+	}
+	exported := map[string]map[string]string{
+		"core.core.v1.coreService.health":                   {"http.method": "GET", "http.path": "/health", "auth": "none"},
+		"core.core.v1.coreService.register":                 {"http.method": "POST", "http.path": "/auth/register", "auth": "none"},
+		"core.core.v1.coreService.login":                    {"http.method": "POST", "http.path": "/auth/login", "auth": "none"},
+		"core.core.v1.coreService.refresh":                  {"http.method": "POST", "http.path": "/auth/refresh", "auth": "none"},
+		"core.core.v1.coreService.checkPermission":          {"http.method": "GET", "http.path": "/auth/permissions/{permission}", "auth": "required", "permission": "core.authorization.check"},
+		"core.core.v1.coreService.listIdentityAccounts":     {"http.method": "GET", "http.path": "/identity-accounts", "auth": "required", "permission": "nexa.identity.account.read"},
+		"core.core.v1.coreService.getIdentityAccount":       {"http.method": "GET", "http.path": "/identity-accounts/{accountId}", "auth": "required", "permission": "nexa.identity.account.read"},
+		"core.core.v1.coreService.updateAccountStatus":      {"http.method": "PUT", "http.path": "/identity-accounts/{accountId}/status", "auth": "required", "permission": "nexa.identity.account.status.update"},
+		"core.core.v1.coreService.resetAccountPassword":     {"http.method": "POST", "http.path": "/identity-accounts/{accountId}/password/reset", "auth": "required", "permission": "nexa.identity.account.password.reset"},
+		"core.core.v1.coreService.listTenantMembers":        {"http.method": "GET", "http.path": "/users", "auth": "required", "permission": "nexa.user.read"},
+		"core.core.v1.coreService.getTenantMember":          {"http.method": "GET", "http.path": "/users/{memberId}", "auth": "required", "permission": "nexa.user.read"},
+		"core.core.v1.coreService.updateTenantMemberStatus": {"http.method": "PUT", "http.path": "/users/{memberId}/status", "auth": "required", "permission": "nexa.user.status.update"},
+		"core.core.v1.coreService.replaceTenantMemberRoles": {"http.method": "PUT", "http.path": "/users/{memberId}/roles", "auth": "required", "permission": "nexa.user.roles.update"},
+		"core.core.v1.coreService.provisionTenant":          {"http.method": "POST", "http.path": "/tenants", "auth": "required", "permission": "nexa.tenant.create"},
+		"core.core.v1.coreService.listTenants":              {"http.method": "GET", "http.path": "/tenants", "auth": "required", "permission": "nexa.tenant.read"},
+		"core.core.v1.coreService.getTenant":                {"http.method": "GET", "http.path": "/tenants/{tenantId}", "auth": "required", "permission": "nexa.tenant.read"},
+		"core.core.v1.coreService.updateTenant":             {"http.method": "PUT", "http.path": "/tenants/{tenantId}", "auth": "required", "permission": "nexa.tenant.update"},
+		"core.core.v1.coreService.updateTenantStatus":       {"http.method": "PUT", "http.path": "/tenants/{tenantId}/status", "auth": "required", "permission": "nexa.tenant.update"},
+		"core.core.v1.coreService.listRoles":                {"http.method": "GET", "http.path": "/roles", "auth": "required", "permission": "nexa.auth.roles.read"},
+		"core.core.v1.coreService.getRole":                  {"http.method": "GET", "http.path": "/roles/{roleId}", "auth": "required", "permission": "nexa.auth.roles.read"},
+		"core.core.v1.coreService.createRole":               {"http.method": "POST", "http.path": "/roles", "auth": "required", "permission": "nexa.auth.roles.create"},
+		"core.core.v1.coreService.updateRole":               {"http.method": "PUT", "http.path": "/roles/{roleId}", "auth": "required", "permission": "nexa.auth.roles.update"},
+		"core.core.v1.coreService.updateRoleStatus":         {"http.method": "PUT", "http.path": "/roles/{roleId}/status", "auth": "required", "permission": "nexa.auth.roles.update"},
+		"core.core.v1.coreService.replaceRolePermissions":   {"http.method": "PUT", "http.path": "/roles/{roleId}/permissions", "auth": "required", "permission": "nexa.auth.role_permissions.bind"},
+		"core.core.v1.coreService.replaceRoleMenus":         {"http.method": "PUT", "http.path": "/roles/{roleId}/menus", "auth": "required", "permission": "nexa.auth.roles.update"},
+		"core.core.v1.coreService.listMenus":                {"http.method": "GET", "http.path": "/menus", "auth": "required", "permission": "nexa.menu.read"},
+		"core.core.v1.coreService.getMenu":                  {"http.method": "GET", "http.path": "/menus/{code}", "auth": "required", "permission": "nexa.menu.read"},
+		"core.core.v1.coreService.listPermissions":          {"http.method": "GET", "http.path": "/permissions", "auth": "required", "permission": "nexa.auth.permissions.read"},
+		"core.core.v1.coreService.getPermission":            {"http.method": "GET", "http.path": "/permissions/{code}", "auth": "required", "permission": "nexa.auth.permissions.read"},
+	}
+	graph := proto.FactGraph()
+	for methodName, contract := range exported {
+		for key, want := range contract {
+			fact, exists := graph.Fact(sourcecomment.FactID{SemanticID: methodName, Key: key})
+			got, stringValue := fact.Value().String()
+			if !exists || !stringValue || got != want {
+				t.Fatalf("Core fact %s:%s = %q, %v; want %q", methodName, key, got, exists, want)
+			}
 		}
-		if _, duplicate := nativeIDs[proxy.OperationID()]; duplicate {
-			t.Fatalf("native and generated operation %q collide", proxy.OperationID())
+	}
+	for _, methodName := range []string{
+		"core.v1.CoreService.CurrentSession", "core.v1.CoreService.Revoke", "core.v1.CoreService.Logout",
+		"core.v1.CoreService.GetAccessCodes", "core.v1.CoreService.GetUserInfo", "core.v1.CoreService.GetAllMenus",
+	} {
+		if _, ok := proto.Method(methodName); !ok {
+			t.Fatalf("RPC method %q missing", methodName)
 		}
-		if _, duplicate := nativeRoutes[string(proxy.Method())+"\x00"+proxy.Path()]; duplicate {
-			t.Fatalf("native and generated route %s %s collide", proxy.Method(), proxy.Path())
+		operationID, err := sourcecomment.CanonicalRPCOperationID(proto.ServiceID(), methodName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, selected := graph.Fact(sourcecomment.FactID{SemanticID: operationID, Key: "http.method"}); selected {
+			t.Fatalf("removed HTTP contract %q remains exported", methodName)
 		}
 	}
 	catalogSource := fmt.Sprintf(`apiVersion: nexa.dev/service-catalog/v1
@@ -200,127 +225,47 @@ services:
 		t.Fatal(err)
 	}
 	merged, err := httpapi.Merge(api, generated)
-	if err != nil || len(merged.Operations()) != 31 {
+	if err != nil || len(merged.Operations()) != 34 {
 		t.Fatalf("merged Core operations = %d, %v", len(merged.Operations()), err)
+	}
+	login, ok := generated.Operation("core.core.v1.coreService.login")
+	if !ok {
+		t.Fatal("canonical Core login operation missing")
+	}
+	assertCoreFields(t, generated, login.RequestType(), []string{"password", "username"})
+	assertCoreFields(t, generated, login.ResponseType(), []string{"accessToken", "memberId", "refreshToken", "tenantId"})
+	refresh, ok := generated.Operation("core.core.v1.coreService.refresh")
+	if !ok {
+		t.Fatal("canonical Core refresh operation missing")
+	}
+	assertCoreFields(t, generated, refresh.RequestType(), []string{"refreshToken"})
+	assertCoreFields(t, generated, refresh.ResponseType(), []string{"accessToken", "memberId", "refreshToken", "tenantId"})
+	menuType, ok := api.Type("RouteItem")
+	if !ok {
+		t.Fatal("native RouteItem type missing")
+	}
+	children, ok := menuType.Field("children")
+	if !ok {
+		t.Fatal("recursive menu children missing")
+	}
+	childArray, ok := children.ValueType().Element()
+	if !ok || childArray.Name() != menuType.Name() {
+		t.Fatalf("recursive children = %#v, %v; want ref %q", childArray, ok, menuType.Name())
 	}
 }
 
-func TestProfileFrontendFactsAreStructuredAndStandalone(t *testing.T) {
-	provider, err := core.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	closure, err := provider.Manifest().ResolveProfile("frontend")
-	if err != nil {
-		t.Fatal(err)
-	}
-	frontendProfile, ok := provider.Manifest().LookupProfile("frontend")
-	if !ok || len(frontendProfile.RequiredProfileIDs()) != 0 {
-		t.Fatalf("frontend dependencies = %#v", frontendProfile.RequiredProfileIDs())
-	}
-
-	wantPaths := []string{
-		"frontend/frontend/core/locales/en-US.json",
-		"frontend/frontend/core/locales/zh-CN.json",
-		"frontend/frontend/core/pages/accounts.page.json",
-		"frontend/frontend/core/pages/members.page.json",
-		"frontend/frontend/core/pages/menus.page.json",
-		"frontend/frontend/core/pages/permissions.page.json",
-		"frontend/frontend/core/pages/roles.page.json",
-		"frontend/frontend/core/pages/tenants.page.json",
-	}
-	if got := profilePaths(closure); !sameStrings(got, wantPaths) {
-		t.Fatalf("frontend files = %#v", got)
-	}
-
-	var specs []frontend.PageSpec
-	var locales []frontend.Locale
-	for _, path := range wantPaths {
-		file, ok := provider.Tree().Lookup(path)
-		if !ok {
-			t.Fatalf("%s missing", path)
-		}
-		switch filepath.Base(filepath.Dir(path)) {
-		case "pages":
-			spec, err := frontend.ParsePageSpec(path, file.Bytes())
-			if err != nil {
-				t.Fatalf("parse %s: %v", path, err)
-			}
-			specs = append(specs, spec)
-		case "locales":
-			locale, err := frontend.ParseLocale(path, file.Bytes())
-			if err != nil {
-				t.Fatalf("parse %s: %v", path, err)
-			}
-			locales = append(locales, locale)
-		default:
-			t.Fatalf("legacy frontend asset remains: %s", path)
-		}
-	}
-	merged := mergedCoreAPI(t, provider)
-	operation, ok := merged.Operation("core.iam.account.list")
+func assertCoreFields(t *testing.T, document httpapi.Document, typeName string, want []string) {
+	t.Helper()
+	value, ok := document.Type(typeName)
 	if !ok {
-		t.Fatal("core.iam.account.list missing")
+		t.Fatalf("type %q missing", typeName)
 	}
-	response, ok := merged.Type(operation.ResponseType())
-	if !ok {
-		t.Fatalf("response type %q missing", operation.ResponseType())
+	got := make([]string, 0, len(value.Fields()))
+	for _, field := range value.Fields() {
+		got = append(got, field.Path()[0])
 	}
-	items, ok := response.Field("Items")
-	if !ok {
-		t.Fatal("Items field missing")
-	}
-	element, ok := items.ValueType().Element()
-	if !ok {
-		t.Fatalf("Items value type = %s", items.ValueType().Kind())
-	}
-	item, ok := merged.Type(element.Name())
-	if !ok {
-		t.Fatalf("Items ref type %q missing", element.Name())
-	}
-	accountID, ok := item.Field("AccountId")
-	if !ok {
-		var paths [][]string
-		for _, field := range item.Fields() {
-			paths = append(paths, field.Path())
-		}
-		t.Fatalf("AccountId field missing from %#v", paths)
-	}
-	if !items.Required() || items.ValueType().Kind() != httpapi.ValueArray || element.Kind() != httpapi.ValueRef || !accountID.Required() || accountID.ValueType().Kind() != httpapi.ValueScalar || accountID.ValueType().Name() != "string" {
-		t.Fatalf("account list projection is not a required array/ref row key")
-	}
-	document, err := frontend.Build(merged, specs, locales...)
-	if err != nil {
-		t.Fatalf("build frontend IR: %v", err)
-	}
-	canonical, err := frontend.CanonicalJSON(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wire struct {
-		Pages []struct {
-			Operations []json.RawMessage `json:"operations"`
-		} `json:"pages"`
-	}
-	if err := json.Unmarshal(canonical, &wire); err != nil {
-		t.Fatal(err)
-	}
-	operationCount := 0
-	for _, page := range wire.Pages {
-		operationCount += len(page.Operations)
-	}
-	if document.PageCount() != 6 || operationCount != 22 {
-		t.Fatalf("frontend IR = pages:%d operations:%d", document.PageCount(), operationCount)
-	}
-	request, err := frontend.CanonicalRenderRequest(frontend.RenderRequest{
-		FrontendIR: document, RepositoryRoot: "/workspace/example", GeneratedScope: "frontend/generated",
-		ExtensionScopes: []string{"frontend/extensions"}, FrontendSourceLockDigest: provenance.SHA256([]byte("core-frontend-lock")),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := frontend.ValidateRendererInput(request); err != nil {
-		t.Fatalf("validate renderer input: %v", err)
+	if !sameStrings(got, want) {
+		t.Fatalf("type %q fields = %#v, want %#v", typeName, got, want)
 	}
 }
 
@@ -388,27 +333,9 @@ func profilePaths(closure sourceplugin.ProfileClosure) []string {
 	return result
 }
 
-func assertTypedAnnotation(t *testing.T, values []entschema.Annotation, name string) {
-	t.Helper()
-	for _, value := range values {
-		annotation, ok := value.(nexaent.Annotation)
-		if !ok || annotation.Name() != name {
-			continue
-		}
-		if _, err := annotation.CanonicalJSON(); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	t.Fatalf("annotation %s missing", name)
-}
-
 type treeResolver struct{ tree sourceplugin.Tree }
 
 func (r *treeResolver) Open(_ context.Context, path string) (io.ReadCloser, error) {
-	if path == "nexa/protocol/v1/options.proto" {
-		return io.NopCloser(bytes.NewReader(protocol.OptionsProto())), nil
-	}
 	file, ok := r.tree.Lookup(path)
 	if !ok {
 		return nil, os.ErrNotExist

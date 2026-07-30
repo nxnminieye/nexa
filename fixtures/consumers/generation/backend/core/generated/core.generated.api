@@ -1,6 +1,10 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 syntax = "v1"
-info (nexaContractVersion: "nexa.dev/http-api/v1")
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
 type GeneratedHealthRequest {}
 type GeneratedHealthResponse { OK bool }
-@server (nexaOperationId: "generated.health" nexaAuthMode: "none")
-service generated-api { @handler generatedHealth get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse) }
+service generated-api {
+  // @nexa $source: "proto://backend/core/desc/core.proto#core.v1.CoreService.Health"
+  @handler GeneratedHealth
+  get /generated/health (GeneratedHealthRequest) returns (GeneratedHealthResponse)
+}

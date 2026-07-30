@@ -35,35 +35,41 @@ GOWORK=off go run github.com/nxnminieye/nexa/cmd/nexactl@<version> \
 Skill 只负责路由。它不授权写入，也不替代当前源码、schema、CLI inspection、consumer 规则或测试。完整
 顺序见 [Skill 路由](skills.md)。
 
-## 3. 验证公共 typed facts
+## 3. 声明一个可生成完整前端的 Ent Schema
 
-创建 `main.go`：
+在 consumer 的 `ent/schema/account.go` 中直接声明 native Ent 结构，并只用 `@nexa` 补充原生语法不能表达的
+事实：
 
 ```go
-package main
+// @nexa $contract: "nexa.dev/source-comment/v1"
+package schema
 
 import (
-	"fmt"
-
-	"github.com/nxnminieye/nexa/nexaent"
+	"entgo.io/ent"
+	"entgo.io/ent/schema/field"
 )
 
-func main() {
-	annotation := nexaent.Schema(nexaent.SchemaMeta{
-		Label: nexaent.LocalizedText{
-			Key: "account.label", ZhCN: "账号", EnUS: "Account",
-		},
-		Description: nexaent.LocalizedText{
-			Key: "account.description", ZhCN: "登录账号", EnUS: "Login account",
-		},
-		Identity: nexaent.IdentityEntID,
-		Scope:    nexaent.ScopeGlobal,
-	})
-	data, err := annotation.CanonicalJSON()
-	if err != nil {
-		panic(err)
+
+// @nexa label.zh-CN: "账号"
+// @nexa label.en-US: "Account"
+// @nexa description.zh-CN: "登录账号"
+// @nexa description.en-US: "Login account"
+// @nexa scope: "global"
+// @nexa crud.operations: ["list","get","create","update","delete"]
+type Account struct{ ent.Schema }
+
+func (Account) Fields() []ent.Field {
+	return []ent.Field{
+		// @nexa label.zh-CN: "名称"
+		// @nexa label.en-US: "Name"
+		// @nexa description.zh-CN: "账号显示名称"
+		// @nexa description.en-US: "Account display name"
+		// @nexa ui.control: "text"
+		// @nexa visibility: "public"
+		// @nexa crud.read: "include"
+		// @nexa crud.mutation: "create-update"
+		field.String("name").NotEmpty(),
 	}
-	fmt.Println(string(data))
 }
 ```
 
@@ -72,11 +78,11 @@ func main() {
 ```bash
 GOWORK=off go mod tidy
 GOWORK=off go test ./...
-GOWORK=off go run .
 ```
 
-这只证明 module pin、public import 和 typed annotation 可用，不代表 generation 或 source plugin 已进入
-consumer。
+这只证明 module pin、Ent native schema 和 Source Comment carrier 可编译。完整页面还要求同一 FactGraph 中
+存在 canonical `.api` CRUD closure 与 frontend YAML page source；生成器据此直接生成 typed client、Formily、
+Grid、route/menu/locale 和 Vue entry，不读取 `nexaent`、JSON PageSpec 或字段 mapping。
 
 ## 4. 检查参考 CLI
 
@@ -111,7 +117,7 @@ inspect -> validate typed inputs and declared scopes -> direct generate
 `repo-root`、provider、service 等参数从当前 inspection 的 flag/schema 读取。当前 official generation plugin
 公开 RPC、API 与 frontend direct generate；Reference CLI 没有 consumer ProjectProvider，真实生成必须由
 consumer composition 提供 typed facts、delegated tool 和 generated/extensions scopes。Frontend 还必须提供
-PageSpec、canonical FrontendIR 与 exact frontend source lock digest。生成后用 Git diff 审阅。
+frontend YAML source、canonical FrontendIR 与 exact frontend source lock digest。生成后用 Git diff 审阅。
 
 需要标准服务源码时，在 generation 前按[标准服务 starter](../starters/standard-services.md)执行 source plan 和
 materialize。完整检查见[验证矩阵](verification-matrix.md)。

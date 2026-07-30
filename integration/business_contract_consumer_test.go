@@ -48,7 +48,6 @@ import (
 	"testing"
 
 	"github.com/gowebpki/jcs"
-	"github.com/nxnminieye/nexa/generation/api"
 	"github.com/nxnminieye/nexa/generation/artifact"
 	"github.com/nxnminieye/nexa/project/servicecatalog"
 	"github.com/nxnminieye/nexa/provenance"
@@ -111,30 +110,6 @@ func TestBusinessContracts(t *testing.T) {
 	artifactSources := artifacts[0].Sources()
 	if artifacts[0].ID() != "sample-artifact" || artifacts[0].Path() != "generated/sample.json" || artifacts[0].Owner() != "sample-generator" || artifacts[0].Digest() != provenance.SHA256([]byte("sample-artifact")) || len(artifactSources) != 1 || artifactSources[0] != wholeRef || artifacts[0].StalePolicy() != artifact.StaleRetain { t.Fatalf("artifact projection is invalid") }
 
-	apiSources := []provenance.Source{
-		{Ref: fragmentRef, Digest: provenance.SHA256([]byte("sample schema"))},
-		{Ref: fieldRef, Digest: provenance.SHA256([]byte("sample field"))},
-		{Ref: originRef, Digest: provenance.SHA256([]byte("sample origin"))},
-	}
-	apiManifest, err := api.NewManifest(api.ManifestSpec{
-		Sources: apiSources,
-		Schemas: []api.SchemaSpec{
-			{ID: "sample.request", Kind: api.SchemaObject, Provenance: &api.NodeProvenanceSpec{Kind: api.NodeCanonical, Refs: []provenance.SourceRef{fragmentRef}}, Fields: []api.FieldSpec{{Name: "id", SchemaRef: "scalar.string", Required: true, Provenance: api.NodeProvenanceSpec{Kind: api.NodeCanonical, Refs: []provenance.SourceRef{fieldRef}}, Origin: &api.OriginBindingSpec{Ref: originRef}}}},
-			{ID: "scalar.string", Kind: api.SchemaString},
-		},
-	})
-	if err != nil { t.Fatal(err) }
-	apiJSON, err := apiManifest.CanonicalJSON()
-	if err != nil { t.Fatal(err) }
-	parsedAPI, err := api.Parse("api-manifest.json", apiJSON)
-	if err != nil { t.Fatal(err) }
-	apiSchema, schemaExists := parsedAPI.Schema("sample.request")
-	apiField, fieldExists := apiSchema.Field("id")
-	apiProvenance, provenanceExists := apiSchema.Provenance()
-	apiOrigin, originExists := apiField.Origin()
-	resolvedAPIField, apiFieldSourceExists := parsedAPI.Source(fieldRef)
-	if len(parsedAPI.Sources()) != 3 || len(parsedAPI.Schemas()) != 2 || len(parsedAPI.Operations()) != 0 || !schemaExists || !fieldExists || !provenanceExists || apiProvenance.Kind() != api.NodeCanonical || len(apiProvenance.Refs()) != 1 || apiProvenance.Refs()[0] != fragmentRef || apiField.Provenance().Refs()[0] != fieldRef || !originExists || apiOrigin.Ref() != originRef || !apiFieldSourceExists || resolvedAPIField.Ref != fieldRef { t.Fatalf("API projection is invalid") }
-
 	identity, err := buildinfo.NewIdentity("foundation", "rpc", "sample.Sample")
 	if err != nil { t.Fatal(err) }
 	info, err := buildinfo.Resolve(identity, buildinfo.ReaderFunc(func() (*debug.BuildInfo, bool) { return nil, false }))
@@ -147,7 +122,6 @@ func TestBusinessContracts(t *testing.T) {
 	getters := []struct{name string; get func() []byte}{
 		{name: "service catalog", get: servicecatalog.Schema},
 		{name: "artifact manifest", get: artifact.Schema},
-		{name: "API manifest", get: api.DocumentSchema},
 		{name: "build info", get: buildinfo.Schema},
 	}
 	for _, getter := range getters {

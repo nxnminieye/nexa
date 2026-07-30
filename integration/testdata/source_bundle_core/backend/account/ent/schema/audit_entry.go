@@ -1,31 +1,26 @@
+// @nexa $contract: "nexa.dev/source-comment/v1"
 package schema
 
 import (
 	"entgo.io/ent"
-	entschema "entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
-
-	"github.com/nxnminieye/nexa/nexaent"
 )
 
+// @nexa label.zh-CN: "审计记录"
+// @nexa label.en-US: "Audit entry"
+// @nexa description.zh-CN: "审计记录"
+// @nexa description.en-US: "Audit entry"
+// @nexa scope: "tenant"
 type AuditEntry struct{ ent.Schema }
-
-func (AuditEntry) Annotations() []entschema.Annotation {
-	return []entschema.Annotation{nexaent.Schema(nexaent.SchemaMeta{
-		Label:       localized("audit.label", "审计记录", "Audit entry"),
-		Description: localized("audit.description", "审计记录", "Audit entry"),
-		Identity:    nexaent.IdentityEntID,
-		Scope:       nexaent.ScopeTenant,
-	})}
-}
 
 func (AuditEntry) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("actor").Annotations(nexaent.Field(nexaent.FieldMeta{
-			Label:       localized("audit.actor.label", "操作人", "Actor"),
-			Description: localized("audit.actor.description", "操作人", "Operation actor"),
-			UIHint:      nexaent.UIHintMember,
-			Visibility:  nexaent.VisibilityPublic,
-		})),
+		// @nexa label.zh-CN: "操作人"
+		// @nexa label.en-US: "Actor"
+		// @nexa description.zh-CN: "操作人"
+		// @nexa description.en-US: "Operation actor"
+		// @nexa ui.control: "member"
+		// @nexa visibility: "public"
+		field.String("actor"),
 	}
 }
