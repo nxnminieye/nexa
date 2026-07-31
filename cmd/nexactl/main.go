@@ -32,7 +32,7 @@ const (
 
 var buildVersion = defaultBuildVersion
 
-type referenceSourcePluginFactory func() (plugin.Plugin, func(), error)
+type referenceSourcePluginFactory func(version string) (plugin.Plugin, func(), error)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -55,7 +55,7 @@ func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourc
 	if sourceFactory == nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
-	sourcePlugin, cleanup, err := sourceFactory()
+	sourcePlugin, cleanup, err := sourceFactory(version)
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
@@ -90,16 +90,16 @@ func resolveBuildVersion(configured string, info *debug.BuildInfo, available boo
 	return configured
 }
 
-func newReferenceSourcePlugin() (plugin.Plugin, func(), error) {
+func newReferenceSourcePlugin(version string) (plugin.Plugin, func(), error) {
 	cacheRoot, err := referenceSourceCacheRoot()
 	if err != nil {
 		return nil, func() {}, err
 	}
-	return newReferenceSourcePluginWithCache(cacheRoot)
+	return newReferenceSourcePluginWithCache(version, cacheRoot)
 }
 
-func newReferenceSourcePluginWithCache(cacheRoot string) (plugin.Plugin, func(), error) {
-	options, provider, cleanup, err := newReferenceSourceDependencies(cacheRoot)
+func newReferenceSourcePluginWithCache(version, cacheRoot string) (plugin.Plugin, func(), error) {
+	options, provider, cleanup, err := newReferenceSourceDependencies(version, cacheRoot)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -111,7 +111,7 @@ func newReferenceSourcePluginWithCache(cacheRoot string) (plugin.Plugin, func(),
 	return candidate, cleanup, nil
 }
 
-func newReferenceSourceDependencies(cacheRoot string) (sourceadapter.Options, sourceplugin.Provider, func(), error) {
+func newReferenceSourceDependencies(version, cacheRoot string) (sourceadapter.Options, sourceplugin.Provider, func(), error) {
 	workingRoot, err := os.MkdirTemp("", "nexa-reference-source-")
 	if err != nil {
 		return sourceadapter.Options{}, nil, func() {}, err
@@ -164,7 +164,7 @@ func newReferenceSourceDependencies(cacheRoot string) (sourceadapter.Options, so
 		return fail(err)
 	}
 	return sourceadapter.Options{
-		Version: effectiveBuildVersion(), Cache: cache, CacheLimits: cacheLimits, TreeLimits: cacheLimits.Tree,
+		Version: version, Cache: cache, CacheLimits: cacheLimits, TreeLimits: cacheLimits.Tree,
 		LockLimits: lock.DefaultLimits(), MergeDriver: newReferenceMergeDriver(), Executor: engine.NewOSExecutor(),
 		GoToolchain: engine.GoToolchain{
 			Executable: goExecutable, Home: directories["home"], TempDir: directories["temp"],

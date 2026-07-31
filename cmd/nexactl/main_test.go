@@ -75,6 +75,29 @@ func TestResolveBuildVersionKeepsDevWhenNexaModuleVersionIsUnavailable(t *testin
 	}
 }
 
+func TestReferenceSourcePluginReceivesHostVersion(t *testing.T) {
+	previousVersion := buildVersion
+	buildVersion = "v0.8.0-test"
+	t.Cleanup(func() { buildVersion = previousVersion })
+
+	var received string
+	var stdout, stderr bytes.Buffer
+	exit := runWithReferenceSourcePlugin(
+		[]string{"inspect", "--json"}, &stdout, &stderr,
+		func(version string) (plugin.Plugin, func(), error) {
+			received = version
+			candidate, err := plugin.NewStatic(plugin.Spec{Descriptor: plugin.Descriptor{
+				ID: "source", Version: version, ContractVersion: plugin.ContractVersion,
+				Provides: []plugin.Capability{{ID: sourceadapter.CapabilityID, Version: sourceadapter.CapabilityVersion}},
+			}})
+			return candidate, func() {}, err
+		},
+	)
+	if exit != 0 || stderr.String() != "" || received != "v0.8.0-test" {
+		t.Fatalf("exit=%d stderr=%q source version=%q", exit, stderr.String(), received)
+	}
+}
+
 func TestReferenceSourceCompositionDoesNotSelectGitMerge(t *testing.T) {
 	result, err := newReferenceMergeDriver().Merge(context.Background(), engine.TextMergeInput{
 		Old: []byte("old\n"), Local: []byte("local\n"), New: []byte("new\n"),
@@ -88,7 +111,7 @@ func TestReferenceSourceCompositionDoesNotSelectGitMerge(t *testing.T) {
 }
 
 func TestReferenceSourcePluginInitializesWithCoreOnly(t *testing.T) {
-	candidate, cleanup, err := newReferenceSourcePluginWithCache(referenceSourceTestCache(t))
+	candidate, cleanup, err := newReferenceSourcePluginWithCache("v0.0.0-test", referenceSourceTestCache(t))
 	if err != nil {
 		var projected *release.Error
 		if errors.As(err, &projected) {
@@ -98,7 +121,7 @@ func TestReferenceSourcePluginInitializesWithCoreOnly(t *testing.T) {
 	}
 	defer cleanup()
 	spec := candidate.Spec()
-	if spec.Descriptor.ID != "source" || len(spec.Descriptor.Provides) != 1 || spec.Descriptor.Provides[0].ID != "source.bundle" {
+	if spec.Descriptor.ID != "source" || spec.Descriptor.Version != "v0.0.0-test" || len(spec.Descriptor.Provides) != 1 || spec.Descriptor.Provides[0].ID != "source.bundle" {
 		t.Fatalf("source descriptor = %#v", spec.Descriptor)
 	}
 	var paths [][]string
@@ -144,7 +167,7 @@ func TestReferenceSourcePluginUsesStableUserCacheRoot(t *testing.T) {
 }
 
 func TestReferenceSourceCompositionRejectsMissingRequiredDependencies(t *testing.T) {
-	options, provider, cleanup, err := newReferenceSourceDependencies(referenceSourceTestCache(t))
+	options, provider, cleanup, err := newReferenceSourceDependencies("v0.0.0-test", referenceSourceTestCache(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +199,7 @@ func TestReferenceSourceCompositionRejectsMissingRequiredDependencies(t *testing
 			var stdout, stderr bytes.Buffer
 			exit := runWithReferenceSourcePlugin(
 				[]string{"inspect", "--json"}, &stdout, &stderr,
-				func() (plugin.Plugin, func(), error) {
+				func(string) (plugin.Plugin, func(), error) {
 					candidate, err := composeReferenceSourcePlugin(test.mutate(options), provider)
 					return candidate, func() {}, err
 				},
@@ -202,7 +225,7 @@ func TestReferenceSourceCompositionRejectsMissingRequiredDependencies(t *testing
 
 func TestReferenceSourceCacheSurvivesCompositionCleanup(t *testing.T) {
 	cacheRoot := referenceSourceTestCache(t)
-	options, provider, cleanup, err := newReferenceSourceDependencies(cacheRoot)
+	options, provider, cleanup, err := newReferenceSourceDependencies("v0.0.0-test", cacheRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +246,7 @@ func TestReferenceSourceCacheSurvivesCompositionCleanup(t *testing.T) {
 	}
 	cleanup()
 
-	reopened, _, secondCleanup, err := newReferenceSourceDependencies(cacheRoot)
+	reopened, _, secondCleanup, err := newReferenceSourceDependencies("v0.0.0-test", cacheRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
