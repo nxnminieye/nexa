@@ -105,7 +105,7 @@ func TestOfficialSourceReferenceCoreBackendMaterializeAndCheck(t *testing.T) {
 		}
 	}
 	command := exec.Command("go", "test", "-mod=readonly", "./...")
-	command.Dir = filepath.Join(target, "backend", "core")
+	command.Dir = target
 	command.Env = append(os.Environ(), "GOWORK=off", "GOENV=off", "GOTOOLCHAIN=local")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("materialized Core module tests: %v\n%s", err, output)
