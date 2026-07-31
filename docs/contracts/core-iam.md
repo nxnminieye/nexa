@@ -13,6 +13,27 @@ Core service source bundle 提供中性的 IAM 存储与 RPC 契约。Consumer �
 提供方配置、目录内容、产品权限和部署状态。Nexa 不预设 OIDC、Authentik、飞书或
 其他具体身份产品。
 
+## 抽取基线与本段验收
+
+本段行为 donor 固定为 PDCL `origin/main` exact commit
+`e6b07aadfac96da29b6245a4c3b1cb29d5077e51`。只提炼本地登录、session、tenant、
+用户、角色、菜单、权限、bootstrap、目录同步和稳定错误投影；Casdoor、OIDC、
+Authentik、tenant domain、浏览器授权、PAT、service account、Redis/Casbin 多实例
+传播及产品 RPC 仍由 consumer 持有，不以兼容层进入 Core。
+
+本段 Nexa 写集只包含 `plugins/service/core/**`、`cmd/core-transport-gen/**`、直接相关
+的 Core integration fixture/test 和本契约。验收命令为：
+
+```sh
+GOWORK=off go test ./plugins/service/core/... -count=1
+GOWORK=off go test ./cmd/core-transport-gen ./generation/sourcecomment ./generation/protocol ./generation/httpapi ./sourceplugin/engine -count=1
+GOWORK=off go test ./integration -run '^(TestCoreIAMTransportGeneration|TestSourceBundleCore|TestOfficialSourceReference)' -count=1
+NEXA_CORE_IAM_TEST_DSN='<postgres-dsn>' GOWORK=off go test ./integration -run '^TestCoreIAMPostgresConsumer$' -count=1
+```
+
+前三项可以在无数据库环境完成；最后一项必须使用 fresh、可写且健康的 PostgreSQL，
+不得用 mock、跳过结果或仅端口连通代替。
+
 ## 身份与租户
 
 - 身份账号是全局对象。非空外部身份按
