@@ -24,7 +24,7 @@ func assertDetachedSourceState(t *testing.T, repository string) {
 
 func validateDetachedMigrationFacts(t *testing.T, repository string) {
 	t.Helper()
-	path := filepath.Join(repository, "backend", "core", "migrations", "001_core.sql")
+	path := filepath.Join(repository, "backend", "core", "rpc", "migrations", "001_core.sql")
 	content := mustReadFile(t, path)
 	statements, err := migrate.Stmts(string(content))
 	if err != nil {

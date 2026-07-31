@@ -54,7 +54,7 @@ func TestSourceBundleCoreCompositionRendersTypedArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	protocols := []generationprotocol.Document{compileSourceBundleProtocol(t, temporary, "core"), compileSourceBundleProtocol(t, temporary, "account")}
-	native, err := generationhttpapi.Load(context.Background(), generationhttpapi.LoadOptions{RepositoryRoot: temporary, EntryFile: "backend/core/desc/core.api"})
+	native, err := generationhttpapi.Load(context.Background(), generationhttpapi.LoadOptions{RepositoryRoot: temporary, EntryFile: "backend/core/api/desc/core.api"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestSourceBundleCoreCompositionRendersTypedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core"})
+	artifacts, err := composition.Render(document, composition.RenderOptions{CoreRoot: "backend/core/api"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +72,10 @@ func TestSourceBundleCoreCompositionRendersTypedArtifacts(t *testing.T) {
 	var apiPaths []string
 	var coreProxy bool
 	for _, artifact := range artifacts {
-		if artifact.ID == "api.core" && artifact.Path == "backend/core/desc/generated/core.proxy.generated.api" {
+		if artifact.ID == "api.core" && artifact.Path == "backend/core/api/desc/generated/core.proxy.generated.api" {
 			coreProxy = true
 		}
-		if artifact.Path == "backend/core/desc/generated/core.generated.api" {
+		if artifact.Path == "backend/core/api/desc/generated/core.generated.api" {
 			t.Fatal("Core proxy fragment collides with the API aggregate path")
 		}
 		if filepath.Ext(artifact.Path) != ".api" {
@@ -121,7 +121,10 @@ func (resolver sourceBundleProtocolResolver) Open(ctx context.Context, name stri
 
 func compileSourceBundleProtocol(t *testing.T, root, service string) generationprotocol.Document {
 	t.Helper()
-	entry := "backend/" + service + "/desc/" + service + ".proto"
+	entry := "backend/core/rpc/desc/core.proto"
+	if service != "core" {
+		entry = "backend/" + service + "/desc/" + service + ".proto"
+	}
 	resolver := sourceBundleProtocolResolver{root: root}
 	document, err := generationprotocol.Compile(context.Background(), generationprotocol.CompileOptions{ServiceID: service, EntryFiles: []string{entry}, Resolver: resolver})
 	if err != nil {

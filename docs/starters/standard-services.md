@@ -16,6 +16,15 @@ Nexa 可以通过 Service Source Provider 发布标准服务源码。Starter 的
 Materialized service 使用普通 Go/go-zero 分层。它不实现 plugin start/stop hook，不在运行时读取 Provider、
 release cache 或 source lock。
 
+`core-application` 是本规则下的双进程 Starter：同一个 release 同时提供
+`backend/core/rpc/**` 与 `backend/core/api/**`。API 只能通过 RPC client 访问 Core
+持久化，consumer 在物化后负责配置 DSN、端口、进程启动和 migration apply。Provider
+不携带具体环境值，也不把 Core API/RPC 拆成可独立升级的两个 release。
+
+Core transport adapter 由同版本的 `cmd/core-transport-gen` 从物化后的 canonical Proto
+确定性生成。该命令只清空并重建 caller 显式声明的 generated scope，并校验 consumer 使用固定工具版本生成的
+protobuf/gRPC binding；进程生命周期、配置和数据库仍由 consumer 持有。它不是新的 `nexactl` capability。
+
 ## 选择与物化
 
 先对 consumer 实际编译的 `nexactl` 执行：

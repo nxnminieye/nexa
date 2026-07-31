@@ -94,6 +94,14 @@ adapter、Provider 和 cache；native Ent/Proto/`.api` facts、generated output�
 
 标准服务移交和 generation 衔接见[标准服务 starter](../starters/standard-services.md)。
 
+## Core Application
+
+`core-application` 是一个不可拆分的 source release。`backend` profile 同时物化
+`backend/core/rpc/**` 与 `backend/core/api/**`；两者使用同一 manifest/tree digest 和
+release identity，不能按 API、RPC 或旧目录分别选择版本。API 通过 consumer 生成的 RPC
+client 访问 Core，不在 RPC 不可用时嵌入另一份 IAM 实现。Proto、`.api` 和 Ent schema
+仍是 bundle 的 inherited native facts，consumer 只能在独立 local 文件中增加业务事实。
+
 ## 路径与安全
 
 Manifest/tree/target/lock path 必须是 canonical repository-relative path，拒绝 absolute path、traversal、

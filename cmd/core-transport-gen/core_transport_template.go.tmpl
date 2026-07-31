@@ -1,0 +1,1167 @@
+// Command-owned transport template. This file is embedded and never compiled;
+// the generator validates the canonical Proto method set before rendering the
+// marked adapter sections.
+package consumer_test
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	coreapi "example.com/core-iam-consumer/backend/core/api"
+	"example.com/core-iam-consumer/backend/core/rpc/coreapp"
+	transportpb "example.com/core-iam-consumer/transportpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	grpcstatus "google.golang.org/grpc/status"
+)
+
+const (
+	transportModeEnv        = "NEXA_CORE_TRANSPORT_HELPER"
+	transportAddressFileEnv = "NEXA_CORE_TRANSPORT_ADDRESS_FILE"
+	transportRPCAddressEnv  = "NEXA_CORE_TRANSPORT_RPC_ADDRESS"
+	transportTenantEnv      = "NEXA_CORE_TRANSPORT_TENANT"
+)
+
+type tenantMemberWire struct {
+	MemberID        string   `json:"memberId"`
+	AccountID       string   `json:"accountId"`
+	Username        string   `json:"username"`
+	Email           string   `json:"email"`
+	DisplayName     string   `json:"displayName"`
+	SourceCode      string   `json:"sourceCode"`
+	ExternalSubject string   `json:"externalSubject"`
+	Status          string   `json:"status"`
+	RoleCodes       []string `json:"roleCodes"`
+	Version         uint64   `json:"version"`
+}
+
+type tenantMemberListWire struct {
+	Items []tenantMemberWire `json:"items"`
+	Total uint64             `json:"total"`
+}
+
+type coreHTTPEnvelope struct {
+	Code    int             `json:"code"`
+	Msg     string          `json:"msg"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
+}
+
+// TestCoreTransportHelper is executed only in child processes created by the
+// PostgreSQL integration test. The API process receives no database settings.
+func TestCoreTransportHelper(t *testing.T) {
+	mode := os.Getenv(transportModeEnv)
+	if mode == "" {
+		t.Skip("transport helper process only")
+	}
+	addressFile := os.Getenv(transportAddressFileEnv)
+	if addressFile == "" {
+		t.Fatal("transport address file is required")
+	}
+	switch mode {
+	case "rpc":
+		runCoreRPCProcess(t, addressFile)
+	case "api":
+		runCoreAPIProcess(t, addressFile)
+	default:
+		t.Fatalf("unknown transport helper mode %q", mode)
+	}
+}
+
+func runCoreRPCProcess(t *testing.T, addressFile string) {
+	database, err := sql.Open("pgx", os.Getenv("NEXA_CORE_IAM_TEST_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.PingContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	clock := coreapp.ClockFunc(func() time.Time { return time.Now().UTC() })
+	serviceContext, err := coreapp.NewServiceContext(database, reconcileFunc(func(context.Context, coreapp.PolicyReconcileInput) error { return nil }), coreapp.ServiceContextOptions{
+		DefaultTenant: os.Getenv(transportTenantEnv),
+		DefaultRouter: "/home",
+		Password:      coreapp.Argon2idOptions{MemoryKiB: 8192, Iterations: 1, Parallelism: 1, SaltBytes: 16, KeyBytes: 16},
+		Sessions:      coreapp.SessionOptions{AccessTTL: time.Minute, RefreshTTL: time.Hour, TokenBytes: 16, Clock: clock},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	transportpb.RegisterCoreServiceServer(server, &coreRPCServer{service: serviceContext.RPC})
+	writeTransportAddress(t, addressFile, listener.Addr().String())
+	if err := server.Serve(listener); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runCoreAPIProcess(t *testing.T, addressFile string) {
+	rpcAddress := os.Getenv(transportRPCAddressEnv)
+	if rpcAddress == "" {
+		t.Fatal("Core RPC address is required")
+	}
+	connection, err := grpc.NewClient(rpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	handler, err := coreapi.NewHandler(&grpcCoreClient{client: transportpb.NewCoreServiceClient(connection)}, coreapi.Config{
+		ListenAddress: "127.0.0.1:0", RPCAddress: rpcAddress, DefaultTenant: os.Getenv(transportTenantEnv),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: time.Second}
+	writeTransportAddress(t, addressFile, listener.Addr().String())
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		t.Fatal(err)
+	}
+}
+
+func writeTransportAddress(t *testing.T, path, address string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(address), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// BEGIN GENERATED CORE RPC TRANSPORT
+type coreRPCServer struct {
+	transportpb.UnimplementedCoreServiceServer
+	service *coreapp.RPCService
+}
+
+var _ transportpb.CoreServiceServer = (*coreRPCServer)(nil)
+
+func NewRPCServer(service *coreapp.RPCService) transportpb.CoreServiceServer {
+	return &coreRPCServer{service: service}
+}
+
+func (s *coreRPCServer) Health(ctx context.Context, _ *transportpb.HealthRequest) (*transportpb.HealthResponse, error) {
+	result, err := s.service.Health(ctx)
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.HealthResponse{Ready: result.Ready}, nil
+}
+
+func (s *coreRPCServer) Register(ctx context.Context, request *transportpb.RegisterRequest) (*transportpb.RegisterResponse, error) {
+	account, err := s.service.Register(ctx, coreapp.LocalRegistration{Tenant: request.GetTenant(), Username: request.GetUsername(), Password: []byte(request.GetPassword()), Email: request.GetEmail(), DisplayName: request.GetDisplayName()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.RegisterResponse{AccountId: string(account.ID)}, nil
+}
+
+func (s *coreRPCServer) Login(ctx context.Context, request *transportpb.LoginRequest) (*transportpb.LoginResponse, error) {
+	result, err := s.service.Login(ctx, coreapp.LoginInput{Username: request.GetUsername(), Password: request.GetPassword()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.LoginResponse{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, TenantId: result.TenantID, MemberId: result.MemberID}, nil
+}
+
+func (s *coreRPCServer) Refresh(ctx context.Context, request *transportpb.RefreshRequest) (*transportpb.RefreshResponse, error) {
+	result, err := s.service.Refresh(ctx, coreapp.RefreshToken(request.GetRefreshToken()))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.RefreshResponse{AccessToken: result.AccessToken, RefreshToken: result.RefreshToken, TenantId: result.TenantID, MemberId: result.MemberID}, nil
+}
+
+func (s *coreRPCServer) Revoke(ctx context.Context, _ *transportpb.RevokeRequest) (*transportpb.RevokeResponse, error) {
+	if err := s.service.Revoke(ctx, metadataFromContext(ctx)); err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.RevokeResponse{Revoked: true}, nil
+}
+
+func (s *coreRPCServer) Logout(ctx context.Context, _ *transportpb.LogoutRequest) (*transportpb.LogoutResponse, error) {
+	if err := s.service.Revoke(ctx, metadataFromContext(ctx)); err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.LogoutResponse{}, nil
+}
+
+func (s *coreRPCServer) CurrentSession(ctx context.Context, _ *transportpb.CurrentSessionRequest) (*transportpb.CurrentSessionResponse, error) {
+	result, err := s.service.CurrentSession(ctx, metadataFromContext(ctx))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.CurrentSessionResponse{UserId: result.UserID, Username: result.Username, RealName: result.RealName, Avatar: result.Avatar, Roles: result.Roles, PermissionCodes: result.PermissionCodes}, nil
+}
+
+func (s *coreRPCServer) GetAccessCodes(ctx context.Context, _ *transportpb.GetAccessCodesRequest) (*transportpb.GetAccessCodesResponse, error) {
+	codes, err := s.service.AccessCodes(ctx, metadataFromContext(ctx))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.GetAccessCodesResponse{Codes: codes}, nil
+}
+
+func (s *coreRPCServer) GetUserInfo(ctx context.Context, _ *transportpb.GetUserInfoRequest) (*transportpb.UserInfoResponse, error) {
+	result, err := s.service.UserInfo(ctx, metadataFromContext(ctx))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.UserInfoResponse{UserId: result.UserID, MemberId: result.MemberID, Username: result.Username, Email: result.Email, RealName: result.RealName, Avatar: result.Avatar, Roles: result.Roles}, nil
+}
+
+func (s *coreRPCServer) GetAllMenus(ctx context.Context, _ *transportpb.GetAllMenusRequest) (*transportpb.GetAllMenusResponse, error) {
+	menus, err := s.service.AllMenus(ctx, metadataFromContext(ctx))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	result := make([]*transportpb.RouteItem, len(menus))
+	for index, menu := range menus {
+		result[index] = routeToProto(menu)
+	}
+	return &transportpb.GetAllMenusResponse{Menus: result}, nil
+}
+
+func (s *coreRPCServer) CheckPermission(ctx context.Context, request *transportpb.CheckPermissionRequest) (*transportpb.CheckPermissionResponse, error) {
+	allowed, err := s.service.CheckPermission(ctx, metadataFromContext(ctx), request.GetPermission())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.CheckPermissionResponse{Allowed: allowed}, nil
+}
+
+func (s *coreRPCServer) ListTenantMembers(ctx context.Context, request *transportpb.ListTenantMembersRequest) (*transportpb.ListTenantMembersResponse, error) {
+	page, err := s.service.ListTenantMembers(ctx, metadataFromContext(ctx), coreapp.TenantMemberQuery{TenantID: formatTenantID(request.GetTenantId()), Keyword: request.GetKeyword(), Status: coreapp.IAMStatus(request.GetStatus()), Limit: request.GetLimit(), Offset: request.GetOffset()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	items := make([]*transportpb.TenantMemberItem, len(page.Items))
+	for index, item := range page.Items {
+		items[index] = tenantMemberToProto(item)
+	}
+	return &transportpb.ListTenantMembersResponse{Items: items, Total: page.Total}, nil
+}
+
+func (s *coreRPCServer) GetTenantMember(ctx context.Context, request *transportpb.GetTenantMemberRequest) (*transportpb.GetTenantMemberResponse, error) {
+	item, err := s.service.GetTenantMember(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantMemberID(request.GetMemberId()))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.GetTenantMemberResponse{Item: tenantMemberToProto(item)}, nil
+}
+
+func (s *coreRPCServer) ListIdentityAccounts(ctx context.Context, request *transportpb.ListIdentityAccountsRequest) (*transportpb.ListIdentityAccountsResponse, error) {
+	page, err := s.service.ListIdentityAccounts(ctx, metadataFromContext(ctx), coreapp.IAMListQuery{Keyword: request.GetKeyword(), Status: coreapp.IAMStatus(request.GetStatus()), Limit: request.GetLimit(), Offset: request.GetOffset()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	items := make([]*transportpb.IdentityAccountItem, len(page.Items))
+	for index, item := range page.Items {
+		items[index] = identityAccountToProto(item)
+	}
+	return &transportpb.ListIdentityAccountsResponse{Items: items, Total: page.Total}, nil
+}
+
+func (s *coreRPCServer) GetIdentityAccount(ctx context.Context, request *transportpb.GetIdentityAccountRequest) (*transportpb.GetIdentityAccountResponse, error) {
+	item, err := s.service.GetIdentityAccount(ctx, metadataFromContext(ctx), coreapp.IdentityAccountID(request.GetAccountId()))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.GetIdentityAccountResponse{Item: identityAccountToProto(item)}, nil
+}
+
+func (s *coreRPCServer) UpdateAccountStatus(ctx context.Context, request *transportpb.UpdateAccountStatusRequest) (*transportpb.UpdateAccountStatusResponse, error) {
+	result, err := s.service.UpdateAccountStatus(ctx, metadataFromContext(ctx), coreapp.IdentityAccountID(request.GetAccountId()), coreapp.IAMStatus(request.GetStatus()))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.UpdateAccountStatusResponse{Status: string(result.Status)}, nil
+}
+
+func (s *coreRPCServer) ResetAccountPassword(ctx context.Context, request *transportpb.ResetAccountPasswordRequest) (*transportpb.ResetAccountPasswordResponse, error) {
+	if err := s.service.ResetAccountPassword(ctx, metadataFromContext(ctx), coreapp.IdentityAccountID(request.GetAccountId()), request.GetNewPassword()); err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.ResetAccountPasswordResponse{Reset_: true}, nil
+}
+
+func (s *coreRPCServer) UpdateTenantMemberStatus(ctx context.Context, request *transportpb.UpdateTenantMemberStatusRequest) (*transportpb.UpdateTenantMemberStatusResponse, error) {
+	result, err := s.service.UpdateTenantMemberStatus(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantMemberID(request.GetMemberId()), coreapp.IAMStatus(request.GetStatus()), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.UpdateTenantMemberStatusResponse{Status: string(result.Status), Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) ReplaceTenantMemberRoles(ctx context.Context, request *transportpb.ReplaceTenantMemberRolesRequest) (*transportpb.ReplaceTenantMemberRolesResponse, error) {
+	result, err := s.service.ReplaceTenantMemberRoles(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantMemberID(request.GetMemberId()), request.GetRoleCodes(), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.ReplaceTenantMemberRolesResponse{RoleCodes: result.Codes, Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) ProvisionTenant(ctx context.Context, request *transportpb.ProvisionTenantRequest) (*transportpb.ProvisionTenantResponse, error) {
+	result, err := s.service.ProvisionTenant(ctx, metadataFromContext(ctx), coreapp.ProvisionTenantRequest{Code: request.GetCode(), Name: request.GetName(), InitialAdminAccountID: request.GetInitialAdminAccountId()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	tenantID, err := strconv.ParseInt(result.TenantID, 10, 64)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "internal_error")
+	}
+	return &transportpb.ProvisionTenantResponse{TenantId: tenantID}, nil
+}
+
+func (s *coreRPCServer) ListTenants(ctx context.Context, request *transportpb.ListTenantsRequest) (*transportpb.ListTenantsResponse, error) {
+	page, err := s.service.ListTenants(ctx, metadataFromContext(ctx), coreapp.IAMListQuery{Keyword: request.GetKeyword(), Status: coreapp.IAMStatus(request.GetStatus()), Limit: request.GetLimit(), Offset: request.GetOffset()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	items := make([]*transportpb.TenantItem, len(page.Items))
+	for index, item := range page.Items {
+		items[index], err = tenantToProto(item)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &transportpb.ListTenantsResponse{Items: items, Total: page.Total}, nil
+}
+
+func (s *coreRPCServer) GetTenant(ctx context.Context, request *transportpb.GetTenantRequest) (*transportpb.GetTenantResponse, error) {
+	item, err := s.service.GetTenant(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	projected, err := tenantToProto(item)
+	if err != nil {
+		return nil, err
+	}
+	return &transportpb.GetTenantResponse{Item: projected}, nil
+}
+
+func (s *coreRPCServer) UpdateTenant(ctx context.Context, request *transportpb.UpdateTenantRequest) (*transportpb.UpdateTenantResponse, error) {
+	item, err := s.service.UpdateTenant(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), request.GetName(), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	projected, err := tenantToProto(item)
+	if err != nil {
+		return nil, err
+	}
+	return &transportpb.UpdateTenantResponse{Item: projected}, nil
+}
+
+func (s *coreRPCServer) UpdateTenantStatus(ctx context.Context, request *transportpb.UpdateTenantStatusRequest) (*transportpb.UpdateTenantStatusResponse, error) {
+	result, err := s.service.UpdateTenantStatus(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.IAMStatus(request.GetStatus()), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.UpdateTenantStatusResponse{Status: string(result.Status), Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) ListRoles(ctx context.Context, request *transportpb.ListRolesRequest) (*transportpb.ListRolesResponse, error) {
+	page, err := s.service.ListRoles(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.IAMListQuery{Keyword: request.GetKeyword(), Status: coreapp.IAMStatus(request.GetStatus()), Limit: request.GetLimit(), Offset: request.GetOffset()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	items := make([]*transportpb.RoleItem, len(page.Items))
+	for index, item := range page.Items {
+		items[index] = roleToProto(item)
+	}
+	return &transportpb.ListRolesResponse{Items: items, Total: page.Total}, nil
+}
+
+func (s *coreRPCServer) GetRole(ctx context.Context, request *transportpb.GetRoleRequest) (*transportpb.GetRoleResponse, error) {
+	item, err := s.service.GetRole(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantRoleID(request.GetRoleId()))
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.GetRoleResponse{Item: roleToProto(item)}, nil
+}
+
+func (s *coreRPCServer) CreateRole(ctx context.Context, request *transportpb.CreateRoleRequest) (*transportpb.CreateRoleResponse, error) {
+	result, err := s.service.CreateRole(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), request.GetCode(), request.GetName())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.CreateRoleResponse{RoleId: result.RoleID, Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) UpdateRole(ctx context.Context, request *transportpb.UpdateRoleRequest) (*transportpb.UpdateRoleResponse, error) {
+	result, err := s.service.UpdateRole(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantRoleID(request.GetRoleId()), request.GetName(), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.UpdateRoleResponse{Updated: result.Updated, Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) UpdateRoleStatus(ctx context.Context, request *transportpb.UpdateRoleStatusRequest) (*transportpb.UpdateRoleStatusResponse, error) {
+	result, err := s.service.UpdateRoleStatus(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantRoleID(request.GetRoleId()), coreapp.IAMStatus(request.GetStatus()), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.UpdateRoleStatusResponse{Status: string(result.Status), Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) ReplaceRolePermissions(ctx context.Context, request *transportpb.ReplaceRolePermissionsRequest) (*transportpb.ReplaceRolePermissionsResponse, error) {
+	result, err := s.service.ReplaceRolePermissions(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantRoleID(request.GetRoleId()), request.GetPermissionCodes(), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.ReplaceRolePermissionsResponse{PermissionCodes: result.Codes, Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) ReplaceRoleMenus(ctx context.Context, request *transportpb.ReplaceRoleMenusRequest) (*transportpb.ReplaceRoleMenusResponse, error) {
+	result, err := s.service.ReplaceRoleMenus(ctx, metadataFromContext(ctx), formatTenantID(request.GetTenantId()), coreapp.TenantRoleID(request.GetRoleId()), request.GetMenuCodes(), request.GetExpectedVersion())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.ReplaceRoleMenusResponse{MenuCodes: result.Codes, Version: result.Version}, nil
+}
+
+func (s *coreRPCServer) ListMenus(ctx context.Context, request *transportpb.ListMenusRequest) (*transportpb.ListMenusResponse, error) {
+	page, err := s.service.ListMenus(ctx, metadataFromContext(ctx), coreapp.IAMListQuery{Keyword: request.GetKeyword(), Status: coreapp.IAMStatus(request.GetStatus()), Limit: request.GetLimit(), Offset: request.GetOffset()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	items := make([]*transportpb.MenuItem, len(page.Items))
+	for index, item := range page.Items {
+		items[index] = menuToProto(item)
+	}
+	return &transportpb.ListMenusResponse{Items: items, Total: page.Total}, nil
+}
+
+func (s *coreRPCServer) GetMenu(ctx context.Context, request *transportpb.GetMenuRequest) (*transportpb.GetMenuResponse, error) {
+	item, err := s.service.GetMenu(ctx, metadataFromContext(ctx), request.GetCode())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.GetMenuResponse{Item: menuToProto(item)}, nil
+}
+
+func (s *coreRPCServer) ListPermissions(ctx context.Context, request *transportpb.ListPermissionsRequest) (*transportpb.ListPermissionsResponse, error) {
+	page, err := s.service.ListPermissions(ctx, metadataFromContext(ctx), coreapp.IAMListQuery{Keyword: request.GetKeyword(), Status: coreapp.IAMStatus(request.GetStatus()), Limit: request.GetLimit(), Offset: request.GetOffset()})
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	items := make([]*transportpb.PermissionItem, len(page.Items))
+	for index, item := range page.Items {
+		items[index] = permissionToProto(item)
+	}
+	return &transportpb.ListPermissionsResponse{Items: items, Total: page.Total}, nil
+}
+
+func (s *coreRPCServer) GetPermission(ctx context.Context, request *transportpb.GetPermissionRequest) (*transportpb.GetPermissionResponse, error) {
+	item, err := s.service.GetPermission(ctx, metadataFromContext(ctx), request.GetCode())
+	if err != nil {
+		return nil, projectCoreRPCError(err)
+	}
+	return &transportpb.GetPermissionResponse{Item: permissionToProto(item)}, nil
+}
+
+func metadataFromContext(ctx context.Context) coreapp.TransportMetadata {
+	values, _ := metadata.FromIncomingContext(ctx)
+	authorization := ""
+	if items := values.Get("authorization"); len(items) != 0 {
+		authorization = items[0]
+	}
+	tenant := ""
+	if items := values.Get("x-tenant-id"); len(items) != 0 {
+		tenant = items[0]
+	}
+	traceparent := ""
+	if items := values.Get("traceparent"); len(items) != 0 {
+		traceparent = items[0]
+	}
+	requestID := ""
+	if items := values.Get("x-request-id"); len(items) != 0 {
+		requestID = items[0]
+	}
+	return coreapp.TransportMetadata{Authorization: authorization, TenantID: tenant, Traceparent: traceparent, RequestID: requestID}
+}
+
+func formatTenantID(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func projectCoreRPCError(err error) error {
+	projected := coreapp.ProjectTransportError(err)
+	if projected == nil {
+		return nil
+	}
+	code := codes.Internal
+	switch projected.Code {
+	case "invalid_argument":
+		code = codes.InvalidArgument
+	case "unauthenticated":
+		code = codes.Unauthenticated
+	case "permission_denied":
+		code = codes.PermissionDenied
+	case "not_found":
+		code = codes.NotFound
+	case "aborted":
+		code = codes.Aborted
+	case "failed_precondition":
+		code = codes.FailedPrecondition
+	case "unavailable":
+		code = codes.Unavailable
+	case "canceled":
+		code = codes.Canceled
+	}
+	return grpcstatus.Error(code, projected.Message)
+}
+
+// END GENERATED CORE RPC TRANSPORT
+
+// BEGIN GENERATED CORE API TRANSPORT
+type grpcCoreClient struct{ client transportpb.CoreServiceClient }
+
+var _ coreapi.Client = (*grpcCoreClient)(nil)
+
+func NewAPIClient(client transportpb.CoreServiceClient) coreapi.Client {
+	return &grpcCoreClient{client: client}
+}
+
+func (c *grpcCoreClient) Health(ctx context.Context) (coreapi.Health, error) {
+	result, err := c.client.Health(ctx, &transportpb.HealthRequest{})
+	if err != nil {
+		return coreapi.Health{}, projectCoreAPIError(err)
+	}
+	return coreapi.Health{Ready: result.GetReady()}, nil
+}
+
+func (c *grpcCoreClient) Register(ctx context.Context, request coreapi.RegisterRequest) (coreapi.RegisterResponse, error) {
+	result, err := c.client.Register(ctx, &transportpb.RegisterRequest{Tenant: request.Tenant, Username: request.Username, Password: request.Password, Email: request.Email, DisplayName: request.DisplayName})
+	if err != nil {
+		return coreapi.RegisterResponse{}, projectCoreAPIError(err)
+	}
+	return coreapi.RegisterResponse{AccountID: result.GetAccountId()}, nil
+}
+
+func (c *grpcCoreClient) Login(ctx context.Context, request coreapi.LoginRequest) (coreapi.TokenPair, error) {
+	result, err := c.client.Login(ctx, &transportpb.LoginRequest{Username: request.Username, Password: request.Password})
+	if err != nil {
+		return coreapi.TokenPair{}, projectCoreAPIError(err)
+	}
+	return coreapi.TokenPair{AccessToken: result.GetAccessToken(), RefreshToken: result.GetRefreshToken(), TenantID: result.GetTenantId(), MemberID: result.GetMemberId()}, nil
+}
+
+func (c *grpcCoreClient) Refresh(ctx context.Context, refresh string) (coreapi.TokenPair, error) {
+	result, err := c.client.Refresh(ctx, &transportpb.RefreshRequest{RefreshToken: refresh})
+	if err != nil {
+		return coreapi.TokenPair{}, projectCoreAPIError(err)
+	}
+	return coreapi.TokenPair{AccessToken: result.GetAccessToken(), RefreshToken: result.GetRefreshToken(), TenantID: result.GetTenantId(), MemberID: result.GetMemberId()}, nil
+}
+
+func (c *grpcCoreClient) Revoke(ctx context.Context, request coreapi.Metadata) error {
+	_, err := c.client.Revoke(withMetadata(ctx, request), &transportpb.RevokeRequest{})
+	return projectCoreAPIError(err)
+}
+
+func (c *grpcCoreClient) AccessCodes(ctx context.Context, request coreapi.Metadata) ([]string, error) {
+	result, err := c.client.GetAccessCodes(withMetadata(ctx, request), &transportpb.GetAccessCodesRequest{})
+	if err != nil {
+		return nil, projectCoreAPIError(err)
+	}
+	return result.GetCodes(), nil
+}
+
+func (c *grpcCoreClient) UserInfo(ctx context.Context, request coreapi.Metadata) (coreapi.UserInfo, error) {
+	result, err := c.client.GetUserInfo(withMetadata(ctx, request), &transportpb.GetUserInfoRequest{})
+	if err != nil {
+		return coreapi.UserInfo{}, projectCoreAPIError(err)
+	}
+	return coreapi.UserInfo{UserID: result.GetUserId(), MemberID: result.GetMemberId(), Username: result.GetUsername(), Email: result.GetEmail(), RealName: result.GetRealName(), Avatar: result.GetAvatar(), Roles: result.GetRoles()}, nil
+}
+
+func (c *grpcCoreClient) AllMenus(ctx context.Context, request coreapi.Metadata) ([]coreapi.RouteItem, error) {
+	result, err := c.client.GetAllMenus(withMetadata(ctx, request), &transportpb.GetAllMenusRequest{})
+	if err != nil {
+		return nil, projectCoreAPIError(err)
+	}
+	menus := make([]coreapi.RouteItem, len(result.GetMenus()))
+	for index, menu := range result.GetMenus() {
+		menus[index] = routeFromProto(menu)
+	}
+	return menus, nil
+}
+
+func (c *grpcCoreClient) CheckPermission(ctx context.Context, request coreapi.Metadata, permission string) (bool, error) {
+	result, err := c.client.CheckPermission(withMetadata(ctx, request), &transportpb.CheckPermissionRequest{Permission: permission})
+	if err != nil {
+		return false, projectCoreAPIError(err)
+	}
+	return result.GetAllowed(), nil
+}
+
+func (c *grpcCoreClient) ListTenantMembers(ctx context.Context, request coreapi.Metadata, query coreapi.TenantMemberQuery) (coreapi.TenantMemberPage, error) {
+	tenantID, err := parseTenantID(query.TenantID)
+	if err != nil {
+		return coreapi.TenantMemberPage{}, &coreapi.StatusError{Status: http.StatusBadRequest, Code: "invalid_input", Message: "invalid tenant"}
+	}
+	result, err := c.client.ListTenantMembers(withMetadata(ctx, request), &transportpb.ListTenantMembersRequest{TenantId: tenantID, Keyword: query.Keyword, Status: query.Status, Limit: query.Limit, Offset: query.Offset})
+	if err != nil {
+		return coreapi.TenantMemberPage{}, projectCoreAPIError(err)
+	}
+	items := make([]coreapi.TenantMemberItem, len(result.GetItems()))
+	for index, item := range result.GetItems() {
+		items[index] = tenantMemberFromProto(item)
+	}
+	return coreapi.TenantMemberPage{Items: items, Total: result.GetTotal()}, nil
+}
+
+func (c *grpcCoreClient) GetTenantMember(ctx context.Context, request coreapi.Metadata, tenantID, memberID string) (coreapi.TenantMemberItem, error) {
+	id, err := parseTenantID(tenantID)
+	if err != nil {
+		return coreapi.TenantMemberItem{}, &coreapi.StatusError{Status: http.StatusBadRequest, Code: "invalid_input", Message: "invalid tenant"}
+	}
+	result, err := c.client.GetTenantMember(withMetadata(ctx, request), &transportpb.GetTenantMemberRequest{TenantId: id, MemberId: memberID})
+	if err != nil {
+		return coreapi.TenantMemberItem{}, projectCoreAPIError(err)
+	}
+	return tenantMemberFromProto(result.GetItem()), nil
+}
+
+func (c *grpcCoreClient) ListIdentityAccounts(ctx context.Context, request coreapi.Metadata, query coreapi.ListQuery) (coreapi.IdentityAccountPage, error) {
+	result, err := c.client.ListIdentityAccounts(withMetadata(ctx, request), &transportpb.ListIdentityAccountsRequest{Keyword: query.Keyword, Status: query.Status, Limit: query.Limit, Offset: query.Offset})
+	if err != nil {
+		return coreapi.IdentityAccountPage{}, projectCoreAPIError(err)
+	}
+	items := make([]coreapi.IdentityAccountItem, len(result.GetItems()))
+	for index, item := range result.GetItems() {
+		items[index] = identityAccountFromProto(item)
+	}
+	return coreapi.IdentityAccountPage{Items: items, Total: result.GetTotal()}, nil
+}
+
+func (c *grpcCoreClient) GetIdentityAccount(ctx context.Context, request coreapi.Metadata, accountID string) (coreapi.IdentityAccountItem, error) {
+	result, err := c.client.GetIdentityAccount(withMetadata(ctx, request), &transportpb.GetIdentityAccountRequest{AccountId: accountID})
+	if err != nil {
+		return coreapi.IdentityAccountItem{}, projectCoreAPIError(err)
+	}
+	return identityAccountFromProto(result.GetItem()), nil
+}
+
+func (c *grpcCoreClient) UpdateAccountStatus(ctx context.Context, request coreapi.Metadata, accountID, status string) (string, error) {
+	result, err := c.client.UpdateAccountStatus(withMetadata(ctx, request), &transportpb.UpdateAccountStatusRequest{AccountId: accountID, Status: status})
+	if err != nil {
+		return "", projectCoreAPIError(err)
+	}
+	return result.GetStatus(), nil
+}
+
+func (c *grpcCoreClient) ResetAccountPassword(ctx context.Context, request coreapi.Metadata, accountID, password string) error {
+	_, err := c.client.ResetAccountPassword(withMetadata(ctx, request), &transportpb.ResetAccountPasswordRequest{AccountId: accountID, NewPassword: password})
+	return projectCoreAPIErrorOrNil(err)
+}
+
+func (c *grpcCoreClient) UpdateTenantMemberStatus(ctx context.Context, request coreapi.Metadata, tenantID, memberID, status string, expectedVersion uint64) (coreapi.StatusVersion, error) {
+	id, err := parseTenantID(tenantID)
+	if err != nil {
+		return coreapi.StatusVersion{}, invalidTenantError()
+	}
+	result, err := c.client.UpdateTenantMemberStatus(withMetadata(ctx, request), &transportpb.UpdateTenantMemberStatusRequest{TenantId: id, MemberId: memberID, Status: status, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.StatusVersion{}, projectCoreAPIError(err)
+	}
+	return coreapi.StatusVersion{Status: result.GetStatus(), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) ReplaceTenantMemberRoles(ctx context.Context, request coreapi.Metadata, tenantID, memberID string, roleCodes []string, expectedVersion uint64) (coreapi.CodesVersion, error) {
+	id, err := parseTenantID(tenantID)
+	if err != nil {
+		return coreapi.CodesVersion{}, invalidTenantError()
+	}
+	result, err := c.client.ReplaceTenantMemberRoles(withMetadata(ctx, request), &transportpb.ReplaceTenantMemberRolesRequest{TenantId: id, MemberId: memberID, RoleCodes: roleCodes, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.CodesVersion{}, projectCoreAPIError(err)
+	}
+	return coreapi.CodesVersion{Codes: append([]string(nil), result.GetRoleCodes()...), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) ProvisionTenant(ctx context.Context, request coreapi.Metadata, code, name, accountID string) (coreapi.ProvisionTenantResult, error) {
+	result, err := c.client.ProvisionTenant(withMetadata(ctx, request), &transportpb.ProvisionTenantRequest{Code: code, Name: name, InitialAdminAccountId: accountID})
+	if err != nil {
+		return coreapi.ProvisionTenantResult{}, projectCoreAPIError(err)
+	}
+	return coreapi.ProvisionTenantResult{TenantID: strconv.FormatInt(result.GetTenantId(), 10)}, nil
+}
+
+func (c *grpcCoreClient) ListTenants(ctx context.Context, request coreapi.Metadata, query coreapi.ListQuery) (coreapi.TenantPage, error) {
+	result, err := c.client.ListTenants(withMetadata(ctx, request), &transportpb.ListTenantsRequest{Keyword: query.Keyword, Status: query.Status, Limit: query.Limit, Offset: query.Offset})
+	if err != nil {
+		return coreapi.TenantPage{}, projectCoreAPIError(err)
+	}
+	items := make([]coreapi.TenantItem, len(result.GetItems()))
+	for index, item := range result.GetItems() {
+		items[index] = tenantFromProto(item)
+	}
+	return coreapi.TenantPage{Items: items, Total: result.GetTotal()}, nil
+}
+
+func (c *grpcCoreClient) GetTenant(ctx context.Context, request coreapi.Metadata, tenantID string) (coreapi.TenantItem, error) {
+	id, err := parseTenantID(tenantID)
+	if err != nil {
+		return coreapi.TenantItem{}, invalidTenantError()
+	}
+	result, err := c.client.GetTenant(withMetadata(ctx, request), &transportpb.GetTenantRequest{TenantId: id})
+	if err != nil {
+		return coreapi.TenantItem{}, projectCoreAPIError(err)
+	}
+	return tenantFromProto(result.GetItem()), nil
+}
+
+func (c *grpcCoreClient) UpdateTenant(ctx context.Context, request coreapi.Metadata, tenantID, name string, expectedVersion uint64) (coreapi.TenantItem, error) {
+	id, err := parseTenantID(tenantID)
+	if err != nil {
+		return coreapi.TenantItem{}, invalidTenantError()
+	}
+	result, err := c.client.UpdateTenant(withMetadata(ctx, request), &transportpb.UpdateTenantRequest{TenantId: id, Name: name, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.TenantItem{}, projectCoreAPIError(err)
+	}
+	return tenantFromProto(result.GetItem()), nil
+}
+
+func (c *grpcCoreClient) UpdateTenantStatus(ctx context.Context, request coreapi.Metadata, tenantID, status string, expectedVersion uint64) (coreapi.StatusVersion, error) {
+	id, err := parseTenantID(tenantID)
+	if err != nil {
+		return coreapi.StatusVersion{}, invalidTenantError()
+	}
+	result, err := c.client.UpdateTenantStatus(withMetadata(ctx, request), &transportpb.UpdateTenantStatusRequest{TenantId: id, Status: status, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.StatusVersion{}, projectCoreAPIError(err)
+	}
+	return coreapi.StatusVersion{Status: result.GetStatus(), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) ListRoles(ctx context.Context, request coreapi.Metadata, query coreapi.ListQuery) (coreapi.RolePage, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.RolePage{}, invalidTenantError()
+	}
+	result, err := c.client.ListRoles(withMetadata(ctx, request), &transportpb.ListRolesRequest{TenantId: tenantID, Keyword: query.Keyword, Status: query.Status, Limit: query.Limit, Offset: query.Offset})
+	if err != nil {
+		return coreapi.RolePage{}, projectCoreAPIError(err)
+	}
+	items := make([]coreapi.RoleItem, len(result.GetItems()))
+	for index, item := range result.GetItems() {
+		items[index] = roleFromProto(item)
+	}
+	return coreapi.RolePage{Items: items, Total: result.GetTotal()}, nil
+}
+
+func (c *grpcCoreClient) GetRole(ctx context.Context, request coreapi.Metadata, roleID string) (coreapi.RoleItem, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.RoleItem{}, invalidTenantError()
+	}
+	result, err := c.client.GetRole(withMetadata(ctx, request), &transportpb.GetRoleRequest{TenantId: tenantID, RoleId: roleID})
+	if err != nil {
+		return coreapi.RoleItem{}, projectCoreAPIError(err)
+	}
+	return roleFromProto(result.GetItem()), nil
+}
+
+func (c *grpcCoreClient) CreateRole(ctx context.Context, request coreapi.Metadata, code, name string) (coreapi.RoleCreate, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.RoleCreate{}, invalidTenantError()
+	}
+	result, err := c.client.CreateRole(withMetadata(ctx, request), &transportpb.CreateRoleRequest{TenantId: tenantID, Code: code, Name: name})
+	if err != nil {
+		return coreapi.RoleCreate{}, projectCoreAPIError(err)
+	}
+	return coreapi.RoleCreate{RoleID: result.GetRoleId(), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) UpdateRole(ctx context.Context, request coreapi.Metadata, roleID, name string, expectedVersion uint64) (coreapi.RoleUpdate, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.RoleUpdate{}, invalidTenantError()
+	}
+	result, err := c.client.UpdateRole(withMetadata(ctx, request), &transportpb.UpdateRoleRequest{TenantId: tenantID, RoleId: roleID, Name: name, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.RoleUpdate{}, projectCoreAPIError(err)
+	}
+	return coreapi.RoleUpdate{Updated: result.GetUpdated(), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) UpdateRoleStatus(ctx context.Context, request coreapi.Metadata, roleID, status string, expectedVersion uint64) (coreapi.StatusVersion, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.StatusVersion{}, invalidTenantError()
+	}
+	result, err := c.client.UpdateRoleStatus(withMetadata(ctx, request), &transportpb.UpdateRoleStatusRequest{TenantId: tenantID, RoleId: roleID, Status: status, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.StatusVersion{}, projectCoreAPIError(err)
+	}
+	return coreapi.StatusVersion{Status: result.GetStatus(), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) ReplaceRolePermissions(ctx context.Context, request coreapi.Metadata, roleID string, permissionCodes []string, expectedVersion uint64) (coreapi.CodesVersion, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.CodesVersion{}, invalidTenantError()
+	}
+	result, err := c.client.ReplaceRolePermissions(withMetadata(ctx, request), &transportpb.ReplaceRolePermissionsRequest{TenantId: tenantID, RoleId: roleID, PermissionCodes: permissionCodes, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.CodesVersion{}, projectCoreAPIError(err)
+	}
+	return coreapi.CodesVersion{Codes: append([]string(nil), result.GetPermissionCodes()...), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) ReplaceRoleMenus(ctx context.Context, request coreapi.Metadata, roleID string, menuCodes []string, expectedVersion uint64) (coreapi.CodesVersion, error) {
+	tenantID, err := parseTenantID(request.TenantID)
+	if err != nil {
+		return coreapi.CodesVersion{}, invalidTenantError()
+	}
+	result, err := c.client.ReplaceRoleMenus(withMetadata(ctx, request), &transportpb.ReplaceRoleMenusRequest{TenantId: tenantID, RoleId: roleID, MenuCodes: menuCodes, ExpectedVersion: expectedVersion})
+	if err != nil {
+		return coreapi.CodesVersion{}, projectCoreAPIError(err)
+	}
+	return coreapi.CodesVersion{Codes: append([]string(nil), result.GetMenuCodes()...), Version: result.GetVersion()}, nil
+}
+
+func (c *grpcCoreClient) ListMenus(ctx context.Context, request coreapi.Metadata, query coreapi.ListQuery) (coreapi.MenuPage, error) {
+	result, err := c.client.ListMenus(withMetadata(ctx, request), &transportpb.ListMenusRequest{Keyword: query.Keyword, Status: query.Status, Limit: query.Limit, Offset: query.Offset})
+	if err != nil {
+		return coreapi.MenuPage{}, projectCoreAPIError(err)
+	}
+	items := make([]coreapi.MenuItem, len(result.GetItems()))
+	for index, item := range result.GetItems() {
+		items[index] = menuFromProto(item)
+	}
+	return coreapi.MenuPage{Items: items, Total: result.GetTotal()}, nil
+}
+
+func (c *grpcCoreClient) GetMenu(ctx context.Context, request coreapi.Metadata, code string) (coreapi.MenuItem, error) {
+	result, err := c.client.GetMenu(withMetadata(ctx, request), &transportpb.GetMenuRequest{Code: code})
+	if err != nil {
+		return coreapi.MenuItem{}, projectCoreAPIError(err)
+	}
+	return menuFromProto(result.GetItem()), nil
+}
+
+func (c *grpcCoreClient) ListPermissions(ctx context.Context, request coreapi.Metadata, query coreapi.ListQuery) (coreapi.PermissionPage, error) {
+	result, err := c.client.ListPermissions(withMetadata(ctx, request), &transportpb.ListPermissionsRequest{Keyword: query.Keyword, Status: query.Status, Limit: query.Limit, Offset: query.Offset})
+	if err != nil {
+		return coreapi.PermissionPage{}, projectCoreAPIError(err)
+	}
+	items := make([]coreapi.PermissionItem, len(result.GetItems()))
+	for index, item := range result.GetItems() {
+		items[index] = permissionFromProto(item)
+	}
+	return coreapi.PermissionPage{Items: items, Total: result.GetTotal()}, nil
+}
+
+func (c *grpcCoreClient) GetPermission(ctx context.Context, request coreapi.Metadata, code string) (coreapi.PermissionItem, error) {
+	result, err := c.client.GetPermission(withMetadata(ctx, request), &transportpb.GetPermissionRequest{Code: code})
+	if err != nil {
+		return coreapi.PermissionItem{}, projectCoreAPIError(err)
+	}
+	return permissionFromProto(result.GetItem()), nil
+}
+
+func withMetadata(ctx context.Context, request coreapi.Metadata) context.Context {
+	return metadata.NewOutgoingContext(ctx, metadata.Pairs(
+		"authorization", request.Authorization,
+		"x-tenant-id", request.TenantID,
+		"traceparent", request.Traceparent,
+		"x-request-id", request.RequestID,
+	))
+}
+
+func parseTenantID(value string) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(value, 10, 64)
+}
+
+func projectCoreAPIErrorOrNil(err error) error {
+	if err == nil {
+		return nil
+	}
+	return projectCoreAPIError(err)
+}
+
+func projectCoreAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return coreapi.ProjectRPCError(grpcstatus.Code(err).String())
+}
+
+func invalidTenantError() error {
+	return &coreapi.StatusError{Status: http.StatusBadRequest, Code: "invalid_input", Message: "invalid tenant"}
+}
+
+func tenantMemberToProto(item coreapp.TenantMemberItem) *transportpb.TenantMemberItem {
+	return &transportpb.TenantMemberItem{MemberId: item.MemberID, AccountId: item.AccountID, Username: item.Username, Email: item.Email, DisplayName: item.DisplayName, SourceCode: item.SourceCode, ExternalSubject: item.ExternalSubject, Status: string(item.Status), RoleCodes: append([]string(nil), item.RoleCodes...), Version: item.Version}
+}
+
+func identityAccountToProto(item coreapp.IdentityAccountItem) *transportpb.IdentityAccountItem {
+	return &transportpb.IdentityAccountItem{AccountId: item.AccountID, Username: item.Username, Email: item.Email, DisplayName: item.DisplayName, SourceCode: item.SourceCode, ExternalSubject: item.ExternalSubject, Status: string(item.Status)}
+}
+
+func tenantToProto(item coreapp.TenantItem) (*transportpb.TenantItem, error) {
+	tenantID, err := strconv.ParseInt(item.TenantID, 10, 64)
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Internal, "internal_error")
+	}
+	return &transportpb.TenantItem{TenantId: tenantID, Code: item.Code, Name: item.Name, Status: string(item.Status), Version: item.Version}, nil
+}
+
+func roleToProto(item coreapp.RoleItem) *transportpb.RoleItem {
+	return &transportpb.RoleItem{RoleId: item.RoleID, Code: item.Code, Name: item.Name, Status: string(item.Status), Managed: item.Managed, PermissionCodes: append([]string(nil), item.PermissionCodes...), MenuCodes: append([]string(nil), item.MenuCodes...), Version: item.Version}
+}
+
+func menuToProto(item coreapp.MenuItem) *transportpb.MenuItem {
+	return &transportpb.MenuItem{MenuId: item.MenuID, Code: item.Code, ParentCode: item.ParentCode, Name: item.Name, Path: item.Path, Component: item.Component, Icon: item.Icon, SortOrder: item.SortOrder, SourceId: item.SourceID, Status: string(item.Status)}
+}
+
+func permissionToProto(item coreapp.PermissionItem) *transportpb.PermissionItem {
+	return &transportpb.PermissionItem{PermissionId: item.PermissionID, ResourceCode: item.ResourceCode, Code: item.Code, Name: item.Name, Description: item.Description, SourceId: item.SourceID, Status: string(item.Status)}
+}
+
+func tenantMemberFromProto(item *transportpb.TenantMemberItem) coreapi.TenantMemberItem {
+	if item == nil {
+		return coreapi.TenantMemberItem{}
+	}
+	return coreapi.TenantMemberItem{MemberID: item.GetMemberId(), AccountID: item.GetAccountId(), Username: item.GetUsername(), Email: item.GetEmail(), DisplayName: item.GetDisplayName(), SourceCode: item.GetSourceCode(), ExternalSubject: item.GetExternalSubject(), Status: item.GetStatus(), RoleCodes: append([]string(nil), item.GetRoleCodes()...), Version: item.GetVersion()}
+}
+
+func identityAccountFromProto(item *transportpb.IdentityAccountItem) coreapi.IdentityAccountItem {
+	if item == nil {
+		return coreapi.IdentityAccountItem{}
+	}
+	return coreapi.IdentityAccountItem{AccountID: item.GetAccountId(), Username: item.GetUsername(), Email: item.GetEmail(), DisplayName: item.GetDisplayName(), SourceCode: item.GetSourceCode(), ExternalSubject: item.GetExternalSubject(), Status: item.GetStatus()}
+}
+
+func tenantFromProto(item *transportpb.TenantItem) coreapi.TenantItem {
+	if item == nil {
+		return coreapi.TenantItem{}
+	}
+	return coreapi.TenantItem{TenantID: strconv.FormatInt(item.GetTenantId(), 10), Code: item.GetCode(), Name: item.GetName(), Status: item.GetStatus(), Version: item.GetVersion()}
+}
+
+func roleFromProto(item *transportpb.RoleItem) coreapi.RoleItem {
+	if item == nil {
+		return coreapi.RoleItem{}
+	}
+	return coreapi.RoleItem{RoleID: item.GetRoleId(), Code: item.GetCode(), Name: item.GetName(), Status: item.GetStatus(), Managed: item.GetManaged(), PermissionCodes: append([]string(nil), item.GetPermissionCodes()...), MenuCodes: append([]string(nil), item.GetMenuCodes()...), Version: item.GetVersion()}
+}
+
+func menuFromProto(item *transportpb.MenuItem) coreapi.MenuItem {
+	if item == nil {
+		return coreapi.MenuItem{}
+	}
+	return coreapi.MenuItem{MenuID: item.GetMenuId(), Code: item.GetCode(), ParentCode: item.GetParentCode(), Name: item.GetName(), Path: item.GetPath(), Component: item.GetComponent(), Icon: item.GetIcon(), SortOrder: item.GetSortOrder(), SourceID: item.GetSourceId(), Status: item.GetStatus()}
+}
+
+func permissionFromProto(item *transportpb.PermissionItem) coreapi.PermissionItem {
+	if item == nil {
+		return coreapi.PermissionItem{}
+	}
+	return coreapi.PermissionItem{PermissionID: item.GetPermissionId(), ResourceCode: item.GetResourceCode(), Code: item.GetCode(), Name: item.GetName(), Description: item.GetDescription(), SourceID: item.GetSourceId(), Status: item.GetStatus()}
+}
+
+func routeToProto(item coreapp.RouteItem) *transportpb.RouteItem {
+	result := &transportpb.RouteItem{Name: item.Name, Path: item.Path, Component: item.Component, Redirect: item.Redirect, Meta: &transportpb.RouteMeta{Title: item.Meta.Title, Icon: item.Meta.Icon, KeepAlive: item.Meta.KeepAlive, Order: item.Meta.Order, HideInMenu: item.Meta.HideInMenu, HideChildrenInMenu: item.Meta.HideChildrenInMenu}}
+	result.Children = make([]*transportpb.RouteItem, len(item.Children))
+	for index, child := range item.Children {
+		result.Children[index] = routeToProto(child)
+	}
+	return result
+}
+
+func routeFromProto(item *transportpb.RouteItem) coreapi.RouteItem {
+	if item == nil {
+		return coreapi.RouteItem{}
+	}
+	result := coreapi.RouteItem{Name: item.GetName(), Path: item.GetPath(), Component: item.GetComponent(), Redirect: item.GetRedirect()}
+	if meta := item.GetMeta(); meta != nil {
+		result.Meta = coreapi.RouteMeta{Title: meta.GetTitle(), Icon: meta.GetIcon(), KeepAlive: meta.GetKeepAlive(), Order: meta.GetOrder(), HideInMenu: meta.GetHideInMenu(), HideChildrenInMenu: meta.GetHideChildrenInMenu()}
+	}
+	result.Children = make([]coreapi.RouteItem, len(item.GetChildren()))
+	for index, child := range item.GetChildren() {
+		result.Children[index] = routeFromProto(child)
+	}
+	return result
+}
+
+// END GENERATED CORE API TRANSPORT
+
+type transportProcess struct {
+	command *exec.Cmd
+	done    chan error
+	address string
+	output  *os.File
+}
+
+func startTransportProcess(t *testing.T, mode, dsn, rpcAddress string) *transportProcess {
+	t.Helper()
+	directory := t.TempDir()
+	addressFile := filepath.Join(directory, "address")
+	output, err := os.Create(filepath.Join(directory, "process.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestCoreTransportHelper$", "-test.v")
+	command.Env = append(os.Environ(), transportModeEnv+"="+mode, transportAddressFileEnv+"="+addressFile, transportRPCAddressEnv+"="+rpcAddress, transportTenantEnv+"=tenant-a", "NEXA_CORE_IAM_TEST_DSN="+dsn)
+	command.Stdout = output
+	command.Stderr = output
+	if err := command.Start(); err != nil {
+		output.Close()
+		t.Fatal(err)
+	}
+	process := &transportProcess{command: command, done: make(chan error, 1), output: output}
+	go func() { process.done <- command.Wait() }()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		data, readErr := os.ReadFile(addressFile)
+		if readErr == nil && strings.TrimSpace(string(data)) != "" {
+			process.address = strings.TrimSpace(string(data))
+			t.Cleanup(process.stop)
+			return process
+		}
+		select {
+		case <-process.done:
+			output.Close()
+			t.Fatalf("%s transport process exited before readiness", mode)
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	process.stop()
+	t.Fatalf("%s transport process did not become ready", mode)
+	return nil
+}
+
+func (p *transportProcess) stop() {
+	if p == nil || p.command == nil || p.command.Process == nil {
+		return
+	}
+	_ = p.command.Process.Signal(os.Interrupt)
+	select {
+	case <-p.done:
+	case <-time.After(time.Second):
+		_ = p.command.Process.Kill()
+		<-p.done
+	}
+	_ = p.output.Close()
+	p.command = nil
+}
+
+func exerciseCoreRPCAPITransport(t *testing.T, dsn string, accessToken, deniedAccessToken, tenantID, otherTenantID string, memberID coreapp.TenantMemberID, accountID coreapp.IdentityAccountID) {
+	t.Helper()
+	rpcProcess := startTransportProcess(t, "rpc", dsn, "")
+	apiProcess := startTransportProcess(t, "api", "", rpcProcess.address)
+	client := &http.Client{Timeout: 2 * time.Second}
+	request := func(path, tenant, token string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, "http://"+apiProcess.address+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		if tenant != "" {
+			req.Header.Set("X-Tenant-ID", tenant)
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	response := request("/api/users?keyword=Bootstrap&status=enabled&limit=10&offset=0", tenantID, accessToken)
+	var envelope coreHTTPEnvelope
+	decodeCoreHTTPResponse(t, response, http.StatusOK, &envelope)
+	if envelope.Code != 0 || envelope.Msg != "ok" {
+		t.Fatalf("member list envelope=%#v", envelope)
+	}
+	var page tenantMemberListWire
+	if err := json.Unmarshal(envelope.Data, &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].MemberID != string(memberID) || page.Items[0].AccountID != string(accountID) || page.Items[0].Username != "owner" || page.Items[0].DisplayName != "Bootstrap Owner" || len(page.Items[0].RoleCodes) != 1 || page.Items[0].RoleCodes[0] != "operator" {
+		t.Fatalf("member API page=%#v", page)
+	}
+	response = request("/api/users", "", accessToken)
+	decodeCoreHTTPResponse(t, response, http.StatusOK, &envelope)
+	response = request("/api/users/"+url.PathEscape(string(memberID)), tenantID, accessToken)
+	decodeCoreHTTPResponse(t, response, http.StatusOK, &envelope)
+	var itemData struct {
+		Item tenantMemberWire `json:"item"`
+	}
+	if err := json.Unmarshal(envelope.Data, &itemData); err != nil || itemData.Item.MemberID != string(memberID) || itemData.Item.AccountID != string(accountID) {
+		t.Fatalf("member API get=%#v err=%v", itemData, err)
+	}
+	for _, test := range []struct {
+		name       string
+		path       string
+		tenant     string
+		token      string
+		wantStatus int
+	}{
+		{name: "invalid-status", path: "/api/users?status=unknown", tenant: tenantID, token: accessToken, wantStatus: http.StatusBadRequest},
+		{name: "limit-overflow", path: "/api/users?limit=201", tenant: tenantID, token: accessToken, wantStatus: http.StatusBadRequest},
+		{name: "cross-tenant", path: "/api/users", tenant: otherTenantID, token: accessToken, wantStatus: http.StatusForbidden},
+		{name: "missing-permission", path: "/api/users", tenant: otherTenantID, token: deniedAccessToken, wantStatus: http.StatusForbidden},
+		{name: "invalid-token", path: "/api/users", tenant: tenantID, token: "wrong", wantStatus: http.StatusUnauthorized},
+	} {
+		t.Run("transport-"+test.name, func(t *testing.T) {
+			response := request(test.path, test.tenant, test.token)
+			var failure coreHTTPEnvelope
+			decodeCoreHTTPResponse(t, response, test.wantStatus, &failure)
+			if failure.Code != test.wantStatus || failure.Msg == "" || failure.Message == "" {
+				t.Fatalf("failure envelope=%#v", failure)
+			}
+		})
+	}
+	rpcProcess.stop()
+	response = request("/api/health", "", "")
+	var unavailable coreHTTPEnvelope
+	decodeCoreHTTPResponse(t, response, http.StatusServiceUnavailable, &unavailable)
+	if unavailable.Code != http.StatusServiceUnavailable || unavailable.Msg != "service_unavailable" {
+		t.Fatalf("RPC unavailable envelope=%#v", unavailable)
+	}
+}
+
+func decodeCoreHTTPResponse(t *testing.T, response *http.Response, wantStatus int, target any) {
+	t.Helper()
+	defer response.Body.Close()
+	if response.StatusCode != wantStatus || response.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("HTTP status=%d content-type=%q want=%d", response.StatusCode, response.Header.Get("Content-Type"), wantStatus)
+	}
+	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
+		t.Fatal(err)
+	}
+}

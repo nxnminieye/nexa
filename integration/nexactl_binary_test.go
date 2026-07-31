@@ -210,7 +210,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 		sourceReleases = schema.Releases
 	}
-	wantProfiles := []string{"backend", "identity-oidc"}
+	wantProfiles := []string{"backend"}
 	if len(sourceReleases) != 1 || sourceReleases[0].ProviderID != ref.ProviderID() ||
 		sourceReleases[0].ModulePath != ref.ModulePath() || sourceReleases[0].PackagePath != ref.PackagePath() ||
 		sourceReleases[0].Version != ref.Version() || sourceReleases[0].ManifestDigest != ref.ManifestDigest().String() ||

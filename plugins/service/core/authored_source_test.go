@@ -8,7 +8,7 @@ import (
 	"github.com/nxnminieye/nexa/internal/bundletest"
 )
 
-//go:embed _bundle/backend/core/coreapp
+//go:embed _bundle/backend/core
 var authoredCore embed.FS
 
 func TestAuthoredCoreSource(t *testing.T) {
@@ -22,6 +22,7 @@ func TestAuthoredCoreSource(t *testing.T) {
 		Path:   "example.com/core-source",
 		Source: source,
 		Requirements: map[string]string{
+			"entgo.io/ent":        "v0.14.5",
 			"golang.org/x/crypto": "v0.48.0",
 		},
 	}, bundletest.Options{Race: bundletest.RaceEnabled()})

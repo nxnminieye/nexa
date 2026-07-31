@@ -2,22 +2,19 @@ package consumer_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
-	"sort"
 	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"example.com/core-iam-consumer/coreapp"
+	"example.com/core-iam-consumer/backend/core/rpc/coreapp"
+	coremigrations "example.com/core-iam-consumer/backend/core/rpc/migrations"
 )
 
 func TestCoreIAMPostgres(t *testing.T) {
@@ -49,11 +46,13 @@ func TestCoreIAMPostgres(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(4)
-	if applied := applyMigrations(t, ctx, db); applied != 4 {
-		t.Fatalf("fresh migrations = %d", applied)
+	applied, err := coremigrations.Apply(ctx, db)
+	if err != nil || applied != 4 {
+		t.Fatalf("fresh migrations = %d, err=%v", applied, err)
 	}
-	if applied := applyMigrations(t, ctx, db); applied != 0 {
-		t.Fatalf("second migrations = %d", applied)
+	applied, err = coremigrations.Apply(ctx, db)
+	if err != nil || applied != 0 {
+		t.Fatalf("second migrations = %d, err=%v", applied, err)
 	}
 	assertCoreShellMigration(t, ctx, db)
 	assertAccessHashMigrationRejectsDuplicates(t, ctx, db)
@@ -266,7 +265,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if err != nil {
 		t.Fatal(err)
 	}
-	sourceAPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}, {Code: "legacy"}}
+	sourceAPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}, {Code: "nexa.user.read"}, {Code: "legacy"}}
 	sourceAMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home", RouteName: "home", Path: "/home", Component: "home", PermissionCode: "read", KeepAlive: true, Visible: true}, {Code: "legacy-menu", DisplayName: "Legacy"}}
 	sourceADigest := catalogDigest(t, sourceAPermissions, sourceAMenus)
 	first, err := catalog.Sync(ctx, coreapp.CatalogSyncInput{SourceID: "source-a", Digest: sourceADigest, Permissions: sourceAPermissions, Menus: sourceAMenus})
@@ -285,7 +284,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if first.PermissionsDisabled != 0 || second.PermissionsUpserted != 0 || second.MenusUpserted != 0 || second.PermissionsDisabled != 0 || second.MenusDisabled != 0 {
 		t.Fatal("repeat catalog sync was not stable")
 	}
-	upgradedPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}}
+	upgradedPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}, {Code: "nexa.user.read"}}
 	upgradedMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home", RouteName: "home", Path: "/home", Component: "home", PermissionCode: "read", KeepAlive: true, Visible: true}}
 	upgradedDigest := catalogDigest(t, upgradedPermissions, upgradedMenus)
 	upgraded, err := catalog.Sync(ctx, coreapp.CatalogSyncInput{SourceID: "source-a", Digest: upgradedDigest, Permissions: upgradedPermissions, Menus: upgradedMenus})
@@ -314,11 +313,11 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if sourceAStale != 1 || sourceBEnabled != 2 {
 		t.Fatalf("catalog source isolation stale=%d other-enabled=%d", sourceAStale, sourceBEnabled)
 	}
-	role, err = iam.ReplaceRolePermissions(ctx, coreapp.ReplaceRolePermissionsInput{TenantID: tenantID, RoleID: role.ID, PermissionCodes: []string{"read"}, ExpectedVersion: role.Version})
+	role, err = iam.ReplaceRolePermissions(ctx, coreapp.ReplaceRolePermissionsInput{TenantID: tenantID, RoleID: role.ID, PermissionCodes: []string{"nexa.user.read", "read"}, ExpectedVersion: role.Version})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(role.PermissionCodes) != 1 {
+	if len(role.PermissionCodes) != 2 {
 		t.Fatalf("permissions=%#v", role.PermissionCodes)
 	}
 	role, err = iam.ReplaceRoleMenus(ctx, coreapp.ReplaceRoleMenusInput{TenantID: tenantID, RoleID: role.ID, MenuCodes: []string{"home"}, ExpectedVersion: role.Version})
@@ -329,7 +328,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatalf("menus=%#v", role.MenuCodes)
 	}
 	roles, err := iam.ListTenantRoles(ctx, coreapp.ListTenantRolesInput{TenantID: tenantID, ListQuery: coreapp.ListQuery{Keyword: "operator"}})
-	if err != nil || roles.Total != 1 || len(roles.Items) != 1 || roles.Items[0].ID != role.ID || len(roles.Items[0].PermissionCodes) != 1 || roles.Items[0].PermissionCodes[0] != "read" || len(roles.Items[0].MenuCodes) != 1 || roles.Items[0].MenuCodes[0] != "home" {
+	if err != nil || roles.Total != 1 || len(roles.Items) != 1 || roles.Items[0].ID != role.ID || len(roles.Items[0].PermissionCodes) != 2 || roles.Items[0].PermissionCodes[0] != "nexa.user.read" || roles.Items[0].PermissionCodes[1] != "read" || len(roles.Items[0].MenuCodes) != 1 || roles.Items[0].MenuCodes[0] != "home" {
 		t.Fatalf("role grant readback=%#v err=%v", roles, err)
 	}
 	roleReadback, err = iam.GetTenantRole(ctx, coreapp.TenantRoleKey{TenantID: tenantID, RoleID: role.ID})
@@ -351,7 +350,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatalf("menu get=%#v err=%v", menuReadback, err)
 	}
 	permissions, err := iam.ListPermissions(ctx, coreapp.ListPermissionsInput{ListQuery: coreapp.ListQuery{Status: coreapp.IAMStatusEnabled}})
-	if err != nil || permissions.Total != 2 || len(permissions.Items) != 2 {
+	if err != nil || permissions.Total != 3 || len(permissions.Items) != 3 {
 		t.Fatalf("permission list=%#v err=%v", permissions, err)
 	}
 	permissionReadback, err := iam.GetPermission(ctx, "read")
@@ -362,7 +361,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if err != nil {
 		t.Fatal(err)
 	}
-	exerciseAccessPrincipal(t, ctx, db, auth, access, iam, account, bob, provision, other)
+	exerciseAccessPrincipal(t, ctx, db, databaseURL.String(), auth, access, iam, account, bob, provision, other)
 
 	type provisionOutcome struct {
 		result coreapp.ProvisionTenantResult
@@ -431,7 +430,7 @@ SELECT $1,id,$2,'duplicate-access-hash',$3,now()+interval '1 minute',now()+inter
 	}
 }
 
-func exerciseAccessPrincipal(t *testing.T, ctx context.Context, db *sql.DB, auth *coreapp.LocalAuthenticator, access *coreapp.AccessAuthenticator, iam *coreapp.IAMService, account, bob coreapp.IdentityAccount, provision, other coreapp.ProvisionTenantResult) {
+func exerciseAccessPrincipal(t *testing.T, ctx context.Context, db *sql.DB, databaseURL string, auth *coreapp.LocalAuthenticator, access *coreapp.AccessAuthenticator, iam *coreapp.IAMService, account, bob coreapp.IdentityAccount, provision, other coreapp.ProvisionTenantResult) {
 	t.Helper()
 	session, err := auth.Login(ctx, coreapp.LocalLogin{Tenant: provision.Tenant.Code, Username: account.Username, Password: []byte("password")})
 	if err != nil {
@@ -506,7 +505,7 @@ UPDATE menus SET parent_code='admin' WHERE code='home'`); err != nil {
 		t.Fatalf("empty grants principal=%#v err=%v", empty, err)
 	}
 
-	exerciseIAMHTTPTransport(t, iam, access, session.AccessToken, withoutBindings.AccessToken, provision.Tenant.ID, other.Tenant.ID, provision.Owner.ID, account.ID)
+	exerciseCoreRPCAPITransport(t, databaseURL, session.AccessToken, withoutBindings.AccessToken, provision.Tenant.ID, other.Tenant.ID, provision.Owner.ID, account.ID)
 
 	assertAccessUnavailable := func(name, statement string, arguments ...any) {
 		t.Helper()
@@ -561,7 +560,7 @@ UPDATE menus SET parent_code='admin' WHERE code='home'`); err != nil {
 
 func assertAccessHashMigrationRejectsDuplicates(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
-	data, err := os.ReadFile("migrations/003_auth_session_access_hash_unique.sql")
+	data, err := os.ReadFile("backend/core/rpc/migrations/003_auth_session_access_hash_unique.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,54 +593,6 @@ WHERE table_schema=current_schema()
 	}
 }
 
-func applyMigrations(t *testing.T, ctx context.Context, db *sql.DB) int {
-	t.Helper()
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY,digest TEXT NOT NULL)`); err != nil {
-		t.Fatal(err)
-	}
-	files, err := filepath.Glob("migrations/*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sort.Strings(files)
-	applied := 0
-	for _, path := range files {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256(data)
-		digest := hex.EncodeToString(sum[:])
-		var existing string
-		err = db.QueryRowContext(ctx, `SELECT digest FROM schema_migrations WHERE name=$1`, filepath.Base(path)).Scan(&existing)
-		if err == nil {
-			if existing != digest {
-				t.Fatalf("migration drift %s", path)
-			}
-			continue
-		}
-		if err != sql.ErrNoRows {
-			t.Fatal(err)
-		}
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err = tx.ExecContext(ctx, string(data)); err != nil {
-			tx.Rollback()
-			t.Fatal(err)
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(name,digest) VALUES($1,$2)`, filepath.Base(path), digest); err != nil {
-			tx.Rollback()
-			t.Fatal(err)
-		}
-		if err = tx.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		applied++
-	}
-	return applied
-}
 func assertCode(t *testing.T, err error, want coreapp.ErrorCode) {
 	t.Helper()
 	if coreapp.CodeOf(err) != want {

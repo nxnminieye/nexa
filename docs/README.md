@@ -33,6 +33,7 @@ flowchart LR
 - [统一事实注释协议 v1](contracts/source-comment.md)：Ent、Proto、`.api` 与前端 source contract 的唯一补充事实语法、来源和冲突门禁。
 - [业务事实契约](contracts/business-facts.md)：typed FactGraph、服务关系与 authoring ownership。
 - [Core IAM 契约](contracts/core-iam.md)：中性的账号、租户、成员、角色、菜单与权限边界。
+- `core-application` 双进程 Starter：同一 exact source release 中的 Core API/RPC 与 PostgreSQL consumer 入口。
 - [受控生成](contracts/controlled-generation.md)：从 typed facts 到 direct replace-tree 普通源码。
 - [前端生成契约](contracts/frontend-generation.md)：comment-capable frontend source、FrontendIR 与 delegated renderer request。
 - [HTTP Convention v1](contracts/http-convention.md)：以 PDCL 已验证调用链为基线的 JSON HTTP 路径、envelope、分页与字段约定。

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nexa.dev/core-rpc-config/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["listenAddress", "databaseUrl", "tenantCode", "defaultRouter", "accessTtl", "refreshTtl"],
+  "properties": {
+    "listenAddress": { "type": "string", "minLength": 1 },
+    "databaseUrl": { "type": "string", "minLength": 1 },
+    "tenantCode": { "type": "string", "minLength": 1 },
+    "defaultRouter": { "type": "string", "pattern": "^/" },
+    "accessTtl": { "type": "string", "minLength": 1 },
+    "refreshTtl": { "type": "string", "minLength": 1 }
+  }
+}

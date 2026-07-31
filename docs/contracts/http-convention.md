@@ -8,6 +8,10 @@
 V1 不提供 legacy reader、alias、fallback、normalizer、per-operation response decoder 或逐字段运行时映射。后端 domain/read-model
 到公开 DTO 的显式投影仍是正常的业务边界。
 
+Core API Starter 直接复用本契约的 envelope、错误状态映射、认证上下文和 trace/request
+context 机制；这些公共机制不复制 Core 的 Ent、Proto、`.api` DTO 或领域事实。具体
+consumer 的配置、middleware 装配和 provider 实现仍由 consumer 持有。
+
 ## 路径和字段
 
 - `.api` 的 operation path 是相对于 consumer 配置的 API base URL 的绝对相对路径，例如 `/auth/login`、`/tenants`。

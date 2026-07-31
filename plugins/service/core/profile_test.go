@@ -16,7 +16,7 @@ import (
 	"github.com/nxnminieye/nexa/generation/protocol"
 	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	core "github.com/nxnminieye/nexa/plugins/service/core"
-	coreschema "github.com/nxnminieye/nexa/plugins/service/core/_bundle/backend/core/ent/schema"
+	coreschema "github.com/nxnminieye/nexa/plugins/service/core/_bundle/backend/core/rpc/ent/schema"
 	"github.com/nxnminieye/nexa/project/servicecatalog"
 	"github.com/nxnminieye/nexa/sourceplugin"
 )
@@ -32,8 +32,7 @@ func TestProfileClosuresAreIndependent(t *testing.T) {
 		present      []string
 		absent       []string
 	}{
-		{profile: "backend", wantProfiles: []string{"backend"}, present: []string{"backend/core/coreapp/health.go", "backend/core/desc/core.proto"}, absent: []string{"backend/core/coreapp/oidc_adapter.go", "frontend/frontend/core/pages/accounts.page.json"}},
-		{profile: "identity-oidc", wantProfiles: []string{"backend", "identity-oidc"}, present: []string{"backend/core/coreapp/health.go", "backend/core/coreapp/oidc_adapter.go"}, absent: []string{"frontend/frontend/core/pages/accounts.page.json"}},
+		{profile: "backend", wantProfiles: []string{"backend"}, present: []string{"rpc/coreapp/health.go", "rpc/desc/core.proto", "api/desc/core.api"}, absent: []string{"rpc/coreapp/oidc_adapter.go", "coreapp/health.go", "frontend/frontend/core/pages/accounts.page.json"}},
 	}
 	for _, test := range tests {
 		t.Run(test.profile, func(t *testing.T) {
@@ -114,7 +113,7 @@ func TestProfileBackendNativeFactsLoadSemantically(t *testing.T) {
 	}
 	resolver := &treeResolver{tree: provider.Tree()}
 	proto, err := protocol.Compile(context.Background(), protocol.CompileOptions{
-		ServiceID: "core", EntryFiles: []string{"backend/core/desc/core.proto"}, Resolver: resolver,
+		ServiceID: "core", EntryFiles: []string{"rpc/desc/core.proto"}, Resolver: resolver,
 	})
 	if err != nil {
 		if typed, ok := err.(*protocol.Error); ok {
@@ -123,7 +122,7 @@ func TestProfileBackendNativeFactsLoadSemantically(t *testing.T) {
 		t.Fatalf("compile Proto: %v", err)
 	}
 	repository := t.TempDir()
-	apiFile, _ := provider.Tree().Lookup("backend/core/desc/core.api")
+	apiFile, _ := provider.Tree().Lookup("api/desc/core.api")
 	path := filepath.Join(repository, "desc", "core.api")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -272,13 +271,13 @@ func assertCoreFields(t *testing.T, document httpapi.Document, typeName string, 
 func mergedCoreAPI(t *testing.T, provider sourceplugin.Provider) httpapi.Document {
 	t.Helper()
 	proto, err := protocol.Compile(context.Background(), protocol.CompileOptions{
-		ServiceID: "core", EntryFiles: []string{"backend/core/desc/core.proto"}, Resolver: &treeResolver{tree: provider.Tree()},
+		ServiceID: "core", EntryFiles: []string{"rpc/desc/core.proto"}, Resolver: &treeResolver{tree: provider.Tree()},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	repository := t.TempDir()
-	apiFile, _ := provider.Tree().Lookup("backend/core/desc/core.api")
+	apiFile, _ := provider.Tree().Lookup("api/desc/core.api")
 	path := filepath.Join(repository, "desc", "core.api")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

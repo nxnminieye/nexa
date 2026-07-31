@@ -1,5 +1,14 @@
 # Core IAM 契约
 
+`core-application` 是同一版本化 Source Bundle 中的 Core RPC 与 Core API
+Starter。物化后固定形成两个运行进程：`Core API -> Core RPC -> PostgreSQL`；
+API 不得在 RPC 不可用时嵌入或 fallback 到本地 IAM 实现。默认物化目录为
+`backend/core/rpc/**` 与 `backend/core/api/**`。
+
+本阶段只冻结中性 Core IAM 闭包。具体身份提供方、租户域名解析、浏览器授权、
+工具会话、PAT、service account、tenant settings、Casbin/Redis watcher 以及
+产品 RPC 不属于该 Starter。
+
 Core service source bundle 提供中性的 IAM 存储与 RPC 契约。Consumer 拥有身份
 提供方配置、目录内容、产品权限和部署状态。Nexa 不预设 OIDC、Authentik、飞书或
 其他具体身份产品。
@@ -13,7 +22,9 @@ Core service source bundle 提供中性的 IAM 存储与 RPC 契约。Consumer �
   `(tenant_id, identity_account_id)` 唯一。
 - 角色只属于一个租户，并按 `(tenant_id, code)` 唯一。
 
-登录和 `ProvisionTenant` 使用稳定的 tenant code。进入 IAM 管理面后，认证上下文和
+登录和 `ProvisionTenant` 使用稳定的 tenant code。首个 consumer 由自己的配置提供
+登录 tenant code，不把 tenant code 加入公开登录 DTO；后续 consumer 可以在自己的
+middleware/provider 中解析域名。进入 IAM 管理面后，认证上下文和
 全部 tenant-scoped mutation 使用数据库中的 numeric tenant ID；tenant code 与 numeric
 tenant ID 不得混用或由 adapter 静默猜测。
 
@@ -46,7 +57,7 @@ application 在同一个目录同步事务中校验；digest 不进入外键，�
 语句顺序替换父子投影，不会产生中间态外键违约。角色菜单和角色权限授权携带角色的
 numeric tenant ID，并通过复合角色外键拒绝跨租户关系。
 
-目录同步仅属于 application，不暴露 Core RPC 或 HTTP route。Consumer 向 Core
+目录同步仅属于 application/bootstrap，不暴露 Core RPC 或 HTTP route。Consumer 向 Core
 application 提供目录；application 校验 source ownership 和 digest 后替换该来源拥有的
 记录。`catalog_source_states` 独立保存每个 `source_id` 的 digest。空目录也必须写入该
 状态，使相同输入的重复同步成为可证明的 no-op，而不是被误判为从未同步。
@@ -99,6 +110,8 @@ principal 的 numeric tenant ID 作为服务调用上下文；请求显式携带
 ## 所有权
 
 - 人工事实源：service source bundle 中的 Core Proto message 与 `@nexa` source-comment facts，以及 Ent schema。
+- 运行拓扑事实：`core-application` Starter 的 API/RPC source 与 consumer 配置；不由
+  Source Provider 读取或拥有 consumer 的 DSN、端口、凭据和部署值。
 - 数据库投影：由 materialized consumer 持有的有序 SQL migration。
 - 派生投影：generated RPC/API transport、CRUD artifact 和 FrontendIR。
 - Consumer 事实：目录条目、角色模板、身份提供方配置、凭据、租户实例和产品文案。

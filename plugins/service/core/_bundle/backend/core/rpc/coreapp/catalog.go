@@ -58,6 +58,45 @@ type CatalogService struct {
 	reconciler PolicyReconciler
 }
 
+const coreCatalogSourceID = "nexa.core"
+
+var corePermissionCodes = []string{
+	"core.authorization.check",
+	"nexa.auth.me.read",
+	"nexa.auth.permissions.read",
+	"nexa.auth.role_permissions.bind",
+	"nexa.auth.roles.create",
+	"nexa.auth.roles.read",
+	"nexa.auth.roles.update",
+	"nexa.identity.account.password.reset",
+	"nexa.identity.account.read",
+	"nexa.identity.account.status.update",
+	"nexa.menu.read",
+	"nexa.tenant.create",
+	"nexa.tenant.read",
+	"nexa.tenant.update",
+	"nexa.user.read",
+	"nexa.user.roles.update",
+	"nexa.user.status.update",
+}
+
+func corePermissionCatalog() []PermissionCatalogEntry {
+	permissions := make([]PermissionCatalogEntry, len(corePermissionCodes))
+	for index, code := range corePermissionCodes {
+		permissions[index] = PermissionCatalogEntry{Code: code, Description: code}
+	}
+	return permissions
+}
+
+func isCorePermissionCode(code string) bool {
+	for _, value := range corePermissionCodes {
+		if value == code {
+			return true
+		}
+	}
+	return false
+}
+
 func NewCatalogService(store CatalogStore, reconciler PolicyReconciler) (*CatalogService, error) {
 	if interfaceNil(store) || interfaceNil(reconciler) {
 		return nil, invalid("catalog.new")

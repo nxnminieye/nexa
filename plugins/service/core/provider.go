@@ -11,7 +11,7 @@ func New() (sourceplugin.Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	tree, err := sourceplugin.LoadEmbeddedTree(manifest, bundleAssets, "_bundle", sourceplugin.DefaultTreeLimits())
+	tree, err := sourceplugin.LoadEmbeddedTree(manifest, bundleAssets, "_bundle/backend/core", sourceplugin.DefaultTreeLimits())
 	if err != nil {
 		return nil, err
 	}
