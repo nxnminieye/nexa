@@ -69,23 +69,43 @@ func TestProjectionLockValidatesInheritedGraphNodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	graph, diagnostics := BuildGraph(StandardRegistry(), BuildInput{Nodes: []NodeInput{{
-		SemanticID: "Account", Kind: NodeMessage, Stage: StageProto, Source: downstream, NativeCanonical: expected,
-	}}})
+	upstreamNode := NodeInput{SemanticID: "Account", Kind: NodeMessage, Stage: StageEnt, Source: upstream, NativeCanonical: []byte(`{"name":"Account"}`)}
+	downstreamSource := upstream
+	graph, diagnostics := BuildGraph(StandardRegistry(), BuildInput{
+		Nodes: []NodeInput{
+			upstreamNode,
+			{SemanticID: "Account", Kind: NodeMessage, Stage: StageProto, Source: downstream, SourceDirective: &downstreamSource, NativeCanonical: expected},
+		},
+		Projections: []ProjectionExpectation{{Downstream: downstream, Upstream: upstream, SemanticID: "Account", Kind: NodeMessage, ExpectedNativeCanonical: expected}},
+	})
 	if len(diagnostics) != 0 {
 		t.Fatal(diagnostics)
 	}
 	if err := lock.ValidateFactGraph(graph); err != nil {
 		t.Fatalf("matching inherited node failed lock validation: %v", err)
 	}
-	drifted, diagnostics := BuildGraph(StandardRegistry(), BuildInput{Nodes: []NodeInput{{
-		SemanticID: "Account", Kind: NodeMessage, Stage: StageProto, Source: downstream, NativeCanonical: []byte(`{"name":"Renamed"}`),
-	}}})
+	drifted, diagnostics := BuildGraph(StandardRegistry(), BuildInput{
+		Nodes: []NodeInput{
+			upstreamNode,
+			{SemanticID: "Account", Kind: NodeMessage, Stage: StageProto, Source: downstream, SourceDirective: &downstreamSource, NativeCanonical: []byte(`{"name":"Renamed"}`)},
+		},
+		Projections: []ProjectionExpectation{{Downstream: downstream, Upstream: upstream, SemanticID: "Account", Kind: NodeMessage, ExpectedNativeCanonical: expected}},
+	})
 	if len(diagnostics) != 0 {
 		t.Fatal(diagnostics)
 	}
 	if err := lock.ValidateFactGraph(drifted); err == nil {
 		t.Fatal("mutated inherited node passed lock validation")
+	}
+	missingSource := graph
+	missingSource.nodes = make([]graphNode, 0, len(graph.nodes)-1)
+	for _, node := range graph.nodes {
+		if node.source.String() != upstream.String() {
+			missingSource.nodes = append(missingSource.nodes, node)
+		}
+	}
+	if err := lock.ValidateFactGraph(missingSource); err == nil {
+		t.Fatal("projection lock accepted a missing first source")
 	}
 }
 

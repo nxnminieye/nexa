@@ -151,7 +151,26 @@ func (l ProjectionLock) ValidateFactGraph(graph FactGraph) error {
 	for _, node := range graph.nodes {
 		nodes[node.source.String()] = node
 	}
+	inputs := make(map[string]NodeInput, len(graph.input.Nodes))
+	for _, node := range graph.input.Nodes {
+		inputs[node.Source.String()] = node
+	}
+	projections := make(map[string]ProjectionExpectation, len(graph.input.Projections))
+	for _, projection := range graph.input.Projections {
+		projections[projection.Downstream.String()] = projection
+	}
 	for _, expected := range l.nodes {
+		if _, present := nodes[expected.FirstSource.String()]; !present {
+			return fmt.Errorf("first source %s for projected node %s is missing", expected.FirstSource.String(), expected.Downstream.String())
+		}
+		projection, present := projections[expected.Downstream.String()]
+		if !present || projection.Upstream.String() != expected.FirstSource.String() {
+			return fmt.Errorf("projected node %s does not retain first source %s", expected.Downstream.String(), expected.FirstSource.String())
+		}
+		downstreamInput, present := inputs[expected.Downstream.String()]
+		if !present || downstreamInput.SourceDirective == nil || downstreamInput.SourceDirective.String() != expected.FirstSource.String() {
+			return fmt.Errorf("projected node %s has an invalid $source for %s", expected.Downstream.String(), expected.FirstSource.String())
+		}
 		actual, present := nodes[expected.Downstream.String()]
 		if !present {
 			return fmt.Errorf("projected node %s is missing", expected.Downstream.String())
