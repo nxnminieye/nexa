@@ -361,6 +361,11 @@ func (i *authoredIndex) buildFactGraph() error {
 	if len(diagnostics) > 0 {
 		return sourceCommentInvalid(diagnostics[0])
 	}
+	if i.projection != nil && i.projection.Lock != nil {
+		if err := i.projection.Lock.ValidateFactGraph(graph); err != nil {
+			return invalid("source_comment_invalid", "", "", err.Error())
+		}
+	}
 	i.facts = graph
 	return nil
 }

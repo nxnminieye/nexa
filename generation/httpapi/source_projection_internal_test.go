@@ -49,6 +49,11 @@ service sample {
 		{Downstream: apiMessage, Upstream: protoMessage, SemanticID: "sample.v1.Record", Kind: sourcecomment.NodeAPIType, ExpectedNativeCanonical: canonical[apiMessage.String()]},
 		{Downstream: apiField, Upstream: protoField, SemanticID: "sample.v1.Record.name", Kind: sourcecomment.NodeAPIField, ExpectedNativeCanonical: canonical[apiField.String()]},
 	}}
+	lock, err := sourcecomment.NewProjectionLock(projection.Nodes, projection.InheritedFacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection.Lock = &lock
 	projected := `// @nexa $contract: "nexa.dev/source-comment/v1"
 syntax = "v1"
 info (nexaContractVersion: "nexa.dev/http-convention/v1")
@@ -78,6 +83,15 @@ service sample {
 	owner, ok := err.(*Error)
 	if !ok || owner.Reason() != "source_comment_invalid" {
 		t.Fatalf("drift error = %#v", err)
+	}
+
+	missing := strings.Replace(projected, "  // @nexa $source: \"proto://rpc/record.proto#sample.v1.Record.name\"\n  Name string\n", "", 1)
+	writeProjectionAPI(t, root, missing)
+	_, err = Load(context.Background(), LoadOptions{RepositoryRoot: root, EntryFile: "sample.api", SourceProjection: &SourceProjection{
+		Upstream: upstream, Nodes: projection.Nodes, InheritedFacts: projection.InheritedFacts, Lock: projection.Lock,
+	}})
+	if err == nil {
+		t.Fatal("projection lock accepted a missing inherited API field")
 	}
 }
 

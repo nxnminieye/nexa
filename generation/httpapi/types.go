@@ -24,6 +24,7 @@ type SourceProjection struct {
 	Upstream       sourcecomment.FactGraph
 	Nodes          []sourcecomment.ProjectionExpectation
 	InheritedFacts []sourcecomment.InheritedFactExpectation
+	Lock           *sourcecomment.ProjectionLock
 }
 
 type SourceResolver interface {
