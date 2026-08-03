@@ -332,7 +332,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatalf("role grant readback=%#v err=%v", roles, err)
 	}
 	roleReadback, err = iam.GetTenantRole(ctx, coreapp.TenantRoleKey{TenantID: tenantID, RoleID: role.ID})
-	if err != nil || len(roleReadback.PermissionCodes) != 1 || len(roleReadback.MenuCodes) != 1 {
+	if err != nil || len(roleReadback.PermissionCodes) != 2 || len(roleReadback.MenuCodes) != 1 {
 		t.Fatalf("role get=%#v err=%v", roleReadback, err)
 	}
 	otherRoles, err := iam.ListTenantRoles(ctx, coreapp.ListTenantRolesInput{TenantID: other.Tenant.ID, ListQuery: coreapp.ListQuery{Keyword: "operator"}})
@@ -443,7 +443,7 @@ func exerciseAccessPrincipal(t *testing.T, ctx context.Context, db *sql.DB, data
 	if principal.SessionID != session.ID || principal.TenantID != provision.Tenant.ID || principal.TenantCode != provision.Tenant.Code || principal.MemberID != provision.Owner.ID || principal.Account.ID != account.ID {
 		t.Fatalf("access principal identity=%#v", principal)
 	}
-	if fmt.Sprint(principal.RoleCodes) != "[operator tenant-owner]" || fmt.Sprint(principal.PermissionCodes) != "[read]" || fmt.Sprint(principal.MenuCodes) != "[home]" {
+	if fmt.Sprint(principal.RoleCodes) != "[operator tenant-owner]" || fmt.Sprint(principal.PermissionCodes) != "[nexa.user.read read]" || fmt.Sprint(principal.MenuCodes) != "[home]" {
 		t.Fatalf("access principal grants=%#v", principal)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO permissions(code,description) VALUES('legacy-rbac','must not authorize')`); err != nil {
@@ -453,7 +453,7 @@ func exerciseAccessPrincipal(t *testing.T, ctx context.Context, db *sql.DB, data
 		t.Fatal(err)
 	}
 	principal, err = access.Authenticate(ctx, session.AccessToken)
-	if err != nil || fmt.Sprint(principal.PermissionCodes) != "[read]" {
+	if err != nil || fmt.Sprint(principal.PermissionCodes) != "[nexa.user.read read]" {
 		t.Fatalf("legacy role_permissions affected access principal=%#v err=%v", principal, err)
 	}
 
@@ -474,9 +474,9 @@ UPDATE menus SET parent_code='admin' WHERE code='home'`); err != nil {
 		wantRoles, wantPermissions, wantMenus string
 	}{
 		{name: "role", disable: `UPDATE roles SET status='disabled' WHERE tenant_id=$1 AND code='operator'`, restore: `UPDATE roles SET status='enabled' WHERE tenant_id=$1 AND code='operator'`, wantRoles: "[tenant-owner]", wantPermissions: "[]", wantMenus: "[]"},
-		{name: "action", disable: `UPDATE permission_actions SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_actions SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[]", wantMenus: "[admin home root]"},
-		{name: "resource", disable: `UPDATE permission_resources SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_resources SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[]", wantMenus: "[admin home root]"},
-		{name: "menu", disable: `UPDATE menus SET status='disabled' WHERE code='admin'`, restore: `UPDATE menus SET status='enabled' WHERE code='admin'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[read]", wantMenus: "[home]"},
+		{name: "action", disable: `UPDATE permission_actions SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_actions SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.user.read]", wantMenus: "[admin home root]"},
+		{name: "resource", disable: `UPDATE permission_resources SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_resources SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.user.read]", wantMenus: "[admin home root]"},
+		{name: "menu", disable: `UPDATE menus SET status='disabled' WHERE code='admin'`, restore: `UPDATE menus SET status='enabled' WHERE code='admin'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.user.read read]", wantMenus: "[home]"},
 	} {
 		t.Run("access-disabled-"+disabled.name, func(t *testing.T) {
 			arguments := []any(nil)
