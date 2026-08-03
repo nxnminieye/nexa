@@ -84,15 +84,13 @@ func TestProjectionLockValidatesInheritedGraphNodes(t *testing.T) {
 	if err := lock.ValidateFactGraph(graph); err != nil {
 		t.Fatalf("matching inherited node failed lock validation: %v", err)
 	}
-	drifted, diagnostics := BuildGraph(StandardRegistry(), BuildInput{
-		Nodes: []NodeInput{
-			upstreamNode,
-			{SemanticID: "Account", Kind: NodeMessage, Stage: StageProto, Source: downstream, SourceDirective: &downstreamSource, NativeCanonical: []byte(`{"name":"Renamed"}`)},
-		},
-		Projections: []ProjectionExpectation{{Downstream: downstream, Upstream: upstream, SemanticID: "Account", Kind: NodeMessage, ExpectedNativeCanonical: expected}},
-	})
-	if len(diagnostics) != 0 {
-		t.Fatal(diagnostics)
+	drifted := graph
+	drifted.nodes = make([]graphNode, len(graph.nodes))
+	copy(drifted.nodes, graph.nodes)
+	for index := range drifted.nodes {
+		if drifted.nodes[index].source.String() == downstream.String() {
+			drifted.nodes[index].native = []byte(`{"name":"Renamed"}`)
+		}
 	}
 	if err := lock.ValidateFactGraph(drifted); err == nil {
 		t.Fatal("mutated inherited node passed lock validation")
