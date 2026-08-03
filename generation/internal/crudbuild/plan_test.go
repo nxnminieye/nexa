@@ -88,6 +88,9 @@ func TestRenderedCRUDProtoExtendsEntGraphAndRejectsInheritedMutation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if projection.Lock == nil {
+		t.Fatal("generated CRUD Proto projection has no source projection lock")
+	}
 	lock, err := sourcecomment.NewProjectionLock(projection.Nodes, projection.InheritedFacts)
 	if err != nil {
 		t.Fatal(err)

@@ -83,5 +83,10 @@ func ProtocolProjection(document Document, source string, baseline protocol.Docu
 			})
 		}
 	}
+	lock, err := sourcecomment.NewProjectionLock(result.Nodes, result.InheritedFacts)
+	if err != nil {
+		return protocol.SourceProjection{}, fmt.Errorf("CRUD Proto projection lock is invalid: %w", err)
+	}
+	result.Lock = &lock
 	return result, nil
 }

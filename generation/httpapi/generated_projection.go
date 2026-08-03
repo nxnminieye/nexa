@@ -65,6 +65,11 @@ func ProjectionForRenderedGenerated(document Document, source string, rendered [
 			return SourceProjection{}, err
 		}
 	}
+	lock, err := sourcecomment.NewProjectionLock(projection.Nodes, projection.InheritedFacts)
+	if err != nil {
+		return SourceProjection{}, invalid("projection_lock_invalid", source, "", err.Error())
+	}
+	projection.Lock = &lock
 	return projection, nil
 }
 

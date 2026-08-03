@@ -80,6 +80,9 @@ func TestGeneratedDocumentRendersOnlyDerivedConventionTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if projection.Lock == nil {
+		t.Fatal("generated HTTP API projection has no source projection lock")
+	}
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "sample.generated.api"), rendered, 0o600); err != nil {
 		t.Fatal(err)
