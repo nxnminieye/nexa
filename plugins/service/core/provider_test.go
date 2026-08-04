@@ -16,7 +16,7 @@ func TestProviderPublishesImmutableCoreBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := provider.Manifest().Identity()
-	if identity.ProviderID() != "core-application" || identity.Version() != "v0.3.0-alpha.5" ||
+	if identity.ProviderID() != "core-application" || identity.Version() != "v0.3.0-alpha.6" ||
 		identity.ModulePath() != "github.com/nxnminieye/nexa" || identity.PackagePath() != "github.com/nxnminieye/nexa/plugins/service/core" {
 		t.Fatalf("provider identity = %#v", identity)
 	}
@@ -24,7 +24,7 @@ func TestProviderPublishesImmutableCoreBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.ProviderID() != identity.ProviderID() || ref.ModulePath() != identity.ModulePath() || ref.PackagePath() != identity.PackagePath() || ref.Version() != "v0.3.0-alpha.5" {
+	if ref.ProviderID() != identity.ProviderID() || ref.ModulePath() != identity.ModulePath() || ref.PackagePath() != identity.PackagePath() || ref.Version() != "v0.3.0-alpha.6" {
 		t.Fatalf("provider release ref = %s@%s", ref.ProviderID(), ref.Version())
 	}
 	profiles := provider.Manifest().Profiles()
