@@ -265,7 +265,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if err != nil {
 		t.Fatal(err)
 	}
-	sourceAPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}, {Code: "nexa.user.read"}, {Code: "legacy"}}
+	sourceAPermissions := []coreapp.PermissionCatalogEntry{{Code: "nexa.auth.me.read"}, {Code: "read"}, {Code: "nexa.user.read"}, {Code: "legacy"}}
 	sourceAMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home", RouteName: "home", Path: "/home", Component: "home", PermissionCode: "read", KeepAlive: true, Visible: true}, {Code: "legacy-menu", DisplayName: "Legacy"}}
 	sourceADigest := catalogDigest(t, sourceAPermissions, sourceAMenus)
 	first, err := catalog.Sync(ctx, coreapp.CatalogSyncInput{SourceID: "source-a", Digest: sourceADigest, Permissions: sourceAPermissions, Menus: sourceAMenus})
@@ -284,7 +284,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if first.PermissionsDisabled != 0 || second.PermissionsUpserted != 0 || second.MenusUpserted != 0 || second.PermissionsDisabled != 0 || second.MenusDisabled != 0 {
 		t.Fatal("repeat catalog sync was not stable")
 	}
-	upgradedPermissions := []coreapp.PermissionCatalogEntry{{Code: "read"}, {Code: "nexa.user.read"}}
+	upgradedPermissions := []coreapp.PermissionCatalogEntry{{Code: "nexa.auth.me.read"}, {Code: "read"}, {Code: "nexa.user.read"}}
 	upgradedMenus := []coreapp.MenuCatalogEntry{{Code: "home", DisplayName: "Home", RouteName: "home", Path: "/home", Component: "home", PermissionCode: "read", KeepAlive: true, Visible: true}}
 	upgradedDigest := catalogDigest(t, upgradedPermissions, upgradedMenus)
 	upgraded, err := catalog.Sync(ctx, coreapp.CatalogSyncInput{SourceID: "source-a", Digest: upgradedDigest, Permissions: upgradedPermissions, Menus: upgradedMenus})
@@ -313,11 +313,11 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 	if sourceAStale != 1 || sourceBEnabled != 2 {
 		t.Fatalf("catalog source isolation stale=%d other-enabled=%d", sourceAStale, sourceBEnabled)
 	}
-	role, err = iam.ReplaceRolePermissions(ctx, coreapp.ReplaceRolePermissionsInput{TenantID: tenantID, RoleID: role.ID, PermissionCodes: []string{"nexa.user.read", "read"}, ExpectedVersion: role.Version})
+	role, err = iam.ReplaceRolePermissions(ctx, coreapp.ReplaceRolePermissionsInput{TenantID: tenantID, RoleID: role.ID, PermissionCodes: []string{"nexa.auth.me.read", "nexa.user.read", "read"}, ExpectedVersion: role.Version})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(role.PermissionCodes) != 2 {
+	if len(role.PermissionCodes) != 3 {
 		t.Fatalf("permissions=%#v", role.PermissionCodes)
 	}
 	role, err = iam.ReplaceRoleMenus(ctx, coreapp.ReplaceRoleMenusInput{TenantID: tenantID, RoleID: role.ID, MenuCodes: []string{"home"}, ExpectedVersion: role.Version})
@@ -328,11 +328,11 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatalf("menus=%#v", role.MenuCodes)
 	}
 	roles, err := iam.ListTenantRoles(ctx, coreapp.ListTenantRolesInput{TenantID: tenantID, ListQuery: coreapp.ListQuery{Keyword: "operator"}})
-	if err != nil || roles.Total != 1 || len(roles.Items) != 1 || roles.Items[0].ID != role.ID || len(roles.Items[0].PermissionCodes) != 2 || roles.Items[0].PermissionCodes[0] != "nexa.user.read" || roles.Items[0].PermissionCodes[1] != "read" || len(roles.Items[0].MenuCodes) != 1 || roles.Items[0].MenuCodes[0] != "home" {
+	if err != nil || roles.Total != 1 || len(roles.Items) != 1 || roles.Items[0].ID != role.ID || len(roles.Items[0].PermissionCodes) != 3 || roles.Items[0].PermissionCodes[0] != "nexa.auth.me.read" || roles.Items[0].PermissionCodes[1] != "nexa.user.read" || roles.Items[0].PermissionCodes[2] != "read" || len(roles.Items[0].MenuCodes) != 1 || roles.Items[0].MenuCodes[0] != "home" {
 		t.Fatalf("role grant readback=%#v err=%v", roles, err)
 	}
 	roleReadback, err = iam.GetTenantRole(ctx, coreapp.TenantRoleKey{TenantID: tenantID, RoleID: role.ID})
-	if err != nil || len(roleReadback.PermissionCodes) != 2 || len(roleReadback.MenuCodes) != 1 {
+	if err != nil || len(roleReadback.PermissionCodes) != 3 || len(roleReadback.MenuCodes) != 1 {
 		t.Fatalf("role get=%#v err=%v", roleReadback, err)
 	}
 	otherRoles, err := iam.ListTenantRoles(ctx, coreapp.ListTenantRolesInput{TenantID: other.Tenant.ID, ListQuery: coreapp.ListQuery{Keyword: "operator"}})
@@ -350,7 +350,7 @@ WHERE g.tenant_id=$1 AND g.tenant_member_id=$2`, tenantID, provision.Owner.ID).S
 		t.Fatalf("menu get=%#v err=%v", menuReadback, err)
 	}
 	permissions, err := iam.ListPermissions(ctx, coreapp.ListPermissionsInput{ListQuery: coreapp.ListQuery{Status: coreapp.IAMStatusEnabled}})
-	if err != nil || permissions.Total != 3 || len(permissions.Items) != 3 {
+	if err != nil || permissions.Total != 4 || len(permissions.Items) != 4 {
 		t.Fatalf("permission list=%#v err=%v", permissions, err)
 	}
 	permissionReadback, err := iam.GetPermission(ctx, "read")
@@ -443,7 +443,7 @@ func exerciseAccessPrincipal(t *testing.T, ctx context.Context, db *sql.DB, data
 	if principal.SessionID != session.ID || principal.TenantID != provision.Tenant.ID || principal.TenantCode != provision.Tenant.Code || principal.MemberID != provision.Owner.ID || principal.Account.ID != account.ID {
 		t.Fatalf("access principal identity=%#v", principal)
 	}
-	if fmt.Sprint(principal.RoleCodes) != "[operator tenant-owner]" || fmt.Sprint(principal.PermissionCodes) != "[nexa.user.read read]" || fmt.Sprint(principal.MenuCodes) != "[home]" {
+	if fmt.Sprint(principal.RoleCodes) != "[operator tenant-owner]" || fmt.Sprint(principal.PermissionCodes) != "[nexa.auth.me.read nexa.user.read read]" || fmt.Sprint(principal.MenuCodes) != "[home]" {
 		t.Fatalf("access principal grants=%#v", principal)
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO permissions(code,description) VALUES('legacy-rbac','must not authorize')`); err != nil {
@@ -453,7 +453,7 @@ func exerciseAccessPrincipal(t *testing.T, ctx context.Context, db *sql.DB, data
 		t.Fatal(err)
 	}
 	principal, err = access.Authenticate(ctx, session.AccessToken)
-	if err != nil || fmt.Sprint(principal.PermissionCodes) != "[nexa.user.read read]" {
+	if err != nil || fmt.Sprint(principal.PermissionCodes) != "[nexa.auth.me.read nexa.user.read read]" {
 		t.Fatalf("legacy role_permissions affected access principal=%#v err=%v", principal, err)
 	}
 
@@ -474,9 +474,9 @@ UPDATE menus SET parent_code='admin' WHERE code='home'`); err != nil {
 		wantRoles, wantPermissions, wantMenus string
 	}{
 		{name: "role", disable: `UPDATE roles SET status='disabled' WHERE tenant_id=$1 AND code='operator'`, restore: `UPDATE roles SET status='enabled' WHERE tenant_id=$1 AND code='operator'`, wantRoles: "[tenant-owner]", wantPermissions: "[]", wantMenus: "[]"},
-		{name: "action", disable: `UPDATE permission_actions SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_actions SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.user.read]", wantMenus: "[admin home root]"},
-		{name: "resource", disable: `UPDATE permission_resources SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_resources SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.user.read]", wantMenus: "[admin home root]"},
-		{name: "menu", disable: `UPDATE menus SET status='disabled' WHERE code='admin'`, restore: `UPDATE menus SET status='enabled' WHERE code='admin'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.user.read read]", wantMenus: "[home]"},
+		{name: "action", disable: `UPDATE permission_actions SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_actions SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.auth.me.read nexa.user.read]", wantMenus: "[admin home root]"},
+		{name: "resource", disable: `UPDATE permission_resources SET status='disabled' WHERE code='read'`, restore: `UPDATE permission_resources SET status='enabled' WHERE code='read'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.auth.me.read nexa.user.read]", wantMenus: "[admin home root]"},
+		{name: "menu", disable: `UPDATE menus SET status='disabled' WHERE code='admin'`, restore: `UPDATE menus SET status='enabled' WHERE code='admin'`, wantRoles: "[operator tenant-owner]", wantPermissions: "[nexa.auth.me.read nexa.user.read read]", wantMenus: "[home]"},
 	} {
 		t.Run("access-disabled-"+disabled.name, func(t *testing.T) {
 			arguments := []any(nil)

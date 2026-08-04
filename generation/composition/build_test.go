@@ -13,6 +13,7 @@ import (
 	"github.com/nxnminieye/nexa/generation/composition"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	"github.com/nxnminieye/nexa/generation/protocol"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/project/servicecatalog"
 )
 
@@ -67,6 +68,95 @@ func TestBuildDerivesCanonicalAPIWithoutFieldMappings(t *testing.T) {
 	}
 	if response.Fields()[2].ValueType().Name() != "uint64" {
 		t.Fatalf("uint64 identity lost: %#v", response.Fields()[2].ValueType())
+	}
+}
+
+func TestBuildCarriesNativeAndProtocolFactsInOneGraph(t *testing.T) {
+	document, err := composition.Build(testCatalog(t), []protocol.Document{testProtocol(t, canonicalProtocolSource())}, testNative(t), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []sourcecomment.FactID{
+		{SemanticID: "health", Key: "auth"},
+		{SemanticID: "account.account.v1.accountService.get", Key: "http.path"},
+	} {
+		if _, ok := document.FactGraph().Fact(id); !ok {
+			t.Fatalf("global source graph is missing %s", id.String())
+		}
+	}
+}
+
+func TestBuildCarriesEntityUpstreamFromProtocolProjectionIntoFinalLock(t *testing.T) {
+	plain := canonicalProtocolSource()
+	baseline := testProtocol(t, plain)
+	message, ok := baseline.Message("account.v1.GetAccountResponse")
+	if !ok {
+		t.Fatal("baseline response message missing")
+	}
+	var displayName protocol.Field
+	for _, field := range message.Fields() {
+		if field.FullName() == "account.v1.GetAccountResponse.display_name" {
+			displayName = field
+			break
+		}
+	}
+	if displayName.FullName() == "" {
+		t.Fatal("baseline display_name field missing")
+	}
+	ent := mustSourceRef(t, "ent://schema/account.go#Account.display_name")
+	downstream := mustSourceRef(t, "proto://account/v1/account.proto#account.v1.GetAccountResponse.display_name")
+	label := mustDirective(t, `// @nexa label.en-US: "Display name"`)
+	upstream, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{Nodes: []sourcecomment.NodeInput{{
+		SemanticID: "account.v1.GetAccountResponse.display_name", Kind: sourcecomment.NodeField, Stage: sourcecomment.StageEnt,
+		Source: ent, NativeCanonical: []byte("field display_name string"), Facts: []sourcecomment.Directive{label},
+	}}})
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	expectation := sourcecomment.ProjectionExpectation{
+		Downstream: downstream, Upstream: ent, SemanticID: "account.v1.GetAccountResponse.display_name",
+		Kind: sourcecomment.NodeProtoField, ExpectedNativeCanonical: displayName.CanonicalSourceJSON(),
+	}
+	inherited := sourcecomment.InheritedFactExpectation{
+		ID:    sourcecomment.FactID{SemanticID: "account.v1.GetAccountResponse.display_name", Key: label.Key()},
+		Value: label.Value(), FirstSource: ent,
+	}
+	lock, err := sourcecomment.NewProjectionLock([]sourcecomment.ProjectionExpectation{expectation}, []sourcecomment.InheritedFactExpectation{inherited})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectedSource := strings.Replace(plain,
+		"message GetAccountResponse { string id = 1; string display_name = 2; uint64 version = 3; }",
+		"message GetAccountResponse {\n  string id = 1;\n  // @nexa $source: \""+ent.String()+"\"\n  string display_name = 2;\n  uint64 version = 3;\n}", 1)
+	projected, err := protocol.Compile(context.Background(), protocol.CompileOptions{
+		ServiceID: "account", EntryFiles: []string{"account/v1/account.proto"},
+		Resolver: protocolResolver(func(_ context.Context, path string) (io.ReadCloser, error) {
+			if path != "account/v1/account.proto" {
+				return nil, os.ErrNotExist
+			}
+			return io.NopCloser(strings.NewReader(projectedSource)), nil
+		}),
+		SourceProjection: &protocol.SourceProjection{
+			Upstream: upstream, Nodes: []sourcecomment.ProjectionExpectation{expectation},
+			InheritedFacts: []sourcecomment.InheritedFactExpectation{inherited}, Lock: &lock,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := composition.Build(testCatalog(t), []protocol.Document{projected}, testNative(t), composition.BuildOptions{CoreServiceID: "core", ConsumerModulePath: "example.com/consumer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalLock, err := document.FactGraph().ProjectionLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finalLock.Nodes()) != 1 || len(finalLock.Facts()) != 1 {
+		t.Fatalf("final lock = %#v %#v", finalLock.Nodes(), finalLock.Facts())
+	}
+	if err := finalLock.ValidateFactGraph(document.FactGraph()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -232,4 +322,22 @@ type protocolResolver func(context.Context, string) (io.ReadCloser, error)
 
 func (f protocolResolver) Open(ctx context.Context, path string) (io.ReadCloser, error) {
 	return f(ctx, path)
+}
+
+func mustSourceRef(t *testing.T, raw string) sourcecomment.SourceRef {
+	t.Helper()
+	value, err := sourcecomment.ParseSourceRef(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func mustDirective(t *testing.T, raw string) sourcecomment.Directive {
+	t.Helper()
+	value, selected, diagnostic := sourcecomment.ParseLine(sourcecomment.Line{Text: raw, CommentPrefix: "//", Location: sourcecomment.Location{File: "schema/account.go", Line: 1, Column: 1}})
+	if !selected || diagnostic != nil {
+		t.Fatalf("directive = %#v, selected=%v, diagnostic=%v", value, selected, diagnostic)
+	}
+	return value
 }

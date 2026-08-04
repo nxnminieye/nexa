@@ -53,7 +53,7 @@ func Build(catalog servicecatalog.Catalog, protocols []protocol.Document, native
 		reservedTypes[value.Name()] = true
 	}
 	state := &documentState{coreServiceID: options.CoreServiceID, consumerModulePath: options.ConsumerModulePath}
-	var selectedGraphs []sourcecomment.FactGraph
+	selectedGraphs := []sourcecomment.FactGraph{native.FactGraph()}
 	projector := &typeProjector{state: state, byKey: map[string]*projectedTypeState{}, visiting: map[string]bool{}, reserved: reservedTypes}
 	operationIDs, routes, methods := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, service := range catalog.Services() {

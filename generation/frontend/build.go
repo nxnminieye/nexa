@@ -27,18 +27,26 @@ func BuildApplication(apiDocument api.Closure, specs []PageSpec, shellOperationI
 	if apiDocument.Convention() != httpconvention.APIVersion {
 		return Document{}, buildError("http_convention_invalid", "/httpConvention", "frontend API closure must use the Nexa HTTP Convention v1")
 	}
-	facts := apiDocument.FactGraph()
-	if !facts.Valid() {
+	apiFacts := apiDocument.FactGraph()
+	if !apiFacts.Valid() {
 		return Document{}, buildError("source_graph_invalid", "/sourceFacts", "frontend API closure must carry one validated source FactGraph")
+	}
+	graphs := []sourcecomment.FactGraph{apiFacts}
+	for index, spec := range specs {
+		if spec.state == nil {
+			return Document{}, buildError("page_spec_invalid", "/pages/"+strconv.Itoa(index), "frontend page spec is invalid")
+		}
+		graphs = append(graphs, spec.state.facts)
+	}
+	facts, diagnostics := sourcecomment.MergeGraphs(sourcecomment.StandardRegistry(), graphs...)
+	if len(diagnostics) != 0 {
+		return Document{}, buildError("source_graph_invalid", "/sourceFacts", diagnostics[0].Suggestion)
 	}
 	pages := make([]wirePage, len(specs))
 	pageIDs, routePaths, routeNames, menuOrders := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	operationPointers := map[string]string{}
 	for index, spec := range specs {
 		base := "/pages/" + strconv.Itoa(index)
-		if spec.state == nil {
-			return Document{}, buildError("page_spec_invalid", base, "frontend page spec is invalid")
-		}
 		projected, selected, failure := projectPage(apiDocument, facts, spec, base)
 		if failure != nil {
 			return Document{}, failure
@@ -121,7 +129,7 @@ func BuildApplication(apiDocument api.Closure, specs []PageSpec, shellOperationI
 		APIVersion: APIVersion, Kind: documentKind, HTTPConvention: httpconvention.APIVersion,
 		Types: closureTypes(selectedClosure, typeNames), Operations: operations, Locales: projectedLocales, Pages: pages,
 	}
-	return Document{state: &documentState{wire: cloneWireDocument(wire)}}, nil
+	return Document{state: &documentState{wire: cloneWireDocument(wire), facts: facts}}, nil
 }
 
 func generatedClientNames(closure api.Closure) (map[string]string, *Error) {

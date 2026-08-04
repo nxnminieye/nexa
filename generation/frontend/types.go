@@ -27,7 +27,10 @@ type pageSpecState struct {
 	digest    provenance.Digest
 }
 
-type documentState struct{ wire wireDocument }
+type documentState struct {
+	wire  wireDocument
+	facts sourcecomment.FactGraph
+}
 
 type localeState struct {
 	document  localeDocument
@@ -120,6 +123,13 @@ func (p PageSpec) Digest() provenance.Digest {
 		return provenance.Digest{}
 	}
 	return p.state.digest
+}
+
+func (d Document) FactGraph() sourcecomment.FactGraph {
+	if d.state == nil {
+		return sourcecomment.FactGraph{}
+	}
+	return d.state.facts
 }
 
 func (l Locale) Locale() string {

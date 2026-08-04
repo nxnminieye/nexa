@@ -131,6 +131,8 @@ principal 的 numeric tenant ID 作为服务调用上下文；请求显式携带
 ## 所有权
 
 - 人工事实源：service source bundle 中的 Core Proto message 与 `@nexa` source-comment facts，以及 Ent schema。
+- Core source graph 允许从任一实际 authoring stage 形成 root；所有 root 和 downstream projection 在同一份
+  typed FactGraph 中一次校验，并由单一 `nexa.dev/source-projection-lock/v1` 保存 inherited identity，不维护按阶段拆分的锁。
 - 运行拓扑事实：`core-application` Starter 的 API/RPC source 与 consumer 配置；不由
   Source Provider 读取或拥有 consumer 的 DSN、端口、凭据和部署值。
 - 数据库投影：由 materialized consumer 持有的有序 SQL migration。

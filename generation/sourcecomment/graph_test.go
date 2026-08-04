@@ -25,6 +25,94 @@ func TestBuildGraphAllowsDownstreamLocalOperationFacts(t *testing.T) {
 	}
 }
 
+func TestBuildGraphBuildsOneGraphFromMultipleAuthoringRoots(t *testing.T) {
+	// The graph is assembled from all available roots in one pass. Ent is not
+	// required for the independent Proto RPC branch.
+	ent := node(t, sourcecomment.StageEnt, sourcecomment.NodeSchema, "Account", "ent://schema/account.go#Account", "schema Account")
+	ent.Facts = []sourcecomment.Directive{directive(t, `// @nexa scope: "tenant"`, 2)}
+	protoAccount := node(t, sourcecomment.StageProto, sourcecomment.NodeMessage, "Account", "proto://rpc/account.proto#iam.v1.Account", "message Account")
+	protoAccount.SourceDirective = refPointer(ent.Source)
+	protoRoot := node(t, sourcecomment.StageProto, sourcecomment.NodeRPC, "Health", "proto://rpc/health.proto#health.v1.HealthService.Health", "rpc Health")
+	protoRoot.Facts = []sourcecomment.Directive{directive(t, `// @nexa auth: "none"`, 2), directive(t, `// @nexa permission: "health.read"`, 3)}
+	apiRoot := node(t, sourcecomment.StageAPI, sourcecomment.NodeAPIOperation, "Audit", "api://desc/audit.api#Audit", "GET /audit")
+	apiRoot.Facts = []sourcecomment.Directive{directive(t, `// @nexa auth: "required"`, 2), directive(t, `// @nexa permission: "audit.read"`, 3)}
+	pageRoot := node(t, sourcecomment.StagePage, sourcecomment.NodePage, "home", "page://pages/home.yaml#home", "page home")
+	pageRoot.Facts = []sourcecomment.Directive{directive(t, `// @nexa route.path: "/home"`, 2)}
+	apiAccount := node(t, sourcecomment.StageAPI, sourcecomment.NodeAPIType, "Account", "api://desc/account.api#Account", "type Account")
+	apiAccount.SourceDirective = refPointer(protoAccount.Source)
+	apiHealth := node(t, sourcecomment.StageAPI, sourcecomment.NodeAPIOperation, "Health", "api://desc/health.api#Health", "GET /health")
+	apiHealth.SourceDirective = refPointer(protoRoot.Source)
+
+	accountProjection := sourcecomment.ProjectionExpectation{
+		Downstream: apiAccount.Source, Upstream: protoAccount.Source,
+		SemanticID: "Account", Kind: sourcecomment.NodeAPIType,
+		ExpectedNativeCanonical: []byte("type Account"),
+	}
+	protoProjection := sourcecomment.ProjectionExpectation{
+		Downstream: protoAccount.Source, Upstream: ent.Source,
+		SemanticID: "Account", Kind: sourcecomment.NodeMessage,
+		ExpectedNativeCanonical: []byte("message Account"),
+	}
+	healthProjection := sourcecomment.ProjectionExpectation{
+		Downstream: apiHealth.Source, Upstream: protoRoot.Source,
+		SemanticID: "Health", Kind: sourcecomment.NodeAPIOperation,
+		ExpectedNativeCanonical: []byte("GET /health"),
+	}
+	lock, err := sourcecomment.NewProjectionLock([]sourcecomment.ProjectionExpectation{accountProjection, protoProjection, healthProjection}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{
+		Nodes:       []sourcecomment.NodeInput{apiHealth, protoAccount, ent, apiAccount, protoRoot, apiRoot, pageRoot},
+		Projections: []sourcecomment.ProjectionExpectation{accountProjection, protoProjection, healthProjection},
+	})
+	if len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	if err := lock.ValidateFactGraph(graph); err != nil {
+		t.Fatal(err)
+	}
+	if fact, ok := graph.Fact(sourcecomment.FactID{SemanticID: "Account", Key: "scope"}); !ok || fact.FirstSource().String() != ent.Source.String() {
+		t.Fatalf("Account scope first source = %#v, present=%v", fact.FirstSource(), ok)
+	}
+	if fact, ok := graph.Fact(sourcecomment.FactID{SemanticID: "Health", Key: "permission"}); !ok || fact.FirstSource().String() != protoRoot.Source.String() {
+		t.Fatalf("Health permission first source = %#v, present=%v", fact.FirstSource(), ok)
+	}
+	if fact, ok := graph.Fact(sourcecomment.FactID{SemanticID: "Audit", Key: "permission"}); !ok || fact.FirstSource().String() != apiRoot.Source.String() {
+		t.Fatalf("Audit permission first source = %#v, present=%v", fact.FirstSource(), ok)
+	}
+	if fact, ok := graph.Fact(sourcecomment.FactID{SemanticID: "home", Key: "route.path"}); !ok || fact.FirstSource().String() != pageRoot.Source.String() {
+		t.Fatalf("home route first source = %#v, present=%v", fact.FirstSource(), ok)
+	}
+}
+
+func TestBuildGraphRejectsInvalidProjectionTopology(t *testing.T) {
+	proto := node(t, sourcecomment.StageProto, sourcecomment.NodeMessage, "Account", "proto://rpc/account.proto#iam.v1.Account", "message Account")
+	api := node(t, sourcecomment.StageAPI, sourcecomment.NodeAPIType, "Account", "api://desc/account.api#Account", "type Account")
+	api.SourceDirective = refPointer(proto.Source)
+	valid := sourcecomment.ProjectionExpectation{Downstream: api.Source, Upstream: proto.Source, SemanticID: "Account", Kind: sourcecomment.NodeAPIType, ExpectedNativeCanonical: []byte("type Account")}
+	if _, err := sourcecomment.NewProjectionLock([]sourcecomment.ProjectionExpectation{valid, valid}, nil); err == nil {
+		t.Fatal("duplicate projections accepted by projection lock")
+	}
+	protoPeer := node(t, sourcecomment.StageProto, sourcecomment.NodeMessage, "AccountView", "proto://rpc/account.proto#iam.v1.AccountView", "message AccountView")
+	protoPeer.SourceDirective = refPointer(proto.Source)
+	sameStage := sourcecomment.ProjectionExpectation{Downstream: protoPeer.Source, Upstream: proto.Source, SemanticID: "AccountView", Kind: sourcecomment.NodeMessage, ExpectedNativeCanonical: []byte("message AccountView")}
+	_, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{Nodes: []sourcecomment.NodeInput{proto, protoPeer}, Projections: []sourcecomment.ProjectionExpectation{sameStage}})
+	assertContainsCode(t, diagnostics, sourcecomment.CodeInvalidTarget)
+
+	_, diagnostics = sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{Nodes: []sourcecomment.NodeInput{proto, api}, Projections: []sourcecomment.ProjectionExpectation{valid, valid}})
+	assertContainsCode(t, diagnostics, sourcecomment.CodeSemanticCollision)
+}
+
+func TestBuildGraphRejectsConflictingFactsAcrossAuthoringRoots(t *testing.T) {
+	protoRoot := node(t, sourcecomment.StageProto, sourcecomment.NodeRPC, "Health", "proto://rpc/health.proto#health.v1.HealthService.Health", "rpc Health")
+	protoRoot.Facts = []sourcecomment.Directive{directive(t, `// @nexa permission: "health.read"`, 2)}
+	apiRoot := node(t, sourcecomment.StageAPI, sourcecomment.NodeAPIOperation, "Health", "api://desc/health.api#Health", "GET /health")
+	apiRoot.Facts = []sourcecomment.Directive{directive(t, `// @nexa permission: "health.admin"`, 2)}
+	_, diagnostics := sourcecomment.BuildGraph(sourcecomment.StandardRegistry(), sourcecomment.BuildInput{Nodes: []sourcecomment.NodeInput{apiRoot, protoRoot}})
+	assertContainsCode(t, diagnostics, sourcecomment.CodeInheritedFactChanged)
+}
+
 func TestBuildGraphRequiresHTTPMethodAndPathTogether(t *testing.T) {
 	rpc := node(t, sourcecomment.StageProto, sourcecomment.NodeRPC, "Record.List", "proto://rpc/record.proto#records.v1.RecordService.List", "rpc")
 	rpc.Facts = []sourcecomment.Directive{directive(t, `// @nexa http.method: "GET"`, 4)}

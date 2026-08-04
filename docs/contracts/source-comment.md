@@ -12,12 +12,10 @@ Nexa 从 Ent、Proto、原生 `.api` 或 comment-capable frontend source contrac
 typed FactGraph。越早出现的事实必须在越早的事实源声明；下游可以增加本阶段才出现的 node/fact，
 但不得覆盖、删除或重复声明上游事实。
 
-```text
-Ent -> Proto -> canonical .api -> frontend source -> generated frontend
-```
-
-链路可以从任意实际存在的阶段开始。生成器和 runtime 只能消费校验后的 typed facts，不能直接解释
-注释字符串、任意 map、JSON metadata 或运行时 mapping。
+FactGraph 是按 source stage 排序的有向森林：每个 semantic node/fact 从最早实际拥有它的
+authoring stage 开始，独立 root 可以同时存在；projection edge 才表达可证明的下游继承关系。
+不存在 Ent 时，Proto、`.api` 或 page 可以直接作为 root。生成器和 runtime 只能消费校验后的
+typed facts，不能直接解释注释字符串、任意 map、JSON metadata 或运行时 mapping。
 
 ## Carrier 与语法
 
@@ -122,10 +120,8 @@ Convention 推导，不得出现在 YAML 字段中。一个文件只能有一个
 
 FactID 是 semantic node identity 与 fact key 的组合，一个 FactID 只有一个 first source：
 
-- 存在 Ent 时，Ent 可表达的事实必须从 Ent 开始；
-- 没有 Ent 时 Proto 可以成为第一来源；
-- 原生 HTTP 可以从 `.api` 开始；
-- UI-only 事实从 frontend source contract 开始；
+- 对每个 FactID，实际最早拥有该事实的 authoring source 是 first source；Ent 能表达时优先由 Ent 拥有；
+- 没有更早 owner 时，Proto、原生 `.api` 或 frontend source contract 都可以成为第一来源；
 - 最终 Vue、TypeScript client、Formily schema 和 locale JSON 不是 authoring source。
 
 projected node 必须携带 compiler 生成的 `$source`：
@@ -166,7 +162,10 @@ stateless 比较无法区分“用户删除了 inherited node”和“上游刚�
 - 旧 lock 有、当前 upstream 已删除，按新的 upstream projection 确定性删除 downstream inherited node；
 - 只有所有 source file 语义校验和组合成功后才写新 lock；失败返回非零并保留可由 Git 审阅的变化。
 
-lock 由 Nexa compiler 生成和校验，consumer 不得人工声明 fact。它不恢复旧 reader，也不形成双写期。
+一个最终 FactGraph 只生成并校验一份 projection lock；lock 可以同时记录多个 root 之间的
+projection edge 及其 first source fact，不按 Ent、Proto、API 或 Page 拆分。独立 source fragment
+可以先通过 `MergeGraphs` 合并，但进入 composer/generator 前必须重新执行一次完整 `BuildGraph`。
+consumer 不得人工声明 fact。它不恢复旧 reader，也不形成双写期。
 
 ## Lint 与诊断
 

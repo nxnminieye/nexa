@@ -54,6 +54,15 @@ type projectionLockFactDocument struct {
 	ValueDigest string `json:"valueDigest"`
 }
 
+// ProjectionLock returns the single lock for every inherited projection and
+// fact already validated as part of this graph.
+func (g FactGraph) ProjectionLock() (ProjectionLock, error) {
+	if !g.valid {
+		return ProjectionLock{}, errors.New("fact graph is invalid")
+	}
+	return NewProjectionLock(g.input.Projections, g.input.InheritedFacts)
+}
+
 func NewProjectionLock(projections []ProjectionExpectation, facts []InheritedFactExpectation) (ProjectionLock, error) {
 	lock := ProjectionLock{nodes: make([]ProjectionLockNode, len(projections)), facts: make([]ProjectionLockFact, len(facts))}
 	for index, value := range projections {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -237,6 +238,29 @@ func exerciseCoreRPCAPITransport(t *testing.T, dsn string, accessToken, deniedAc
 	}
 	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].MemberID != string(memberID) || page.Items[0].AccountID != string(accountID) || page.Items[0].Username != "owner" || page.Items[0].DisplayName != "Bootstrap Owner" || len(page.Items[0].RoleCodes) != 1 || page.Items[0].RoleCodes[0] != "operator" {
 		t.Fatalf("member API page=%#v", page)
+	}
+	response = request("/api/user/info", tenantID, accessToken)
+	decodeCoreHTTPResponse(t, response, http.StatusOK, &envelope)
+	if envelope.Code != 0 || envelope.Msg != "ok" {
+		t.Fatalf("user info envelope=%#v", envelope)
+	}
+	var userInfo struct {
+		UserID   string   `json:"userId"`
+		MemberID int64    `json:"memberId"`
+		Username string   `json:"username"`
+		Email    string   `json:"email"`
+		RealName string   `json:"realName"`
+		Roles    []string `json:"roles"`
+	}
+	if err := json.Unmarshal(envelope.Data, &userInfo); err != nil {
+		t.Fatal(err)
+	}
+	memberNumeric, err := strconv.ParseInt(string(memberID), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if userInfo.UserID != string(accountID) || userInfo.MemberID != memberNumeric || userInfo.Username != "owner" || userInfo.Email != "owner@example.test" || userInfo.RealName != "Bootstrap Owner" || len(userInfo.Roles) != 2 || userInfo.Roles[0] != "operator" || userInfo.Roles[1] != "tenant-owner" {
+		t.Fatalf("user info=%#v", userInfo)
 	}
 	response = request("/api/users", "", accessToken)
 	decodeCoreHTTPResponse(t, response, http.StatusOK, &envelope)

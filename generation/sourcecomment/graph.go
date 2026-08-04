@@ -152,6 +152,26 @@ func BuildGraph(registry Registry, input BuildInput) (FactGraph, []Diagnostic) {
 
 	projected := map[string]ProjectionExpectation{}
 	for _, expected := range input.Projections {
+		if !expected.Downstream.Valid() || !expected.Upstream.Valid() || expected.Downstream.Stage().order() <= expected.Upstream.Stage().order() {
+			location := expected.Location
+			if location.File == "" {
+				location.File = expected.Downstream.Path()
+			}
+			item := diagnostic(CodeInvalidTarget, location, "project only from an earlier authored stage; start a new root when no earlier source exists")
+			item.Node, item.EarliestSource = expected.SemanticID, expected.Upstream.String()
+			diagnostics = append(diagnostics, item)
+			continue
+		}
+		if _, duplicate := projected[expected.Downstream.String()]; duplicate {
+			location := expected.Location
+			if location.File == "" {
+				location.File = expected.Downstream.Path()
+			}
+			item := diagnostic(CodeSemanticCollision, location, "declare one projection expectation for each downstream source node")
+			item.Node, item.EarliestSource = expected.SemanticID, expected.Upstream.String()
+			diagnostics = append(diagnostics, item)
+			continue
+		}
 		projected[expected.Downstream.String()] = expected
 		downstream, present := nodesBySource[expected.Downstream.String()]
 		upstream, sourcePresent := nodesBySource[expected.Upstream.String()]

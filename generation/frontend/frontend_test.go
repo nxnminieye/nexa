@@ -104,6 +104,17 @@ func TestBuildDerivesCRUDFieldsAndLocalesFromFacts(t *testing.T) {
 	if len(operations) != 5 || operations[0].ClientName != "createAccount" || operations[0].ID != "accounts.createAccount" || operations[0].Permission != "accounts.write" {
 		t.Fatalf("typed operation readback = %#v", operations)
 	}
+	pageFact, ok := document.FactGraph().Fact(sourcecomment.FactID{SemanticID: "accounts", Key: "route.path"})
+	if !ok || pageFact.FirstSource().Stage() != sourcecomment.StagePage {
+		t.Fatalf("final source graph page fact = %#v, present=%v", pageFact, ok)
+	}
+	lock, err := document.FactGraph().ProjectionLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.ValidateFactGraph(document.FactGraph()); err != nil {
+		t.Fatal(err)
+	}
 	for _, removed := range []string{"listOperationId", "fields\":[]", "choices", "frontend-page-spec"} {
 		if strings.Contains(string(encoded), removed) {
 			t.Fatalf("removed authoring contract %q leaked into IR", removed)
