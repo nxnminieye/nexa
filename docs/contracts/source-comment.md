@@ -136,36 +136,44 @@ stage 仅允许 `ent`、`proto`、`api`、`page`。path 必须位于已声明 re
 
 ## 下游扩展与生成
 
-生成后的 Proto 和 `.api` 不是整文件不可编辑。generator 必须：
+生成后的 Proto 和 `.api` 不是整文件不可编辑。generator/checker 必须：
 
 1. 解析当前 downstream source 并构建 local semantic graph；
-2. 从上游重新计算 inherited projection；
-3. 拒绝 inherited node/fact 的修改、删除和重复声明；
+2. 由对应 source adapter 从已选 upstream typed input 提供 inherited projection；
+3. 拒绝 inherited node/fact 的修改、删除和重复声明，并返回现有诊断或错误；
 4. 保留当前阶段合法新增的 local node/fact；
-5. 组合并确定性渲染。
+5. 校验全局图并确定性生成结果。
 
 例如 Proto 可以给 Ent-derived read model 增加 Ent 中不存在的 response 字段，并成为这些字段的
 第一事实源；但不能修改 Ent-derived 字段类型，也不能重复声明 Ent 已有 label。组合必须基于目标语言
-AST/descriptor，不提供通用文本 merge、diff3、fallback、alias 或 override marker。没有可靠 semantic
-composer 的 family 不得宣称支持生成后就地扩展。
+AST/descriptor，不提供通用文本 merge、diff3、fallback、alias 或 override marker。无法由目标语言
+AST/descriptor 可靠解析并重建 semantic graph 的 family 不得宣称支持生成后就地扩展。
 
 ### Projection lock
 
 stateless 比较无法区分“用户删除了 inherited node”和“上游刚新增、尚未写入 downstream 的 node”。
-因此 source composer 使用唯一的生成证据 `nexa.dev/source-projection-lock/v1`。该 lock 只记录上一轮
-成功组合后的 inherited semantic node/FactID、first source 与 canonical digest：
+因此 source-comment 生成前检查可以使用唯一的生成证据 `nexa.dev/source-projection-lock/v1`。该 lock 只记录上一轮
+成功校验后的 inherited semantic node/FactID、first source 与 canonical digest：
 
 - 它是可重建、提交审阅的 source identity 证据，不是 authoring source；
 - 不记录 local node、consumer ownership、整文件 digest、兼容 alias 或 runtime mapping；
-- 旧 lock 有、当前 downstream 缺失且 upstream 仍存在，判定为非法 inherited deletion；
-- 当前 upstream 新增且旧 lock 不存在，判定为新 projection 并正常加入；
-- 旧 lock 有、当前 upstream 已删除，按新的 upstream projection 确定性删除 downstream inherited node；
-- 只有所有 source file 语义校验和组合成功后才写新 lock；失败返回非零并保留可由 Git 审阅的变化。
+- 旧 lock 有、当前 downstream 缺失且 upstream 仍存在，检查失败并报告 inherited deletion；
+- 当前 upstream 新增且旧 lock 不存在时，检查器可将其作为 expected projection，downstream 尚未具备则报告诊断；
+- upstream 已删除或 lock 与当前图不一致时，检查失败；不会自动删除 authored source/node；
+- authored source 修复并重新检查成功后，使用方再接受新的 lock；失败返回非零且不更新 lock。
 
 一个最终 FactGraph 只生成并校验一份 projection lock；lock 可以同时记录多个 root 之间的
 projection edge 及其 first source fact，不按 Ent、Proto、API 或 Page 拆分。独立 source fragment
-可以先通过 `MergeGraphs` 合并，但进入 composer/generator 前必须重新执行一次完整 `BuildGraph`。
+可以先通过 `MergeGraphs` 合并；`MergeGraphs` 内部会重新执行完整 `BuildGraph`。
 consumer 不得人工声明 fact。它不恢复旧 reader，也不形成双写期。
+
+## 全局图检查与 AI 修复
+
+各阶段 generator 先把本次显式选择的全部 source 编译为一棵 typed FactGraph。Ent、Proto、`.api` 或 page
+都可以作为 root；没有更早阶段时，该阶段的 source node 直接成为 first source。生成器只负责生成和检查，
+不自动回写或删除 authored source/node。失败时使用方可以将现有诊断交给 AI 或人工修复后重新生成。
+v1 复用现有 source adapter、`BuildGraph`/`MergeGraphs` 和诊断，不新增独立 source composer 命令、模块或
+自动修复流程。
 
 ## Lint 与诊断
 
@@ -188,8 +196,8 @@ stage、`$source`、inherited native/supplemental facts，以及 exact/case-fold
 | `NEXA-SC009` | `source_mismatch` |
 | `NEXA-SC010` | `semantic_collision` |
 
-每条诊断至少包含 code/category、当前文件与行号、semantic node、适用时的 FactID、first source、
-expected、actual 和可直接执行的修复建议。不得用整文件 digest 或源码字符串搜索替代语义比较。
+诊断按实际错误提供 code/category、位置、FactID、first source、expected、actual 或修复建议；不得用
+整文件 digest 或源码字符串搜索替代语义比较。
 
 ## 安全与确定性
 

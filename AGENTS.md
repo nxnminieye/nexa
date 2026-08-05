@@ -44,16 +44,20 @@
    `overwrite-logic` 参数为 true 时才覆盖这些准确目标；
 5. 失败时返回非零结果和稳定错误，不掩盖已经发生的文件变化。
 
-`source-comment/v1` 的 Proto/`.api` source composer 是上述 generated output 规则之外的编译器输入阶段：
-它只处理 source configuration 显式列出的可编辑 source file，通过目标语言 AST/descriptor 组合上游
-projection 与当前阶段 local declaration。它不得扫描工作区、推断 ownership 或执行文本 merge；无法可靠
-语义组合的 family 必须使用独立 extension source。`generated/**` 和其他 replacement scope 仍按本节整树替换，
-不能携带需要保留的 local declaration。
+`source-comment/v1` 的 Proto/`.api` 生成前检查是上述 generated output 规则之外的编译器输入阶段：
+它只处理 source configuration 显式列出的可编辑 source file，通过目标语言 AST/descriptor 在内存中把上游
+projection 与当前阶段 local declaration 编译为同一棵 FactGraph。它不得扫描工作区、推断 ownership 或执行文本 merge；
+无法可靠解析 semantic graph 的 family 必须使用独立 extension source。该阶段只生成/检查并返回诊断，不自动回写或删除
+authoring source/node；使用方可交给 AI 或人工修复后重新运行。v1 复用现有 generator、source adapter、
+`BuildGraph`/`MergeGraphs` 和诊断，不新增独立 source composer 命令、模块或写回流程。`generated/**` 和其他
+replacement scope 仍按本节整树替换，可以删除其声明 generated scope 内的 stale 输出，但不能携带需要保留的 local declaration。
 
-为区分 inherited deletion 与 upstream 新增，composer 只可使用版本化
+为区分 inherited deletion 与 upstream 新增，generator/checker 只可使用版本化
 `nexa.dev/source-projection-lock/v1`：它记录上一轮 inherited semantic node/fact 的 source identity 与
-canonical digest，不记录 local ownership、整文件 digest或兼容映射，也不被 runtime 消费。不得把该窄化
-source identity lock 扩展成通用 ownership manifest。
+canonical digest，不记录 local ownership、整文件 digest 或兼容映射，也不被 runtime 消费。upstream 新增
+先作为 expected projection 参与检查，downstream 缺失时返回诊断；upstream 删除或 inherited deletion
+同样返回诊断。只有 authoring source 修复且复检成功后，使用方才接受/更新 lock。不得把该窄化 source
+identity lock 扩展成通用 ownership manifest。
 
 生成失败允许保留部分变更。生成器不负责恢复工作区；使用方通过 `git diff` 审阅实际变化，通过
 `git restore` 恢复，并在同一 Git worktree 中决定是否接受生成结果。用户代码已经由 Git 管理，
