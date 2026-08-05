@@ -1,6 +1,8 @@
 package entityload
 
 import (
+	"bytes"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -8,6 +10,7 @@ import (
 
 	"entgo.io/ent/entc/gen"
 	entfield "entgo.io/ent/schema/field"
+	"github.com/nxnminieye/nexa/generation/entmixin"
 	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
 )
@@ -40,6 +43,7 @@ func (Record) Fields() []any {
 		field.String("name"),
 	}
 }
+
 `
 	path, err := provenance.ParseDomainSource("backend/records/ent/schema/record.go")
 	if err != nil {
@@ -66,6 +70,49 @@ func (Record) Fields() []any {
 		if actual != expected {
 			t.Fatalf("operation[%d] = %q, want %q", index, actual, expected)
 		}
+	}
+}
+
+func TestParseEntFactGraphProjectsAnnotatedMixinFieldWithoutBuilderCall(t *testing.T) {
+	source := `// @nexa $contract: "nexa.dev/source-comment/v1"
+package schema
+
+// @nexa label.zh-CN: "记录"
+// @nexa label.en-US: "Record"
+// @nexa description.zh-CN: "记录数据"
+// @nexa description.en-US: "Record data"
+// @nexa scope: "tenant"
+type Record struct{}
+`
+	path, err := provenance.ParseDomainSource("backend/records/ent/schema/record.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotation := entmixin.Tenant{}.Fields()[0].Descriptor().Annotations[0]
+	encoded, err := json.Marshal(annotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var annotationMap map[string]any
+	if err := json.Unmarshal(encoded, &annotationMap); err != nil {
+		t.Fatal(err)
+	}
+	tenantField := &gen.Field{Name: "tenant_id", Type: &entfield.TypeInfo{Type: entfield.TypeInt}, Immutable: true, Annotations: map[string]any{entmixin.FieldAnnotationName: annotationMap}}
+	graph := &gen.Graph{Nodes: []*gen.Type{{Name: "Record", ID: &gen.Field{Name: "id", Type: &entfield.TypeInfo{Type: entfield.TypeInt}}, Fields: []*gen.Field{tenantField}}}}
+	facts, diagnostics, err := parseEntFactGraph(graph, []entCommentSource{{path: path, data: []byte(source)}})
+	if err != nil || len(diagnostics) != 0 {
+		t.Fatalf("parseEntFactGraph error=%v diagnostics=%#v", err, diagnostics)
+	}
+	fieldFacts, err := facts.FieldFacts("Record.tenant_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fieldFacts.Label.ZhCN != "租户 ID" || fieldFacts.Label.EnUS != "Tenant ID" || fieldFacts.Visibility != sourcecomment.VisibilityInternal || fieldFacts.Control != sourcecomment.UIControlReadonly {
+		t.Fatalf("mixin field facts = %#v", fieldFacts)
+	}
+	native, err := canonicalEntField(tenantField, false)
+	if err != nil || !bytes.Contains(native, []byte(`"isTenantField":true`)) {
+		t.Fatalf("mixin native field = %s, error=%v", native, err)
 	}
 }
 

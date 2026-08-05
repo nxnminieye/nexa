@@ -212,7 +212,8 @@ artifact。renderer 不得自行补 alias、猜测缺失事实或接受非法值
 1. 将 `SchemaMeta`、`FieldMeta`、CRUD 中的 supplemental facts 迁为 `@nexa`；
 2. 将 Nexa-specific Proto option 和 `.api` metadata tag 迁为 `@nexa`；
 3. 保留各语言原生结构，不复制到注释；
-4. 删除 `nexaent` 公共包、内部 model、序列化契约、旧 reader 和测试假设；
+4. 删除 `nexaent` 公共包、内部 model、序列化契约、旧 reader 和测试假设；标准 Ent 结构字段只由
+   `generation/entmixin` 的封闭 mixin 注解输入提供；
 5. Ent AST/descriptor/entc 只作为 compiler-internal source adapter；
 6. 人工 `.page.json` 迁为 comment-capable carrier或把事实上移；
 7. 删除兼容 reader、alias、fallback、双写期和 runtime normalizer。

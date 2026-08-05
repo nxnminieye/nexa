@@ -32,6 +32,7 @@ flowchart LR
 
 - [统一事实注释协议 v1](contracts/source-comment.md)：Ent、Proto、`.api` 与前端 source contract 的唯一补充事实语法、来源和冲突门禁。
 - [业务事实契约](contracts/business-facts.md)：typed FactGraph、服务关系与 authoring ownership。
+- `generation/entmixin`：Tenant、审计时间、排序、状态和软删除等标准 Ent 结构 mixin。
 - [Core IAM 契约](contracts/core-iam.md)：中性的账号、租户、成员、角色、菜单与权限边界。
 - `core-application` 双进程 Starter：同一 exact source release 中的 Core API/RPC 与 PostgreSQL consumer 入口。
 - [受控生成](contracts/controlled-generation.md)：从 typed facts 到 direct replace-tree 普通源码。

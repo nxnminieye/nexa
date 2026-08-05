@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"entgo.io/ent/entc/gen"
+	"github.com/nxnminieye/nexa/generation/entmixin"
 	"github.com/nxnminieye/nexa/generation/httpconvention"
 	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
@@ -23,9 +24,10 @@ type entCommentSource struct {
 }
 
 type entCommentTarget struct {
-	target sourcecomment.Target
-	line   int
-	native []byte
+	target   sourcecomment.Target
+	line     int
+	native   []byte
+	standard *entmixin.FieldMetadata
 	// Synthetic targets are native Ent nodes without an explicit Go builder call.
 	synthetic bool
 }
@@ -146,6 +148,22 @@ func parseEntCommentSource(source entCommentSource, schemas map[string]*gen.Type
 			},
 			NativeCanonical: append([]byte(nil), target.native...),
 		}
+		if target.standard != nil {
+			for _, raw := range target.standard.Directives() {
+				directive, selected, failure := sourcecomment.ParseLine(sourcecomment.Line{
+					Text:          "// @nexa " + raw,
+					CommentPrefix: "//",
+					Location:      sourcecomment.Location{File: source.path.String(), Line: target.line, Column: 1},
+					Target:        &target.target,
+				})
+				if failure != nil {
+					return nil, []sourcecomment.Diagnostic{*failure}, nil
+				}
+				if selected {
+					value.Facts = append(value.Facts, directive)
+				}
+			}
+		}
 		canonical, canonicalErr := httpconvention.CanonicalName(lastSemanticSegment(target.target.SemanticID))
 		if canonicalErr == nil {
 			value.TransformedIdentifiers = []string{canonical}
@@ -179,6 +197,11 @@ func parseEntCommentSource(source entCommentSource, schemas map[string]*gen.Type
 func entTargets(set *token.FileSet, file *ast.File, source provenance.DomainSource, schemas map[string]*gen.Type) ([]entCommentTarget, error) {
 	var targets []entCommentTarget
 	var inspectErr error
+	declared := make([]struct {
+		node *gen.Type
+		line int
+	}, 0, len(file.Decls))
+	explicitFields := make(map[string]bool)
 	for _, declaration := range file.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok || general.Tok != token.TYPE {
@@ -198,6 +221,10 @@ func entTargets(set *token.FileSet, file *ast.File, source provenance.DomainSour
 				return nil, err
 			}
 			line := set.Position(general.Pos()).Line
+			declared = append(declared, struct {
+				node *gen.Type
+				line int
+			}{node: node, line: line})
 			targets = append(targets, entCommentTarget{
 				target: sourcecomment.Target{SemanticID: node.Name, Kind: sourcecomment.NodeSchema, Stage: sourcecomment.StageEnt, Source: ref},
 				line:   line, native: []byte("schema:" + node.Name),
@@ -244,6 +271,12 @@ func entTargets(set *token.FileSet, file *ast.File, source provenance.DomainSour
 			if field == nil {
 				return true
 			}
+			explicitFields[schema.Name+"."+field.Name] = true
+			standard, standardErr := fieldStandardMetadata(field)
+			if standardErr != nil {
+				inspectErr = standardErr
+				return false
+			}
 			ref, refErr := entSourceRef(source, schema.Name+"."+field.Name)
 			if refErr != nil {
 				inspectErr = refErr
@@ -256,7 +289,7 @@ func entTargets(set *token.FileSet, file *ast.File, source provenance.DomainSour
 			}
 			targets = append(targets, entCommentTarget{
 				target: sourcecomment.Target{SemanticID: schema.Name + "." + field.Name, Kind: sourcecomment.NodeField, Stage: sourcecomment.StageEnt, Source: ref},
-				line:   set.Position(call.Pos()).Line, native: native,
+				line:   set.Position(call.Pos()).Line, native: native, standard: standard,
 			})
 			return false
 		})
@@ -264,6 +297,36 @@ func entTargets(set *token.FileSet, file *ast.File, source provenance.DomainSour
 	})
 	if inspectErr != nil {
 		return nil, inspectErr
+	}
+	for _, item := range declared {
+		for _, field := range item.node.Fields {
+			if field == nil {
+				continue
+			}
+			semanticID := item.node.Name + "." + field.Name
+			if explicitFields[semanticID] {
+				continue
+			}
+			standard, standardErr := fieldStandardMetadata(field)
+			if standardErr != nil {
+				return nil, standardErr
+			}
+			if standard == nil {
+				continue
+			}
+			ref, refErr := entSourceRef(source, semanticID)
+			if refErr != nil {
+				return nil, refErr
+			}
+			native, nativeErr := canonicalEntField(field, false)
+			if nativeErr != nil {
+				return nil, nativeErr
+			}
+			targets = append(targets, entCommentTarget{
+				target: sourcecomment.Target{SemanticID: semanticID, Kind: sourcecomment.NodeField, Stage: sourcecomment.StageEnt, Source: ref},
+				line:   item.line, native: native, standard: standard, synthetic: true,
+			})
+		}
 	}
 	return targets, nil
 }
@@ -326,6 +389,21 @@ func entSourceRef(source provenance.DomainSource, symbol string) (sourcecomment.
 	return sourcecomment.ParseSourceRef("ent://" + source.String() + "#" + symbol)
 }
 
+func fieldStandardMetadata(field *gen.Field) (*entmixin.FieldMetadata, error) {
+	if field == nil || field.Annotations == nil {
+		return nil, nil
+	}
+	value, ok := field.Annotations[entmixin.FieldAnnotationName]
+	if !ok {
+		return nil, nil
+	}
+	metadata, err := entmixin.DecodeFieldAnnotation(value)
+	if err != nil {
+		return nil, err
+	}
+	return &metadata, nil
+}
+
 func canonicalEntField(field *gen.Field, identity bool) ([]byte, error) {
 	typeID, ok := scalarType(field.Type)
 	if !ok {
@@ -334,6 +412,13 @@ func canonicalEntField(field *gen.Field, identity bool) ([]byte, error) {
 	value := entFieldNative{
 		Name: field.Name, Type: typeID, Optional: field.Optional, Nillable: field.Nillable,
 		Immutable: field.Immutable, HasDefault: field.Default, Sensitive: field.Sensitive(), IsIdentity: identity,
+	}
+	standard, err := fieldStandardMetadata(field)
+	if err != nil {
+		return nil, err
+	}
+	if standard != nil {
+		value.IsTenantField = standard.Tenant
 	}
 	encoded, err := json.Marshal(value)
 	if err != nil {

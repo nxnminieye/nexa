@@ -6,6 +6,7 @@ import (
 
 	"entgo.io/ent/entc/gen"
 	entfield "entgo.io/ent/schema/field"
+	"github.com/nxnminieye/nexa/generation/entmixin"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
 	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
@@ -128,6 +129,15 @@ func projectGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources
 				return entityvalue.Projection{}, err
 			}
 			isTenantField := false
+			if field.Annotations != nil {
+				if value, present := field.Annotations[entmixin.FieldAnnotationName]; present {
+					metadata, metadataErr := entmixin.DecodeFieldAnnotation(value)
+					if metadataErr != nil {
+						return entityvalue.Projection{}, metadataErr
+					}
+					isTenantField = metadata.Tenant
+				}
+			}
 			typeID, ok := scalarType(field.Type)
 			if !ok {
 				return entityvalue.Projection{}, fmt.Errorf("field type is unsupported")

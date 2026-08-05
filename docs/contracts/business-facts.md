@@ -38,9 +38,10 @@ label/description、CRUD selection、scope/visibility 和 UI presentation 使用
 directive。`nexaent`、`SchemaMeta`、`FieldMeta`、CRUD annotation 和 legacy reader 不再属于公共或内部
 authoring surface。
 
-tenant field 的结构仍由 consumer 的 Ent schema/mixin 明确表达；`scope: "tenant"` 是安全相关补充
-事实。compiler 必须验证二者一致，不能按字段名猜测 tenant boundary，也不能把内部 tenant context 暴露为
-公开 mutation field。
+`Tenant`、`TimeAuditMixin`、`SortMixin`、`StatusMixin` 和 `SoftDeleteMixin` 等标准结构字段由 Nexa
+`generation/entmixin` 的封闭 mixin 集合提供；业务专用 mixin 仍由 consumer 持有。`scope: "tenant"` 是安全
+相关补充事实。compiler 必须验证二者一致，不能按字段名猜测 tenant boundary，也不能把内部 tenant
+context 暴露为公开 mutation field。
 
 field visibility 与 CRUD facts 使用 registry 的封闭值。`ui.reference` 在 compiler 中解析为 typed
 `NodeRef + FieldRef`；原始对象或字符串路径不得进入 renderer/runtime。

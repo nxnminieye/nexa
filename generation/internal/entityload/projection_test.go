@@ -10,6 +10,7 @@ import (
 	"entgo.io/ent/entc/load"
 	entfield "entgo.io/ent/schema/field"
 	"github.com/nxnminieye/nexa/generation/entity"
+	"github.com/nxnminieye/nexa/generation/entmixin"
 	"github.com/nxnminieye/nexa/generation/internal/entityvalue"
 	"github.com/nxnminieye/nexa/generation/sourcecomment"
 	"github.com/nxnminieye/nexa/provenance"
@@ -137,6 +138,30 @@ func TestProjectionDoesNotInferTenantFromFieldNameOrScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(projection.Entities) != 1 || len(projection.Entities[0].Fields) != 1 || projection.Entities[0].Fields[0].IsTenantField {
+		t.Fatalf("projection = %#v", projection)
+	}
+}
+
+func TestProjectionRecognizesAnnotatedTenantField(t *testing.T) {
+	annotation := entmixin.Tenant{}.Fields()[0].Descriptor().Annotations[0]
+	encoded, err := json.Marshal(annotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var annotationMap map[string]any
+	if err := json.Unmarshal(encoded, &annotationMap); err != nil {
+		t.Fatal(err)
+	}
+	node := &load.Schema{Name: "Account", Pos: "schema/account.go:10", Fields: []*load.Field{{Name: "tenant_id", Info: &entfield.TypeInfo{Type: entfield.TypeInt}, Immutable: true, Annotations: map[string]any{entmixin.FieldAnnotationName: annotationMap}}}}
+	graph, err := gen.NewGraph(&gen.Config{}, node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := projectGraph(graph, testFactGraph(t, []*load.Schema{node}, factOptions{}), nil, testSourceResolver(t, node))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Entities) != 1 || len(projection.Entities[0].Fields) != 1 || !projection.Entities[0].Fields[0].IsTenantField {
 		t.Fatalf("projection = %#v", projection)
 	}
 }

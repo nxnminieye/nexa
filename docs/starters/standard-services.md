@@ -50,9 +50,10 @@ digest 和 tree digest 从各 source command 的 input schema extension 读取�
 
 ## Tenant 与 generation 切入点
 
-多租户 schema 由 consumer 的 Ent schema 或 consumer-owned mixin 原生声明 tenant field/edge，并在 schema
-node 上声明 `// @nexa scope: "tenant"`。Nexa 不再发布 `nexaent` 或 tenant authoring mixin，也不会按
-`tenant_id` 字段名猜测隔离边界；当前 source adapter 无法从原生结构证明 tenant boundary 时必须失败。
+多租户 schema 通过 Nexa `generation/entmixin.Tenant` 或 consumer-owned 业务 mixin 原生声明 tenant
+field/edge，并在 schema node 上声明 `// @nexa scope: "tenant"`。标准 `TimeAuditMixin`、`SortMixin`、
+`StatusMixin` 和 `SoftDeleteMixin` 同样由 `generation/entmixin` 提供；业务专用 mixin 不进入 Nexa。Nexa
+不会按 `tenant_id` 字段名猜测隔离边界；当前 source adapter 无法从原生结构证明 tenant boundary 时必须失败。
 
 当前官方 generation plugin 只公开 typed RPC 和 HTTP API generation。是否可用、命令 schema 和 delegated
 tool 必须以 consumer binary 的 fresh inspection 为准。生成时 consumer 显式声明 generated 与 extensions
