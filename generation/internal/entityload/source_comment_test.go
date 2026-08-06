@@ -110,6 +110,9 @@ type Record struct{}
 	if fieldFacts.Label.ZhCN != "租户 ID" || fieldFacts.Label.EnUS != "Tenant ID" || fieldFacts.Visibility != sourcecomment.VisibilityInternal || fieldFacts.Control != sourcecomment.UIControlReadonly {
 		t.Fatalf("mixin field facts = %#v", fieldFacts)
 	}
+	if fieldFacts.CRUD != nil {
+		t.Fatalf("mixin CRUD facts = %#v", fieldFacts.CRUD)
+	}
 	native, err := canonicalEntField(tenantField, false)
 	if err != nil || !bytes.Contains(native, []byte(`"isTenantField":true`)) {
 		t.Fatalf("mixin native field = %s, error=%v", native, err)

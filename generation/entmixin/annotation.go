@@ -43,7 +43,7 @@ type FieldMetadata struct {
 
 // Directives returns the standard supplemental facts for the field.
 func (m FieldMetadata) Directives() []string {
-	return []string{
+	result := []string{
 		"label.zh-CN: " + strconv.Quote(m.LabelZhCN),
 		"label.en-US: " + strconv.Quote(m.LabelEnUS),
 		"description.zh-CN: " + strconv.Quote(m.DescriptionZhCN),
@@ -51,6 +51,10 @@ func (m FieldMetadata) Directives() []string {
 		"ui.control: " + strconv.Quote(m.Control),
 		"visibility: " + strconv.Quote(m.Visibility),
 	}
+	if m.Tenant {
+		return result
+	}
+	return append(result, "crud.read: \"exclude\"", "crud.mutation: \"none\"")
 }
 
 type fieldAnnotation struct {

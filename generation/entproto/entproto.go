@@ -53,7 +53,7 @@ func Generate(ctx context.Context, options Options) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load Ent graph: %w", err)
 	}
-	document, err := entityload.LoadDirect(ctx, root, schema, graph)
+	document, err := entityload.LoadDirectCRUD(ctx, root, schema, graph)
 	if err != nil {
 		return nil, err
 	}

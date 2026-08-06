@@ -15,6 +15,14 @@ import (
 type sourceResolver func(position string) (provenance.DomainSource, error)
 
 func projectGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources []provenance.Source, resolve sourceResolver) (entityvalue.Projection, error) {
+	return projectGraphSelection(graph, facts, moduleSources, resolve, false)
+}
+
+func projectCRUDGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources []provenance.Source, resolve sourceResolver) (entityvalue.Projection, error) {
+	return projectGraphSelection(graph, facts, moduleSources, resolve, true)
+}
+
+func projectGraphSelection(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources []provenance.Source, resolve sourceResolver, crudOnly bool) (entityvalue.Projection, error) {
 	if graph == nil {
 		return entityvalue.Projection{}, fmt.Errorf("entity graph is unavailable")
 	}
@@ -69,6 +77,9 @@ func projectGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources
 		crud, hasCRUD, err := facts.CRUD(node.Name)
 		if err != nil {
 			return entityvalue.Projection{}, err
+		}
+		if crudOnly && !hasCRUD {
+			continue
 		}
 		if !present && !hasCRUD {
 			continue
@@ -161,6 +172,10 @@ func projectGraph(graph *gen.Graph, facts sourcecomment.FactGraph, moduleSources
 				IsTenantField: isTenantField,
 				Meta:          fieldMeta,
 			})
+		}
+		if crudOnly {
+			projection.Entities = append(projection.Entities, entityProjection)
+			continue
 		}
 		edges := append([]*gen.Edge(nil), node.Edges...)
 		sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })

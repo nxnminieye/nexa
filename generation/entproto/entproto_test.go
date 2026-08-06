@@ -32,6 +32,7 @@ func TestGenerateProjectsEntCRUDFixture(t *testing.T) {
 	for _, expected := range []string{
 		`// @nexa $contract: "nexa.dev/source-comment/v1"`,
 		`// @nexa $source: "ent://schema/account.go#Account"`,
+		"ACCOUNT_STATE_ACTIVE = 1;",
 		"message Account {",
 		"message ListAccountRequest {",
 		"service AccountCRUDService {",
@@ -42,6 +43,9 @@ func TestGenerateProjectsEntCRUDFixture(t *testing.T) {
 	}
 	if strings.Contains(text, "message AuditEntry {") {
 		t.Fatal("schema without crud.operations was generated")
+	}
+	if strings.Contains(text, "ACCOUNT_STATE_STATE_") {
+		t.Fatal("compiled Ent enum prefix was duplicated")
 	}
 
 	baseline := stripSourceDirectives(text)

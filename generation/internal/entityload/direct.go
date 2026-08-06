@@ -13,9 +13,9 @@ import (
 	"github.com/nxnminieye/nexa/provenance"
 )
 
-// LoadDirect projects an already loaded Ent graph from consumer source files.
+// LoadDirectCRUD projects CRUD-selected schemas from an already loaded Ent graph.
 // It does not run Ent code generation or create a repository copy.
-func LoadDirect(ctx context.Context, repositoryRoot string, schemaDir provenance.DomainSource, graph *gen.Graph) (entity.Document, error) {
+func LoadDirectCRUD(ctx context.Context, repositoryRoot string, schemaDir provenance.DomainSource, graph *gen.Graph) (entity.Document, error) {
 	if ctx == nil {
 		return entity.Document{}, fmt.Errorf("entity load context is required")
 	}
@@ -46,9 +46,9 @@ func LoadDirect(ctx context.Context, repositoryRoot string, schemaDir provenance
 	if len(diagnostics) > 0 {
 		return entity.Document{}, sourceCommentDiagnosticsError(diagnostics)
 	}
-	projection, err := projectLoadedGraph(graph, facts, nil, directSourceResolver(root, schema), schemaDir)
+	projection, err := projectCRUDGraph(graph, facts, nil, directSourceResolver(root, schema))
 	if err != nil {
-		return entity.Document{}, err
+		return entity.Document{}, entity.AdoptLoadedDocumentError(err, schemaDir)
 	}
 	return adoptProjection(projection, facts, schemaDir)
 }

@@ -708,7 +708,11 @@ func fieldWireType(owner entity.Entity, field entity.Field) (string, *enumState,
 		enum := &enumState{id: field.ID() + "/enum", name: name, values: []*enumValueState{{id: field.ID() + "/enum-value:unspecified", name: screamingSnake(name) + "_UNSPECIFIED", number: 0}}}
 		seen := map[string]struct{}{enum.values[0].name: {}}
 		for _, value := range field.EnumValues() {
-			symbol := screamingSnake(name) + "_" + screamingSnake(value.Name)
+			valueName := strings.TrimPrefix(value.Name, exportedName(field.Name()))
+			if valueName == "" {
+				valueName = value.Name
+			}
+			symbol := screamingSnake(name) + "_" + screamingSnake(valueName)
 			if !protoSymbolPattern.MatchString(symbol) {
 				return "", nil, buildError("field_type_unsupported", "")
 			}

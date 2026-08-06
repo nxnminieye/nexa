@@ -7,6 +7,7 @@ import (
 	"entgo.io/ent/entc/gen"
 	"entgo.io/ent/entc/load"
 	entfield "entgo.io/ent/schema/field"
+	"github.com/nxnminieye/nexa/generation/sourcecomment"
 )
 
 func TestTask2ProjectsCompiledEntEdgeFacts(t *testing.T) {
@@ -79,6 +80,26 @@ func TestTask2RejectsUnsupportedOrUnclosedEntEdges(t *testing.T) {
 				t.Fatal("unsupported or unclosed edge was silently accepted")
 			}
 		})
+	}
+}
+
+func TestCRUDProjectionIgnoresRelationshipStructureOutsideGeneratedContract(t *testing.T) {
+	graph, member := task2GraphWithBoundEdge(t)
+	account := task2Schema(graph, "Account")
+	for _, node := range graph.Nodes {
+		if node.Name == "Member" {
+			node.Edges[0].Immutable = true
+		}
+	}
+	facts := testFactGraph(t, []*load.Schema{account, member}, factOptions{
+		crud: map[string][]sourcecomment.CRUDOperation{"Member": {sourcecomment.CRUDList}},
+	})
+	projection, err := projectCRUDGraph(graph, facts, nil, testSourceResolver(t, account, member))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Entities) != 1 || projection.Entities[0].Name != "Member" || len(projection.Entities[0].Edges) != 0 {
+		t.Fatalf("CRUD projection = %#v", projection.Entities)
 	}
 }
 

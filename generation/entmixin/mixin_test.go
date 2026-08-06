@@ -38,7 +38,11 @@ func TestStandardMixinsExposeStableDescriptorsAndMetadata(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if metadata.Profile != test.profiles[index] || len(metadata.Directives()) != 6 {
+				wantDirectives := 8
+				if metadata.Tenant {
+					wantDirectives = 6
+				}
+				if metadata.Profile != test.profiles[index] || len(metadata.Directives()) != wantDirectives {
 					t.Fatalf("metadata = %#v", metadata)
 				}
 			}
