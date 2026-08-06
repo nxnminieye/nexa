@@ -8,6 +8,7 @@ import (
 
 	"github.com/nxnminieye/nexa/generation/api"
 	"github.com/nxnminieye/nexa/generation/httpapi"
+	"github.com/nxnminieye/nexa/generation/httpconvention"
 	"github.com/nxnminieye/nexa/generation/sourcecomment"
 )
 
@@ -58,6 +59,17 @@ service sample {
 	operations := crud.Operations()
 	if err != nil || !ok || len(operations) != 5 || operations[4] != sourcecomment.CRUDDelete {
 		t.Fatalf("CRUD = %#v, %v, %v", crud, ok, err)
+	}
+	item, ok := document.Type("Item")
+	if !ok || item.SemanticID() != "Item" {
+		t.Fatalf("item semantic ID = %q, %v", item.SemanticID(), ok)
+	}
+	name, ok := item.Field("name")
+	if !ok || name.SemanticID() != "Item.name" {
+		t.Fatalf("field semantic ID = %q, %v", name.SemanticID(), ok)
+	}
+	if location, declared := name.Transport(); declared || location != httpconvention.Location("") {
+		t.Fatalf("field transport = %q, %v", location, declared)
 	}
 }
 
@@ -154,6 +166,9 @@ func TestLoadAcceptsPDCLTransportTagsAndRejectsAliases(t *testing.T) {
 					request, ok := document.Type("Request")
 					if !ok || len(request.Fields()) != 1 || request.Fields()[0].Path()[0] != "tenant_id" {
 						t.Fatalf("lower_snake identity = %#v, %v", request, ok)
+					}
+					if location, declared := request.Fields()[0].Transport(); !declared || location != httpconvention.LocationQuery {
+						t.Fatalf("lower_snake transport = %q, %v", location, declared)
 					}
 				}
 				return

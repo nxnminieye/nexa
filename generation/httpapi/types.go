@@ -215,6 +215,12 @@ func (t Type) Name() string {
 	}
 	return t.state.name
 }
+func (t Type) SemanticID() string {
+	if t.state == nil {
+		return ""
+	}
+	return t.state.semanticID
+}
 func (t Type) Shape() ValueType {
 	if t.state == nil {
 		return ValueType{}
@@ -254,6 +260,12 @@ func (f Field) OwnerType() string {
 	}
 	return f.state.ownerType
 }
+func (f Field) SemanticID() string {
+	if f.state == nil {
+		return ""
+	}
+	return f.state.semanticID
+}
 func (f Field) Path() []string {
 	if f.state == nil {
 		return nil
@@ -271,6 +283,12 @@ func (f Field) Path() []string {
 	return path
 }
 func (f Field) Required() bool { return f.state != nil && f.state.required }
+func (f Field) Transport() (httpconvention.Location, bool) {
+	if f.state == nil {
+		return "", false
+	}
+	return f.state.transport, f.state.hasTransport
+}
 func (f Field) ValueType() ValueType {
 	if f.state == nil {
 		return ValueType{}
