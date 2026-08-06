@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nxnminieye/nexa/generation/entproto"
 	genfrontend "github.com/nxnminieye/nexa/generation/frontend"
 	"github.com/nxnminieye/nexa/generation/httpapi"
 	genprotocol "github.com/nxnminieye/nexa/generation/protocol"
@@ -37,6 +38,13 @@ type generationResult struct {
 type userLogicResult struct {
 	Path   string `json:"path"`
 	Action string `json:"action"`
+}
+
+type entProtoCheckResult struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	Service    string `json:"service"`
 }
 
 func newCommandRunner(options Options) (*commandRunner, error) {
@@ -121,6 +129,68 @@ func (r *commandRunner) generateRPC(ctx context.Context, invocation plugin.Invoc
 		return nil, inputError("fact_source_invalid", "provider", "rpc_facts_invalid", "/project/services/rpc/facts", "")
 	}
 	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleRPCGo, service.RPC.Tool, service.RPC.GeneratedScope, service.RPC.ExtensionScopes, service.RPC.UserLogic, stdin, invocation)
+}
+
+func (r *commandRunner) checkEntProto(ctx context.Context, invocation plugin.Invocation) (any, error) {
+	_, service, _, _, err := r.resolveEntProto(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	return entProtoCheckResult{
+		APIVersion: "nexa.dev/generation-check-result/v1", Kind: "GenerationCheckResult", Status: "valid", Service: service.ServiceID,
+	}, nil
+}
+
+func (r *commandRunner) generateEntProto(ctx context.Context, invocation plugin.Invocation) (any, error) {
+	repository, service, project, generated, err := r.resolveEntProto(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := replacetree.Prepare(repository, project.GeneratedScope, project.ExtensionScopes, nil)
+	if err != nil {
+		return nil, projectOwnerError(err)
+	}
+	output := filepath.Join(repository, filepath.FromSlash(prepared.GeneratedScope()), project.GeneratedFile)
+	if err := os.WriteFile(output, generated, 0o644); err != nil {
+		return nil, inputError("generation_output_invalid", "direct-write", "proto_write_failed", "/project/services/entProto/generatedFile", project.GeneratedFile)
+	}
+	return generationResult{
+		APIVersion: "nexa.dev/generation-result/v2", Kind: "GenerationResult", Status: "generated",
+		Service: service.ServiceID, GeneratedScope: prepared.GeneratedScope(), UserLogic: []userLogicResult{},
+	}, nil
+}
+
+func (r *commandRunner) resolveEntProto(ctx context.Context, invocation plugin.Invocation) (string, ServiceProject, *EntProtoProject, []byte, error) {
+	repository, _, service, err := r.resolve(ctx, invocation)
+	if err != nil {
+		return "", ServiceProject{}, nil, nil, err
+	}
+	if service.EntProto == nil {
+		return "", ServiceProject{}, nil, nil, inputError("fact_source_invalid", "provider", "ent_proto_project_missing", "/project/services/entProto", "")
+	}
+	project := service.EntProto
+	if project.SchemaDir == "" || project.ProtoPackage == "" || project.GoPackage == "" || !validGeneratedProtoFile(project.GeneratedFile) {
+		return "", ServiceProject{}, nil, nil, inputError("fact_source_invalid", "provider", "ent_proto_project_invalid", "/project/services/entProto", project.GeneratedFile)
+	}
+	generated, err := entproto.Generate(ctx, entproto.Options{
+		RepositoryRoot: repository,
+		SchemaDir:      project.SchemaDir,
+		ServiceID:      service.ServiceID,
+		ProtoPackage:   project.ProtoPackage,
+		GoPackage:      project.GoPackage,
+		MultiTenant:    project.MultiTenant,
+	})
+	if err != nil {
+		return "", ServiceProject{}, nil, nil, inputError("fact_source_invalid", "provider", "ent_proto_source_invalid", "/project/services/entProto/schemaDir", err.Error())
+	}
+	return repository, service, project, generated, nil
+}
+
+func validGeneratedProtoFile(value string) bool {
+	if value == "" || filepath.IsAbs(value) || strings.Contains(value, "/") || strings.Contains(value, `\`) || filepath.Ext(value) != ".proto" {
+		return false
+	}
+	return filepath.Clean(filepath.FromSlash(value)) == value && filepath.Base(value) == value
 }
 
 func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invocation) (any, error) {

@@ -73,9 +73,22 @@ type FrontendProject struct {
 	FrontendSourceLockDigest provenance.Digest
 }
 
+// EntProtoProject declares the consumer-owned Ent source and Proto output boundary.
+// The framework owns the Ent-to-Proto projection; the consumer owns these choices and paths.
+type EntProtoProject struct {
+	SchemaDir       string
+	ProtoPackage    string
+	GoPackage       string
+	MultiTenant     bool
+	GeneratedScope  string
+	GeneratedFile   string
+	ExtensionScopes []string
+}
+
 // ServiceProject closes the consumer-owned facts for one service.
 type ServiceProject struct {
 	ServiceID string
+	EntProto  *EntProtoProject
 	RPC       *RPCProject
 	API       *APIProject
 	Frontend  *FrontendProject
@@ -119,17 +132,44 @@ func New(options Options) (plugin.Plugin, error) {
 			Version:         pluginVersion,
 			ContractVersion: plugin.ContractVersion,
 			Provides: []plugin.Capability{
+				{ID: "generation.ent-proto", Version: capabilityVersion},
 				{ID: "generation.rpc", Version: capabilityVersion},
 				{ID: "generation.api", Version: capabilityVersion},
 				{ID: "generation.frontend", Version: capabilityVersion},
 			},
 		},
 		Commands: []plugin.CommandSpec{
+			entProtoCommand(runner.generateEntProto),
+			entProtoCheckCommand(runner.checkEntProto),
 			directCommand("rpc", runner.delegatedTools[ToolRoleRPCGo], runner.generateRPC),
 			directCommand("api", runner.delegatedTools[ToolRoleAPIGo], runner.generateAPI),
 			frontendCommand(runner.delegatedTools[ToolRoleFrontendRender], runner.generateFrontend),
 		},
 	})
+}
+
+func entProtoCheckCommand(run plugin.Handler) plugin.CommandSpec {
+	return plugin.CommandSpec{
+		Path:         []string{"generation", "ent-proto", "check"},
+		Summary:      "check Ent CRUD Proto source",
+		Flags:        frontendSelectorFlags(),
+		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"}}}`),
+		OutputSchema: entProtoCheckResultSchema(),
+		SideEffect:   plugin.SideEffectRepositoryRead,
+		Run:          run,
+	}
+}
+
+func entProtoCommand(run plugin.Handler) plugin.CommandSpec {
+	return plugin.CommandSpec{
+		Path:         []string{"generation", "ent-proto", "generate"},
+		Summary:      "directly generate Ent CRUD Proto source",
+		Flags:        frontendSelectorFlags(),
+		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"}}}`),
+		OutputSchema: generationResultSchema(),
+		SideEffect:   plugin.SideEffectRepositoryWrite,
+		Run:          run,
+	}
 }
 
 func directCommand(owner string, tools []plugin.DelegatedToolSpec, run plugin.Handler) plugin.CommandSpec {
@@ -160,6 +200,10 @@ func frontendCommand(tools []plugin.DelegatedToolSpec, run plugin.Handler) plugi
 
 func generationResultSchema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service","generatedScope","userLogic"],"properties":{"apiVersion":{"const":"nexa.dev/generation-result/v2"},"kind":{"const":"GenerationResult"},"status":{"const":"generated"},"service":{"type":"string"},"generatedScope":{"type":"string"},"userLogic":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","action"],"properties":{"path":{"type":"string"},"action":{"enum":["created","skipped","overwritten"]}}}}}}`)
+}
+
+func entProtoCheckResultSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","additionalProperties":false,"required":["apiVersion","kind","status","service"],"properties":{"apiVersion":{"const":"nexa.dev/generation-check-result/v1"},"kind":{"const":"GenerationCheckResult"},"status":{"const":"valid"},"service":{"type":"string"}}}`)
 }
 
 func selectorFlags() []plugin.FlagSpec {

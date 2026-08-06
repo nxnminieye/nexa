@@ -82,7 +82,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	if err := json.Unmarshal(encodedResult, &inspection); err != nil {
 		t.Fatalf("decode inspection result: %v", err)
 	}
-	if len(inspection.Plugins) != 3 || len(inspection.Capabilities) != 5 || len(inspection.Commands) != 14 {
+	if len(inspection.Plugins) != 3 || len(inspection.Capabilities) != 6 || len(inspection.Commands) != 16 {
 		t.Fatalf("unexpected reference composition: %#v", inspection)
 	}
 	wantPlugins := []struct{ id, version string }{
@@ -100,6 +100,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		}
 	}
 	wantGenerationProvides := []struct{ id, version string }{
+		{id: "generation.ent-proto", version: "v1.0.0"},
 		{id: "generation.rpc", version: "v1.0.0"},
 		{id: "generation.api", version: "v1.0.0"},
 		{id: "generation.frontend", version: "v1.0.0"},
@@ -117,6 +118,7 @@ func TestReferenceNexactlInspect(t *testing.T) {
 	}
 	wantCapabilities := []struct{ id, provider string }{
 		{id: "generation.api", provider: "generation"},
+		{id: "generation.ent-proto", provider: "generation"},
 		{id: "generation.frontend", provider: "generation"},
 		{id: "generation.rpc", provider: "generation"},
 		{id: "governance.validation", provider: "governance"},
@@ -134,6 +136,8 @@ func TestReferenceNexactlInspect(t *testing.T) {
 		required                []bool
 	}{
 		{path: "generation api generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
+		{path: "generation ent-proto check", owner: "generation", sideEffect: "repository-read", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
+		{path: "generation ent-proto generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
 		{path: "generation frontend generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service"}, required: []bool{true, true, true}},
 		{path: "generation rpc generate", owner: "generation", sideEffect: "repository-write", flags: []string{"repo-root", "provider", "service", "overwrite-logic"}, required: []bool{true, true, true, false}},
 		{path: "governance skill validate", owner: "governance", sideEffect: "repository-read", flags: []string{"root"}, required: []bool{true}},

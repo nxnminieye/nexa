@@ -12,20 +12,24 @@ Nexa 把 consumer-owned typed facts 与 `.api` source 投影为可编译的普�
 nexactl inspect --json
 ```
 
-Official generation plugin 当前提供三个 public command：
+Official generation plugin 当前提供五个 public command：
 
+- `generation ent-proto check`，只读检查显式 Ent CRUD 事实；
+- `generation ent-proto generate`，capability 为 `generation.ent-proto`；
 - `generation rpc generate`，capability 为 `generation.rpc`；
 - `generation api generate`，capability 为 `generation.api`；
 - `generation frontend generate`，capability 为 `generation.frontend`。
 
 Reference CLI 没有 consumer `ProjectProvider`，因此只能展示命令 contract；执行时会稳定返回 provider
-unavailable。Ent、CRUD、Service Manifest、plan/check/write、plan digest、ownership manifest 和 staging 不属于
-当前 official generation plugin 的公开能力。仓库中存在历史 package 不代表它已接入 CLI 或支持面。
+unavailable。Ent CRUD Proto 使用上述直接 `check/generate`，不恢复历史 CRUD `plan/check/write` 状态机。
+Service Manifest、plan digest、ownership manifest 和 staging 不属于当前 official generation plugin 的公开能力。
+仓库中存在历史 package 不代表它已接入 CLI 或支持面。
 
 ## 主链
 
 ```text
-consumer typed Proto/PageSpec facts and .api source
+consumer Ent/Proto/PageSpec facts and .api source
+  -> Ent CRUD check or direct generated Proto
   -> strict parse and validation
   -> canonical Proto document, validated .api entry or FrontendIR
   -> validate generated/extensions/user-logic paths
@@ -35,7 +39,7 @@ consumer typed Proto/PageSpec facts and .api source
   -> parse, format, compile, test and review Git diff
 ```
 
-`ProjectProvider` 为选中 service 返回 typed RPC/FrontendIR document 或由 Nexa parser 校验的 `.api` entry、与 provider descriptor 一致的 delegated tool、
+`ProjectProvider` 为选中 service 返回 Ent schema 与 generated Proto 边界、typed RPC/FrontendIR document 或由 Nexa parser 校验的 `.api` entry、与 provider descriptor 一致的 delegated tool、
 唯一 generated scope、显式的 consumer-owned extensions、hooks、slots 或 actions scopes，以及可选的准确
 RPC/API user-logic 初始文件。Frontend target 还必须提供 exact frontend source lock digest。Provider 只定位和
 组合事实，不复制 Proto/API 节点 metadata。PageSpec、FrontendIR 与 renderer request 的完整语义见
@@ -69,6 +73,10 @@ consumer repository 中直接执行 version-pinned tool，同时通过
 `nexa.dev/api-source/v1` 与 `repository` 输入。Nexa 不提供 OS sandbox、repository staging、
 私有构建 cache 或自动 rollback。
 
+Ent CRUD Proto 由 framework 直接从 consumer 声明的 schema directory 生成，不经过 delegated tool。`check`
+只执行加载、事实校验和确定性渲染；`generate` 在相同检查通过后替换 consumer 声明的 generated scope，并只写入
+其中声明的单个 `.proto` 文件。
+
 路径或输入 contract 失败必须在清空 generated scope 前返回非零。Tool probe 或执行开始后的失败同样返回
 非零，但已发生的删除和写入保留。使用方通过 `git diff` 审阅，通过 `git restore` 恢复，不由 generator 隐藏
 或合并工作区变化。
@@ -77,7 +85,7 @@ consumer repository 中直接执行 version-pinned tool，同时通过
 
 完成条件只围绕 contract 和输出：
 
-1. typed Proto/PageSpec 与 `.api` 输入由正式 parser 读取，API-Go 只消费已验证的 `.api` entry；
+1. Ent、typed Proto/PageSpec 与 `.api` 输入由正式 parser 读取，API-Go 只消费已验证的 `.api` entry；
 2. 输出位于声明 generated scope，stale tree 被完整替换；
 3. extensions 和其他人工源码字节不变；
 4. 缺失 user-logic 被创建，已有 user-logic 默认字节不变，显式 overwrite 只覆盖声明目标；

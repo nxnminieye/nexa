@@ -31,21 +31,29 @@ func TestNewExposesDirectRPCAPIAndFrontendGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := candidate.Spec()
-	if !reflect.DeepEqual(spec.Descriptor.Provides, []plugin.Capability{{ID: "generation.rpc", Version: "v1.0.0"}, {ID: "generation.api", Version: "v1.0.0"}, {ID: "generation.frontend", Version: "v1.0.0"}}) {
+	if !reflect.DeepEqual(spec.Descriptor.Provides, []plugin.Capability{{ID: "generation.ent-proto", Version: "v1.0.0"}, {ID: "generation.rpc", Version: "v1.0.0"}, {ID: "generation.api", Version: "v1.0.0"}, {ID: "generation.frontend", Version: "v1.0.0"}}) {
 		t.Fatalf("capabilities = %#v", spec.Descriptor.Provides)
 	}
 	paths := make([]string, len(spec.Commands))
 	for index, command := range spec.Commands {
 		paths[index] = strings.Join(command.Path, " ")
 		wantFlags := 4
-		if command.Path[1] == "frontend" {
+		if command.Path[1] == "frontend" || command.Path[1] == "ent-proto" {
 			wantFlags = 3
 		}
-		if command.SideEffect != plugin.SideEffectRepositoryWrite || len(command.Flags) != wantFlags || len(command.DelegatedTools) != 1 {
+		wantTools := 1
+		if command.Path[1] == "ent-proto" {
+			wantTools = 0
+		}
+		wantSideEffect := plugin.SideEffectRepositoryWrite
+		if command.Path[1] == "ent-proto" && command.Path[2] == "check" {
+			wantSideEffect = plugin.SideEffectRepositoryRead
+		}
+		if command.SideEffect != wantSideEffect || len(command.Flags) != wantFlags || len(command.DelegatedTools) != wantTools {
 			t.Fatalf("command = %#v", command)
 		}
 	}
-	if !reflect.DeepEqual(paths, []string{"generation rpc generate", "generation api generate", "generation frontend generate"}) {
+	if !reflect.DeepEqual(paths, []string{"generation ent-proto generate", "generation ent-proto check", "generation rpc generate", "generation api generate", "generation frontend generate"}) {
 		t.Fatalf("commands = %#v", paths)
 	}
 }

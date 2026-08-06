@@ -55,11 +55,12 @@ field/edge，并在 schema node 上声明 `// @nexa scope: "tenant"`。标准 `T
 `StatusMixin` 和 `SoftDeleteMixin` 同样由 `generation/entmixin` 提供；业务专用 mixin 不进入 Nexa。Nexa
 不会按 `tenant_id` 字段名猜测隔离边界；当前 source adapter 无法从原生结构证明 tenant boundary 时必须失败。
 
-当前官方 generation plugin 只公开 typed RPC 和 HTTP API generation。是否可用、命令 schema 和 delegated
+当前官方 generation plugin 公开 Ent CRUD Proto check/generate、typed RPC 和 HTTP API generation。是否可用、命令 schema 和 delegated
 tool 必须以 consumer binary 的 fresh inspection 为准。生成时 consumer 显式声明 generated 与 extensions
 scopes；工具直接清空并重建 generated 目录，extensions 中的业务 logic、hooks 和其他人工源码保持不变。
 
-官方 generation plugin 不公开 Ent、CRUD、Service Manifest、manual create-once 或 overwrite 契约。标准
+官方 generation plugin 的 Ent CRUD Proto 只提供直接 check/generate，不公开历史 plan/check/write 状态机、
+Service Manifest、manual create-once 或 overwrite 契约。标准
 CRUD 的业务 contract 和非空 logic 必须由对应领域 owner 冻结并保留，不能由 starter 或 generator 生成空
 实现替代。生成后由 consumer 审阅 Git diff，失败时允许保留部分变更并返回非零；再次生成必须无新 diff。
 

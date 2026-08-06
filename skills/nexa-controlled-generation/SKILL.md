@@ -1,6 +1,6 @@
 ---
 name: nexa-controlled-generation
-description: Use when modifying or reviewing Nexa typed generation facts, direct RPC/API/frontend generation, FrontendIR, generated scopes, extension scopes, or replacement behavior.
+description: Use when modifying or reviewing Nexa typed generation facts, direct Ent Proto/RPC/API/frontend generation, FrontendIR, generated scopes, extension scopes, or replacement behavior.
 ---
 
 # Nexa Controlled Generation
@@ -27,20 +27,21 @@ side effect 和 delegated tool，不批准命令。计划必须明确准确命�
 Git 恢复方式。Inspection 与计划不一致、输入不完整或副作用越界时停止，不猜测命令、不创建占位事实、
 不手改生成物。
 
-官方 generation plugin 提供三个 public command 和三个 capability：
+官方 generation plugin 提供五个 public command 和四个 capability：
 
+- `generation ent-proto check` 为只读检查，`generation ent-proto generate` 对应 `generation.ent-proto`；
 - `generation rpc generate` 对应 `generation.rpc`；
 - `generation api generate` 对应 `generation.api`；
 - `generation frontend generate` 对应 `generation.frontend`。
 
-Ent、CRUD、service manifest、plan/check/write、plan digest、ownership/staging/sandbox/transaction 都不属于
-该 plugin 的公开生成面。不存在的能力不得通过历史命令、Make target 或文档补回。
+Ent CRUD Proto 只使用上述直接 `check/generate`。历史 CRUD plan/check/write、service manifest、plan digest、
+ownership/staging/sandbox/transaction 都不属于该 plugin 的公开生成面。
 
 ## ProjectProvider
 
-consumer 的 `ProjectProvider` 返回 `ServiceProject`。每个被选择的 RPC/API/frontend target 必须显式提供：
+consumer 的 `ProjectProvider` 返回 `ServiceProject`。每个被选择的 Ent Proto/RPC/API/frontend target 必须显式提供：
 
-- 已解析的 typed Proto、API document 或 canonical FrontendIR；
+- Ent schema 与单一 generated Proto 文件边界，或已解析的 typed Proto、API document、canonical FrontendIR；
 - 与 provider descriptor 完全一致的 delegated tool identity；
 - 唯一 generated scope；
 - consumer-owned extensions、hooks、slots 或 actions scopes。
@@ -90,4 +91,4 @@ user logic。其他 generated scope 之外的内容因不在写集内保持不�
 - 把 generated 文件或 inspection 当人工业务事实。
 - 为了 stale 清理重新引入 ownership manifest 或 transaction。
 - 在工具失败后自动恢复 generated tree，掩盖真实 Git diff。
-- 因历史 Ent/CRUD/service-manifest 命令存在过而推断当前 plugin 仍提供它们。
+- 因历史 CRUD plan/service-manifest 命令存在过而推断当前 plugin 仍提供它们。
