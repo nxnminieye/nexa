@@ -128,6 +128,16 @@ func ClassifyRequest(method, route string, fields []string) ([]RequestField, err
 		return nil, fmt.Errorf("method %q is not supported by %s", method, APIVersion)
 	}
 	seen := make(map[string]bool, len(fields))
+	// Route placeholders may retain lower_snake wire spelling while DTO fields
+	// use the canonical lowerCamel spelling; compare one semantic identity.
+	canonicalPlaceholders := make(map[string]bool, len(placeholders))
+	for placeholder := range placeholders {
+		canonical, canonicalErr := CanonicalName(placeholder)
+		if canonicalErr != nil {
+			return nil, fmt.Errorf("route placeholder %q cannot be canonicalized: %w", placeholder, canonicalErr)
+		}
+		canonicalPlaceholders[canonical] = true
+	}
 	result := make([]RequestField, len(fields))
 	for index, name := range fields {
 		if err := ValidateFieldName(name); err != nil {
@@ -141,13 +151,21 @@ func ClassifyRequest(method, route string, fields []string) ([]RequestField, err
 		}
 		seen[name] = true
 		location := remainder
-		if placeholders[name] {
+		canonical, canonicalErr := CanonicalName(name)
+		if canonicalErr != nil {
+			return nil, fmt.Errorf("request field %q cannot be canonicalized: %w", name, canonicalErr)
+		}
+		if placeholders[name] || canonicalPlaceholders[canonical] {
 			location = LocationPath
 		}
 		result[index] = RequestField{Name: name, Location: location}
 	}
 	for placeholder := range placeholders {
-		if !seen[placeholder] {
+		canonical, canonicalErr := CanonicalName(placeholder)
+		if canonicalErr != nil {
+			return nil, fmt.Errorf("route placeholder %q cannot be canonicalized: %w", placeholder, canonicalErr)
+		}
+		if !seen[placeholder] && !seen[canonical] {
 			return nil, fmt.Errorf("path placeholder %q has no exact request field", placeholder)
 		}
 	}

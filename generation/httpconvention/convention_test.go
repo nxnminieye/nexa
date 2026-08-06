@@ -36,6 +36,10 @@ func TestPDCLConvention(t *testing.T) {
 	}) {
 		t.Fatalf("ClassifyRequest() = %#v, %v", fields, err)
 	}
+	snakePath, err := httpconvention.ClassifyRequest("POST", "/kafka/acls/{acl_binding_id}/retry", []string{"tenantId", "aclBindingId", "operatorMemberId"})
+	if err != nil || snakePath[1].Location != httpconvention.LocationPath {
+		t.Fatalf("snake path classification = %#v, %v", snakePath, err)
+	}
 	queries, err := httpconvention.ClassifyRequest("GET", "/records", []string{"limit", "offset"})
 	if err != nil || queries[0].Location != httpconvention.LocationQuery || queries[1].Location != httpconvention.LocationQuery {
 		t.Fatalf("GET classification = %#v, %v", queries, err)
