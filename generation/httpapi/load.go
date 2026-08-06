@@ -151,6 +151,7 @@ func (i *authoredIndex) collect(root, filename string) error {
 	if err := p.CheckErrors(); err != nil {
 		return invalid("parser_error", rel, "", err.Error())
 	}
+	textLines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	i.stack[abs], i.seenFiles[abs] = true, true
 	defer delete(i.stack, abs)
 	targets := map[int]*sourcecomment.Target{}
@@ -212,6 +213,7 @@ func (i *authoredIndex) collect(root, filename string) error {
 					copyTarget := target
 					targets[comment.Pos().Line] = &copyTarget
 				}
+				bindRouteCommentLines(textLines, route.AtHandler.Pos().Line, target, targets)
 				i.factNodes = append(i.factNodes, sourcecomment.NodeInput{
 					SemanticID: semanticID, Kind: sourcecomment.NodeAPIOperation, Stage: sourcecomment.StageAPI,
 					Source: source, Location: sourcecomment.Location{File: rel, Line: route.AtHandler.Pos().Line, Column: route.AtHandler.Pos().Column},
@@ -221,7 +223,6 @@ func (i *authoredIndex) collect(root, filename string) error {
 			}
 		}
 	}
-	textLines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	lines := make([]sourcecomment.Line, len(textLines))
 	for index, text := range textLines {
 		lines[index] = sourcecomment.Line{Text: text, CommentPrefix: "//", Location: sourcecomment.Location{File: rel, Line: index + 1, Column: 1}, Target: targets[index+1]}
@@ -247,6 +248,23 @@ func (i *authoredIndex) collect(root, filename string) error {
 		i.factNodes[index].SourceLocation = inherited.Location()
 	}
 	return nil
+}
+
+func bindRouteCommentLines(lines []string, handlerLine int, target sourcecomment.Target, targets map[int]*sourcecomment.Target) {
+	for line := handlerLine - 1; line > 0; line-- {
+		trimmed := strings.TrimSpace(lines[line-1])
+		switch {
+		case strings.HasPrefix(trimmed, "//"):
+			copyTarget := target
+			targets[line] = &copyTarget
+		case strings.HasPrefix(trimmed, "@doc "):
+			continue
+		case trimmed == "":
+			return
+		default:
+			return
+		}
+	}
 }
 
 func (i *authoredIndex) addAPITypeNode(rel string, expression *goctlast.TypeExpr, head goctlast.CommentGroup, targets map[int]*sourcecomment.Target) error {

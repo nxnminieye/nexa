@@ -61,6 +61,38 @@ service sample {
 	}
 }
 
+func TestLoadBindsRouteFactsAcrossDocDirective(t *testing.T) {
+	root := t.TempDir()
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type Request {}
+type Response { Value string }
+service sample {
+  // @nexa label.en-US: "Read sample"
+  @doc "Read sample"
+  // @nexa auth: "none"
+  @handler Get
+  get /samples (Request) returns (Response)
+}
+`)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, ok := document.Operation("get")
+	if !ok {
+		t.Fatal("route operation missing")
+	}
+	fact, ok := document.FactGraph().Fact(sourcecomment.FactID{SemanticID: operation.ID(), Key: "label.en-US"})
+	if !ok {
+		t.Fatal("route label fact missing")
+	}
+	if value, ok := fact.Value().String(); !ok || value != "Read sample" {
+		t.Fatalf("route label = %q, %v", value, ok)
+	}
+}
+
 func TestLoadAcceptsCanonicalAuthoringWithoutTransportMetadata(t *testing.T) {
 	root := t.TempDir()
 	source := `// @nexa $contract: "nexa.dev/source-comment/v1"
