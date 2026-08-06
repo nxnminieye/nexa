@@ -15,6 +15,7 @@ import (
 
 	"github.com/nxnminieye/nexa/cli/protocol"
 	"github.com/nxnminieye/nexa/nexactl/plugin"
+	"github.com/nxnminieye/nexa/plugins/nexactl/generation"
 	sourceadapter "github.com/nxnminieye/nexa/plugins/nexactl/source"
 	"github.com/nxnminieye/nexa/sourceplugin"
 	"github.com/nxnminieye/nexa/sourceplugin/engine"
@@ -95,6 +96,31 @@ func TestReferenceSourcePluginReceivesHostVersion(t *testing.T) {
 	)
 	if exit != 0 || stderr.String() != "" || received != "v0.8.0-test" {
 		t.Fatalf("exit=%d stderr=%q source version=%q", exit, stderr.String(), received)
+	}
+}
+
+func TestRunWithOptionsRejectsInvalidConsumerProviderDuringBootstrap(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	factory := func(version string) (plugin.Plugin, func(), error) {
+		candidate, err := plugin.NewStatic(plugin.Spec{Descriptor: plugin.Descriptor{
+			ID: "source", Version: version, ContractVersion: plugin.ContractVersion,
+			Provides: []plugin.Capability{{ID: sourceadapter.CapabilityID, Version: sourceadapter.CapabilityVersion}},
+		}})
+		return candidate, func() {}, err
+	}
+	exit := runWithReferenceSourcePluginOptions(
+		[]string{"inspect", "--json"}, &stdout, &stderr, factory,
+		Options{GenerationProviders: []generation.ProjectProvider{nil}},
+	)
+	if exit != 70 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", exit, stdout.String(), stderr.String())
+	}
+	var envelope protocol.Envelope
+	if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.OK || envelope.Error == nil || envelope.Error.Code != "host_initialization_failed" {
+		t.Fatalf("envelope=%#v", envelope)
 	}
 }
 

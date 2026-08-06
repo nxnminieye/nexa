@@ -34,11 +34,24 @@ var buildVersion = defaultBuildVersion
 
 type referenceSourcePluginFactory func(version string) (plugin.Plugin, func(), error)
 
+// Options configures consumer-owned composition for the platform runner.
+// Providers resolve facts and delegated tools; parsing and generation remain
+// owned by the platform plugins.
+type Options struct {
+	GenerationProviders []generation.ProjectProvider
+}
+
 // Run executes the platform nexactl command with the supplied argument and
 // output streams. Consumers can keep a thin local binary entrypoint without
 // reimplementing command composition or source-plugin bootstrap.
 func Run(args []string, stdout, stderr io.Writer) int {
-	return runWithReferenceSourcePlugin(args, stdout, stderr, newReferenceSourcePlugin)
+	return RunWithOptions(args, stdout, stderr, Options{})
+}
+
+// RunWithOptions executes the platform nexactl command with consumer-owned
+// generation providers added to the standard platform plugins.
+func RunWithOptions(args []string, stdout, stderr io.Writer, options Options) int {
+	return runWithReferenceSourcePluginOptions(args, stdout, stderr, newReferenceSourcePlugin, options)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -46,12 +59,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourceFactory referenceSourcePluginFactory) int {
+	return runWithReferenceSourcePluginOptions(args, stdout, stderr, sourceFactory, Options{})
+}
+
+func runWithReferenceSourcePluginOptions(args []string, stdout, stderr io.Writer, sourceFactory referenceSourcePluginFactory, options Options) int {
 	version := effectiveBuildVersion()
 	governancePlugin, err := governance.New()
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
-	generationPlugin, err := generation.New(generation.Options{})
+	generationPlugin, err := generation.New(generation.Options{Providers: options.GenerationProviders})
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
 	}
