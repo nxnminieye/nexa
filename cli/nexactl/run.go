@@ -38,6 +38,7 @@ type referenceSourcePluginFactory func(version string) (plugin.Plugin, func(), e
 // Providers resolve facts and delegated tools; parsing and generation remain
 // owned by the platform plugins.
 type Options struct {
+	BuildVersion        string
 	GenerationProviders []generation.ProjectProvider
 }
 
@@ -64,6 +65,10 @@ func runWithReferenceSourcePlugin(args []string, stdout, stderr io.Writer, sourc
 
 func runWithReferenceSourcePluginOptions(args []string, stdout, stderr io.Writer, sourceFactory referenceSourcePluginFactory, options Options) int {
 	version := effectiveBuildVersion()
+	if options.BuildVersion != "" {
+		info, available := debug.ReadBuildInfo()
+		version = resolveBuildVersion(options.BuildVersion, info, available)
+	}
 	governancePlugin, err := governance.New()
 	if err != nil {
 		return writeBootstrapFailure(args, stdout, stderr)
