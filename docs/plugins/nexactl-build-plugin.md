@@ -51,6 +51,10 @@ Provider 不复制节点 facts。Direct generation 与
 replace-tree 边界见[受控生成](../contracts/controlled-generation.md)，PageSpec 与 renderer request 见
 [前端生成契约](../contracts/frontend-generation.md)。
 
+标准 Go consumer 直接注册 `generation.ConventionalProvider`。它按固定布局发现 source：Core 使用
+`backend/core/{rpc,api}/desc`，其他服务统一使用 `backend/<service>/desc`；只有经过评审且无法遵守该布局的
+consumer 才实现自定义 `ProjectProvider`。
+
 Reference alpha CLI 没有 consumer ProjectProvider，因此 inspection 能展示 generation command contract，
 但具体业务 generation 需要 consumer composition 提供真实 facts/toolchain。
 

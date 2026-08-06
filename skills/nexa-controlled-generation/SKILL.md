@@ -51,6 +51,10 @@ consumer 的 `ProjectProvider` 返回 `ServiceProject`。每个被选择的 Ent 
 Provider 只定位和组合事实，不复制节点 metadata。delegated tool 是 consumer 明确选择的受信任本地进程，
 直接在 consumer repository 写入；Nexa 不提供 OS sandbox，也不推导 tool 的业务写集。
 
+标准 consumer 直接注册 `generation.ConventionalProvider`，由平台按 `backend/core/{rpc,api}/desc` 和
+`backend/<service>/desc` 发现 Proto/`.api` source，业务入口不维护服务清单或路径。只有经过评审且不能遵守
+约定的 consumer 才实现自定义 `ProjectProvider`；平台不为未说明的布局漂移提供配置或 fallback。
+
 ## Replace-Tree
 
 每次 generate 在工具执行前清空并重建整个声明 generated scope。没有 file-set、action list、stale ownership

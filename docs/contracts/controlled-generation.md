@@ -45,6 +45,11 @@ RPC/API user-logic 初始文件。Frontend target 还必须提供 exact frontend
 组合事实，不复制 Proto/API 节点 metadata。PageSpec、FrontendIR 与 renderer request 的完整语义见
 [前端生成契约](frontend-generation.md)。
 
+未偏离标准目录的 consumer 使用 `generation.ConventionalProvider`，无需维护服务清单或 source path 配置。
+它只识别 `backend/core/rpc/desc/*.proto`、`backend/core/api/desc/*.api`，以及其他服务的
+`backend/<service>/desc/*.{proto,api}`；`.api` 的聚合入口固定为同目录 `base.api`。偏离约定必须先完成评审，
+再由 consumer 提供自定义 `ProjectProvider`，平台不提供隐式 fallback。
+
 ## Replace-tree
 
 整个声明的 generated scope 是唯一 replacement unit。每次 generate 在启动 delegated tool 前清空并重建该

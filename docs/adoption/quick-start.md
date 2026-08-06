@@ -105,6 +105,10 @@ Consumer 在自己的工程工具入口中显式构造所需 plugin，并交给 
 构建完成后，必须对这个 consumer binary 重新执行 `inspect --json`。只有 inspection 中真实存在的 command
 才能进入后续计划。
 
+默认使用 `generation.ConventionalProvider`：Core source 位于 `backend/core/{rpc,api}/desc`，其他服务 source
+位于 `backend/<service>/desc`，`.api` 以同目录 `base.api` 为入口。没有经过评审的布局偏离不增加配置或
+自定义 provider。
+
 ## 6. 受控生成
 
 对选定 generation command 使用固定顺序：

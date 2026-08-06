@@ -35,7 +35,7 @@ flowchart LR
 - `generation/entmixin`：Tenant、审计时间、排序、状态和软删除等标准 Ent 结构 mixin。
 - [Core IAM 契约](contracts/core-iam.md)：中性的账号、租户、成员、角色、菜单与权限边界。
 - `core-application` 双进程 Starter：同一 exact source release 中的 Core API/RPC 与 PostgreSQL consumer 入口。
-- [受控生成](contracts/controlled-generation.md)：从 typed facts 到 direct replace-tree 普通源码。
+- [受控生成](contracts/controlled-generation.md)：按默认 consumer 目录约定发现 typed facts，并 direct replace-tree 生成普通源码。
 - [前端生成契约](contracts/frontend-generation.md)：comment-capable frontend source、FrontendIR 与 delegated renderer request。
 - [HTTP Convention v1](contracts/http-convention.md)：以 PDCL 已验证调用链为基线的 JSON HTTP 路径、envelope、分页与字段约定。
 - [标准服务 starter](starters/standard-services.md)：可由 consumer 接管和继续修改的标准源码。

@@ -100,6 +100,8 @@ type Project struct {
 }
 
 // ProjectProvider resolves typed project facts from a consumer repository.
+// Consumers should use ConventionalProvider unless their reviewed repository
+// layout cannot follow the platform convention.
 type ProjectProvider interface {
 	Descriptor() ProviderDescriptor
 	Resolve(context.Context, string) (Project, error)
