@@ -142,10 +142,24 @@ func New(options Options) (plugin.Plugin, error) {
 			entProtoCommand(runner.generateEntProto),
 			entProtoCheckCommand(runner.checkEntProto),
 			directCommand("rpc", runner.delegatedTools[ToolRoleRPCGo], runner.generateRPC),
+			sourceCheckCommand("rpc", runner.checkRPC),
 			directCommand("api", runner.delegatedTools[ToolRoleAPIGo], runner.generateAPI),
+			sourceCheckCommand("api", runner.checkAPI),
 			frontendCommand(runner.delegatedTools[ToolRoleFrontendRender], runner.generateFrontend),
 		},
 	})
+}
+
+func sourceCheckCommand(owner string, run plugin.Handler) plugin.CommandSpec {
+	return plugin.CommandSpec{
+		Path:         []string{"generation", owner, "check"},
+		Summary:      "check " + owner + " source",
+		Flags:        frontendSelectorFlags(),
+		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false,"required":["repo-root","provider","service"],"properties":{"repo-root":{"type":"string"},"provider":{"type":"string"},"service":{"type":"string"}}}`),
+		OutputSchema: entProtoCheckResultSchema(),
+		SideEffect:   plugin.SideEffectRepositoryRead,
+		Run:          run,
+	}
 }
 
 func entProtoCheckCommand(run plugin.Handler) plugin.CommandSpec {

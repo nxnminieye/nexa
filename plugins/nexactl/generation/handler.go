@@ -131,6 +131,22 @@ func (r *commandRunner) generateRPC(ctx context.Context, invocation plugin.Invoc
 	return r.generate(ctx, repository, providerID, service.ServiceID, ToolRoleRPCGo, service.RPC.Tool, service.RPC.GeneratedScope, service.RPC.ExtensionScopes, service.RPC.UserLogic, stdin, invocation)
 }
 
+func (r *commandRunner) checkRPC(ctx context.Context, invocation plugin.Invocation) (any, error) {
+	_, _, service, err := r.resolve(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if service.RPC == nil || service.RPC.Facts.ServiceID() != service.ServiceID {
+		return nil, inputError("fact_source_invalid", "provider", "rpc_facts_invalid", "/project/services/rpc", "")
+	}
+	if _, err := genprotocol.CanonicalJSON(service.RPC.Facts); err != nil {
+		return nil, inputError("fact_source_invalid", "provider", "rpc_facts_invalid", "/project/services/rpc/facts", "")
+	}
+	return entProtoCheckResult{
+		APIVersion: "nexa.dev/generation-check-result/v1", Kind: "GenerationCheckResult", Status: "valid", Service: service.ServiceID,
+	}, nil
+}
+
 func (r *commandRunner) checkEntProto(ctx context.Context, invocation plugin.Invocation) (any, error) {
 	_, service, _, _, err := r.resolveEntProto(ctx, invocation)
 	if err != nil {
@@ -198,25 +214,46 @@ func (r *commandRunner) generateAPI(ctx context.Context, invocation plugin.Invoc
 	if err != nil {
 		return nil, err
 	}
+	project, entry, err := loadAPIProject(ctx, repository, service)
+	if err != nil {
+		return nil, err
+	}
+	return r.generateWithArgs(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, project.Tool, project.GeneratedScope, project.ExtensionScopes, project.UserLogic, nil, []string{"--entry-file", entry}, invocation)
+}
+
+func (r *commandRunner) checkAPI(ctx context.Context, invocation plugin.Invocation) (any, error) {
+	repository, _, service, err := r.resolve(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := loadAPIProject(ctx, repository, service); err != nil {
+		return nil, err
+	}
+	return entProtoCheckResult{
+		APIVersion: "nexa.dev/generation-check-result/v1", Kind: "GenerationCheckResult", Status: "valid", Service: service.ServiceID,
+	}, nil
+}
+
+func loadAPIProject(ctx context.Context, repository string, service ServiceProject) (*APIProject, string, error) {
 	if service.API == nil || service.API.EntryFile == "" {
-		return nil, inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api", "")
+		return nil, "", inputError("fact_source_invalid", "provider", "api_facts_invalid", "/project/services/api", "")
 	}
 	entry := service.API.EntryFile
 	if filepath.IsAbs(entry) || filepath.Clean(entry) != entry || !filepath.IsLocal(entry) || filepath.Ext(entry) != ".api" {
-		return nil, inputError("fact_source_invalid", "provider", "api_entry_invalid", "/project/services/api/entryFile", "")
+		return nil, "", inputError("fact_source_invalid", "provider", "api_entry_invalid", "/project/services/api/entryFile", "")
 	}
 	entry = filepath.ToSlash(entry)
 	if err := rejectAPISourceSymlink(repository, filepath.FromSlash(entry)); err != nil {
-		return nil, inputError("fact_source_invalid", "provider", "api_entry_unverified", "/project/services/api/entryFile", "")
+		return nil, "", inputError("fact_source_invalid", "provider", "api_entry_unverified", "/project/services/api/entryFile", "")
 	}
 	document, err := httpapi.Load(ctx, httpapi.LoadOptions{RepositoryRoot: repository, EntryFile: entry})
 	if err != nil {
-		return nil, inputError("fact_source_invalid", "provider", "api_source_invalid", "/project/services/api/entryFile", "")
+		return nil, "", inputError("fact_source_invalid", "provider", "api_source_invalid", "/project/services/api/entryFile", err.Error())
 	}
 	if err := httpapi.ValidateConvention(document); err != nil {
-		return nil, inputError("fact_source_invalid", "provider", "api_convention_invalid", "/project/services/api/entryFile", "")
+		return nil, "", inputError("fact_source_invalid", "provider", "api_convention_invalid", "/project/services/api/entryFile", err.Error())
 	}
-	return r.generateWithArgs(ctx, repository, providerID, service.ServiceID, ToolRoleAPIGo, service.API.Tool, service.API.GeneratedScope, service.API.ExtensionScopes, service.API.UserLogic, nil, []string{"--entry-file", entry}, invocation)
+	return service.API, entry, nil
 }
 
 func rejectAPISourceSymlink(repository, entry string) error {

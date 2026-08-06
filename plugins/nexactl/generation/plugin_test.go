@@ -38,22 +38,22 @@ func TestNewExposesDirectRPCAPIAndFrontendGeneration(t *testing.T) {
 	for index, command := range spec.Commands {
 		paths[index] = strings.Join(command.Path, " ")
 		wantFlags := 4
-		if command.Path[1] == "frontend" || command.Path[1] == "ent-proto" {
+		if command.Path[1] == "frontend" || command.Path[1] == "ent-proto" || command.Path[2] == "check" {
 			wantFlags = 3
 		}
 		wantTools := 1
-		if command.Path[1] == "ent-proto" {
+		if command.Path[1] == "ent-proto" || command.Path[2] == "check" {
 			wantTools = 0
 		}
 		wantSideEffect := plugin.SideEffectRepositoryWrite
-		if command.Path[1] == "ent-proto" && command.Path[2] == "check" {
+		if command.Path[2] == "check" {
 			wantSideEffect = plugin.SideEffectRepositoryRead
 		}
 		if command.SideEffect != wantSideEffect || len(command.Flags) != wantFlags || len(command.DelegatedTools) != wantTools {
 			t.Fatalf("command = %#v", command)
 		}
 	}
-	if !reflect.DeepEqual(paths, []string{"generation ent-proto generate", "generation ent-proto check", "generation rpc generate", "generation api generate", "generation frontend generate"}) {
+	if !reflect.DeepEqual(paths, []string{"generation ent-proto generate", "generation ent-proto check", "generation rpc generate", "generation rpc check", "generation api generate", "generation api check", "generation frontend generate"}) {
 		t.Fatalf("commands = %#v", paths)
 	}
 }
@@ -224,6 +224,25 @@ func TestDirectRPCGenerationReplacesStaleTreeAndPreservesExtensions(t *testing.T
 	}
 }
 
+func TestRPCSourceCheckDoesNotRequireDelegatedTool(t *testing.T) {
+	repository := t.TempDir()
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0"},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", RPC: &generation.RPCProject{
+			Facts: rpcDocument(t),
+		}}}},
+	}
+	command := generationCheckCommand(t, provider, "rpc")
+	result, err := command.Run(context.Background(), frontendInvocation(repository))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || string(encoded) != `{"apiVersion":"nexa.dev/generation-check-result/v1","kind":"GenerationCheckResult","status":"valid","service":"sample"}` {
+		t.Fatalf("result=%s err=%v", encoded, err)
+	}
+}
+
 func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	repository := t.TempDir()
 	tool := directTool("consumer.api")
@@ -245,6 +264,21 @@ func TestDirectAPIGenerationPassesPreparedScopeAndCanonicalFacts(t *testing.T) {
 	}
 	if len(runner.request.Stdin) != 0 {
 		t.Fatal("delegated API received serialized HTTP API facts")
+	}
+}
+
+func TestAPISourceCheckDoesNotRequireDelegatedTool(t *testing.T) {
+	repository := t.TempDir()
+	apiDocument(t, repository)
+	provider := testProvider{
+		descriptor: generation.ProviderDescriptor{ID: "consumer", Version: "v1.0.0"},
+		project: generation.Project{Services: []generation.ServiceProject{{ServiceID: "sample", API: &generation.APIProject{
+			EntryFile: "sample.api",
+		}}}},
+	}
+	command := generationCheckCommand(t, provider, "api")
+	if _, err := command.Run(context.Background(), frontendInvocation(repository)); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -373,6 +407,21 @@ func generationCommand(t *testing.T, provider testProvider, runner toolchain.Run
 		}
 	}
 	t.Fatalf("missing command %s", family)
+	return plugin.CommandSpec{}
+}
+
+func generationCheckCommand(t *testing.T, provider testProvider, family string) plugin.CommandSpec {
+	t.Helper()
+	candidate, err := generation.New(generation.Options{Providers: []generation.ProjectProvider{provider}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range candidate.Spec().Commands {
+		if command.Path[1] == family && command.Path[2] == "check" {
+			return command
+		}
+	}
+	t.Fatalf("missing check command %s", family)
 	return plugin.CommandSpec{}
 }
 
