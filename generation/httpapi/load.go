@@ -478,7 +478,8 @@ func appendMembers(ctx context.Context, owner *typeState, source string, parent 
 			if err != nil {
 				return invalid("field_tags_invalid", source, "", err.Error())
 			}
-			field := &fieldState{ownerType: owner.name, semanticID: owner.name + "." + pathKey(path), path: path, required: valueType.kind != ValueOptional, valueType: valueType, transport: transport, hasTransport: hasTransport, origin: origin, hasOrigin: hasOrigin}
+			required := valueType.kind != ValueOptional && !member.IsOptional() && !member.IsOmitEmpty()
+			field := &fieldState{ownerType: owner.name, semanticID: owner.name + "." + pathKey(path), path: path, required: required, valueType: valueType, transport: transport, hasTransport: hasTransport, origin: origin, hasOrigin: hasOrigin}
 			envelope := canonicalFieldNode{APIVersion: fieldNodeVersion, Kind: "field", OwnerType: owner.name, Path: append([]string(nil), path...), Required: field.required, ValueType: canonicalValueOf(valueType)}
 			if hasTransport {
 				envelope.Transport = string(transport)

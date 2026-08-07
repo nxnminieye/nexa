@@ -180,6 +180,39 @@ func TestLoadAcceptsPDCLTransportTagsAndRejectsAliases(t *testing.T) {
 	}
 }
 
+func TestLoadPreservesGoZeroOptionalTransportTags(t *testing.T) {
+	root := t.TempDir()
+	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
+syntax = "v1"
+info (nexaContractVersion: "nexa.dev/http-convention/v1")
+type Request {
+  Keyword string `+"`form:\"keyword,optional\"`"+`
+}
+type Response {
+  Value string `+"`json:\"value,omitempty\"`"+`
+}
+service sample {
+  // @nexa auth: "none"
+  @handler List
+  get /samples (Request) returns (Response)
+}
+`)
+	document, err := httpapi.Load(context.Background(), httpapi.LoadOptions{RepositoryRoot: root, EntryFile: "sample.api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for typeName, fieldName := range map[string]string{"Request": "keyword", "Response": "value"} {
+		typeNode, ok := document.Type(typeName)
+		if !ok {
+			t.Fatalf("type %q missing", typeName)
+		}
+		field, ok := typeNode.Field(fieldName)
+		if !ok || field.Required() {
+			t.Fatalf("field %s.%s required = %v, present = %v", typeName, fieldName, field.Required(), ok)
+		}
+	}
+}
+
 func TestLoadAcceptsPatchInConventionGate(t *testing.T) {
 	root := t.TempDir()
 	writeHTTPAPI(t, root, `// @nexa $contract: "nexa.dev/source-comment/v1"
